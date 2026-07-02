@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Caja</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700&display=swap');
+
+  :root{
+    --bg: #1A1D29;
+    --bg-soft: #232735;
+    --bg-soft2: #2A2F40;
+    --line: #2E3344;
+    --text: #F4F2ED;
+    --text-dim: #9499AC;
+    --accent: #FFD23F;
+    --accent-dim: rgba(255,210,63,0.16);
+    --danger: #FF6B6B;
+    --danger-dim: rgba(255,107,107,0.14);
+    --ok: #A8E063;
+  }
+
+  *{ margin:0; padding:0; box-sizing:border-box; }
+
+  html, body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .screen{
+    max-width: 480px;
+    margin: 0 auto;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- Top bar ---------- */
+  .topbar{
+    display:flex;
+    align-items:center;
+    gap: 14px;
+    padding: 20px 20px 16px;
+  }
+
+  .back{
+    flex-shrink:0;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    text-decoration:none;
+    color: var(--text);
+  }
+
+  .back svg{ width: 18px; height: 18px; stroke: var(--text); }
+
+  .topbar h1{
+    font-family: 'Archivo Black', sans-serif;
+    font-size: 20px;
+    line-height: 1.1;
+  }
+
+  .topbar .sub{
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  /* ---------- Tabs ---------- */
+  .tabs{
+    display:flex;
+    gap: 6px;
+    padding: 0 16px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .tab{
+    flex: 1;
+    text-align:center;
+    padding: 10px 6px;
+    border-radius: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .tab.active{ background: var(--accent); color: #14151c; }
+
+  /* ---------- Panels ---------- */
+  .panel{
+    display:none;
+    flex: 1;
+    padding: 18px 20px 32px;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .panel.active{ display:flex; }
+
+  .section-title{
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .field-label{
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+
+  input[type="text"], select{
+    width: 100%;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 13px 14px;
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+  }
+
+  /* ---------- Resumen semanal (3 columnas) ---------- */
+  .resumen-grid{
+    display:grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+  }
+
+  .resumen-card{
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 8px;
+    text-align:center;
+  }
+
+  .resumen-card .icon{ font-size: 18px; margin-bottom: 4px; }
+  .resumen-card .lbl{ font-size: 10.5px; color: var(--text-dim); font-weight:600; text-transform:uppercase; letter-spacing:0.03em; }
+  .resumen-card .val{ font-family:'Archivo Black',sans-serif; font-size: 15px; margin-top: 4px; }
+
+  /* ---------- Add pago box ---------- */
+  .add-box{
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px;
+    display:flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .pill-group{
+    display:flex;
+    gap: 8px;
+  }
+
+  .pill{
+    flex: 1;
+    text-align:center;
+    padding: 11px 6px;
+    border-radius: 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    background: var(--bg-soft2);
+    border: 1px solid var(--line);
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+
+  .pill.active{
+    border-color: var(--accent);
+    background: var(--accent-dim);
+    color: var(--accent);
+  }
+
+  .btn-add{
+    background: var(--accent);
+    color: #14151c;
+    border: none;
+    border-radius: 12px;
+    padding: 12px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 13.5px;
+    cursor: pointer;
+  }
+
+  .btn-add:active{ transform: scale(0.98); }
+
+  .btn-primary{
+    background: var(--accent);
+    color: #14151c;
+    border: none;
+    border-radius: 14px;
+    padding: 16px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  .btn-primary:active{ transform: scale(0.98); }
+
+  /* ---------- Pago list ---------- */
+  .pago-row{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px;
+  }
+
+  .pago-tag{
+    flex-shrink:0;
+    width: 7px;
+    height: 32px;
+    border-radius: 4px;
+  }
+
+  .pago-tag.metodo-efectivo{ background: #A8E063; }
+  .pago-tag.metodo-transferencia{ background: #4FC3E0; }
+  .pago-tag.metodo-qr{ background: #9B7EDE; }
+
+  .pago-info{ flex:1; min-width:0; }
+  .pago-name{ font-size: 13.5px; font-weight: 700; }
+  .pago-meta{ font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
+  .pago-amount{ font-size: 14px; font-weight: 700; flex-shrink:0; }
+
+  .empty-list{
+    text-align:center;
+    padding: 24px 10px;
+    color: var(--text-dim);
+    font-size: 13px;
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+  }
+
+  /* ---------- Alerta de cobro ---------- */
+  .alerta-box{
+    background: var(--danger-dim);
+    border: 1px solid var(--danger);
+    border-radius: 14px;
+    padding: 14px;
+    display:flex;
+    align-items:flex-start;
+    gap: 10px;
+  }
+
+  .alerta-box .icon{ font-size: 18px; }
+  .alerta-box .txt{ font-size: 12.5px; line-height: 1.4; }
+  .alerta-box .txt strong{ display:block; font-size: 13.5px; margin-bottom: 2px; }
+
+  /* ---------- Cuenta a cobrar card ---------- */
+  .cuenta-card{
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px;
+    display:flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .cuenta-card.vencida{
+    border-color: var(--danger);
+  }
+
+  .cuenta-top{
+    display:flex;
+    justify-content: space-between;
+    align-items:flex-start;
+  }
+
+  .cuenta-cliente{ font-weight: 700; font-size: 14px; }
+  .cuenta-meta{ font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+
+  .cuenta-monto{
+    font-family: 'Archivo Black', sans-serif;
+    font-size: 16px;
+    color: var(--accent);
+    flex-shrink:0;
+  }
+
+  .badge-vencida{
+    display:inline-flex;
+    align-items:center;
+    gap: 4px;
+    background: var(--danger);
+    color: #1a1010;
+    font-size: 10.5px;
+    font-weight: 800;
+    padding: 3px 8px;
+    border-radius: 8px;
+    margin-top: 6px;
+    width: fit-content;
+  }
+
+  .btn-cobrar{
+    background: var(--ok);
+    color: #14151c;
+    border: none;
+    border-radius: 10px;
+    padding: 10px;
+    font-weight: 700;
+    font-size: 12.5px;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+
+  .btn-cobrar:active{ transform: scale(0.98); }
+
+  @media (prefers-reduced-motion: reduce){
+    .tab, .pill, .btn-add, .btn-primary, .btn-cobrar{ transition:none; }
+  }
+
+  :focus-visible{
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+</style>
+</head>
+<body>
+
+<div class="screen">
+
+  <div class="topbar">
+    <a class="back" href="inicio.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 18l-6-6 6-6"/>
+      </svg>
+    </a>
+    <div>
+      <h1>Caja</h1>
+      <div class="sub">Ingresos, egresos y arqueo</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="pagos" onclick="cambiarTab('pagos')">Pagos</div>
+    <div class="tab" data-tab="cobranzas" onclick="cambiarTab('cobranzas')">Cobranzas</div>
+  </div>
+
+  <!-- ---------- Panel: Pagos (efectivo / transferencia / QR de la semana) ---------- -->
+  <div class="panel active" id="panel-pagos">
+
+    <div>
+      <div class="section-title">Resumen de la semana</div>
+      <div class="resumen-grid" style="margin-top:10px;">
+        <div class="resumen-card">
+          <div class="icon">💵</div>
+          <div class="lbl">Efectivo</div>
+          <div class="val" id="resumen-efectivo">Bs 0</div>
+        </div>
+        <div class="resumen-card">
+          <div class="icon">🏦</div>
+          <div class="lbl">Transfer.</div>
+          <div class="val" id="resumen-transferencia">Bs 0</div>
+        </div>
+        <div class="resumen-card">
+          <div class="icon">📱</div>
+          <div class="lbl">QR</div>
+          <div class="val" id="resumen-qr">Bs 0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="add-box">
+      <div class="field-label" style="margin-bottom:0;">Registrar pago</div>
+      <div class="pill-group" id="grupo-metodo-pago">
+        <div class="pill active" data-val="efectivo" onclick="seleccionarMetodo(this)">Efectivo</div>
+        <div class="pill" data-val="transferencia" onclick="seleccionarMetodo(this)">Transferencia</div>
+        <div class="pill" data-val="qr" onclick="seleccionarMetodo(this)">QR</div>
+      </div>
+      <input type="text" id="pago-concepto" placeholder="Concepto / cliente (ej: Venta mostrador)">
+      <input type="text" id="pago-monto" placeholder="Monto Bs" inputmode="decimal">
+      <button class="btn-add" onclick="registrarPago()">+ Registrar pago</button>
+    </div>
+
+    <div>
+      <div class="field-label">Pagos de esta semana</div>
+      <div id="lista-pagos" style="display:flex; flex-direction:column; gap:8px;"></div>
+    </div>
+
+  </div>
+
+  <!-- ---------- Panel: Cobranzas ---------- -->
+  <div class="panel" id="panel-cobranzas">
+
+    <div id="alerta-cobranzas"></div>
+
+    <div>
+      <div class="field-label">Cuentas a cobrar</div>
+      <div id="lista-cuentas" style="display:flex; flex-direction:column; gap:10px;"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- ---------- Modal: Comprobante de cobro ---------- -->
+<div id="modal-comprobante" style="display:none; position:fixed; inset:0; background:rgba(10,11,16,0.78); z-index:50; align-items:flex-start; justify-content:center; overflow-y:auto; padding: 20px 12px 40px;">
+  <div style="max-width:420px; width:100%; margin:0 auto;">
+
+    <div style="display:flex; gap:8px; margin-bottom:10px; position:sticky; top:0;">
+      <button onclick="descargarPDF()" style="flex:1; background:#3B82C4; color:#fff; border:none; border-radius:12px; padding:12px 8px; font-weight:700; font-size:13px; cursor:pointer; font-family:'Inter',sans-serif;">⬇ Descargar PDF</button>
+      <button onclick="enviarWhatsApp()" style="flex:1; background:#25D366; color:#0c2818; border:none; border-radius:12px; padding:12px 8px; font-weight:700; font-size:13px; cursor:pointer; font-family:'Inter',sans-serif;">📱 WhatsApp</button>
+      <button onclick="cerrarComprobante()" style="flex-shrink:0; width:42px; background:#3A3F52; color:#fff; border:none; border-radius:12px; font-weight:700; cursor:pointer;">✕</button>
+    </div>
+
+    <div id="documento-comprobante" style="background:#ffffff; color:#1a1a1a; border-radius:10px; padding:24px 20px; font-family:'Inter',sans-serif;">
+
+      <div style="text-align:center; margin-bottom:14px;">
+        <div style="font-size:30px;">✅</div>
+        <div style="font-family:'Archivo Black',sans-serif; font-size:18px; margin-top:6px;">COBRO REGISTRADO</div>
+        <div style="font-size:11px; color:#888; margin-top:2px;" id="doc-fechahora">--</div>
+      </div>
+
+      <div style="background:#F5F5F5; border-radius:10px; padding:14px; margin-bottom:14px;">
+        <div style="font-size:12px; color:#666;">Cliente</div>
+        <div style="font-size:15px; font-weight:800; margin-bottom:8px;" id="doc-cliente">-</div>
+        <div style="font-size:12px; color:#666;">Concepto</div>
+        <div style="font-size:13.5px; font-weight:600;" id="doc-concepto">-</div>
+      </div>
+
+      <div style="display:flex; gap:10px; margin-bottom:14px;">
+        <div style="flex:1; border:2px solid #1a1a1a; border-radius:10px; padding:12px; text-align:center;">
+          <div style="font-size:10px; font-weight:700; letter-spacing:0.04em;">MONTO COBRADO</div>
+          <div style="font-family:'Archivo Black',sans-serif; font-size:20px; color:#1E7E3C; margin-top:4px;" id="doc-monto">Bs 0</div>
+        </div>
+        <div style="flex:1; border:2px solid #1a1a1a; border-radius:10px; padding:12px; text-align:center;">
+          <div style="font-size:10px; font-weight:700; letter-spacing:0.04em;">MÉTODO</div>
+          <div style="font-family:'Archivo Black',sans-serif; font-size:15px; margin-top:6px;" id="doc-metodo">-</div>
+        </div>
+      </div>
+
+      <div style="font-size:10.5px; color:#777; line-height:1.5; border-top:1px dashed #ccc; padding-top:10px; text-align:center;">
+        Comprobante generado por Electrodomésticos BM
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = 'https://omxzisjowcmkvqpviuat.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_OGujpzzM0UVDAsgGRplMwA_u1oURINP';
+const ADMIN_EMAIL = 'alejandro23mtz@electrodomesticosbm.com';
+
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+async function requireSession(){
+  const { data, error } = await supabaseClient.auth.getSession();
+  if(error || !data.session){ window.location.href = 'login.html'; return null; }
+  return data.session;
+}
+
+async function esAdmin(){
+  const { data } = await supabaseClient.auth.getSession();
+  return data.session && data.session.user.email === ADMIN_EMAIL;
+}
+
+async function cerrarSesion(){
+  await supabaseClient.auth.signOut();
+  window.location.href = 'login.html';
+}
+
+async function mostrarUsuarioEnElemento(elementId){
+  const { data } = await supabaseClient.auth.getSession();
+  const el = document.getElementById(elementId);
+  if(el && data.session) el.textContent = data.session.user.email;
+}
+
+</script>
+<script>requireSession();</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<script>
+  let metodoActual = 'efectivo';
+  let cotizacionActualParaCompartir = null;
+  let pagosCache = [];
+  let cuentasCache = [];
+
+  // ========== PAGOS ==========
+  function seleccionarMetodo(el){
+    document.querySelectorAll('#grupo-metodo-pago .pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    metodoActual = el.dataset.val;
+  }
+
+  async function cargarPagosDesdeSupabase(){
+    const { data, error } = await supabaseClient.from('pagos_caja').select('*').order('created_at', { ascending:false });
+    if(error){ alert('Error cargando pagos: ' + error.message); return; }
+    pagosCache = (data || []).map(row => ({
+      id: row.id,
+      concepto: row.concepto,
+      monto: row.monto,
+      metodo: row.metodo,
+      fecha: row.fecha,
+      timestamp: new Date(row.created_at).getTime()
+    }));
+  }
+
+  function cargarPagos(){
+    return pagosCache;
+  }
+
+  async function registrarPago(){
+    const concepto = document.getElementById('pago-concepto').value.trim();
+    const monto = parseFloat(document.getElementById('pago-monto').value);
+
+    if(!concepto){
+      alert('Falta el concepto o cliente del pago.');
+      return;
+    }
+    if(isNaN(monto) || monto <= 0){
+      alert('Ingresa un monto válido.');
+      return;
+    }
+
+    const pagoParaDB = {
+      concepto: concepto,
+      monto: monto,
+      metodo: metodoActual,
+      fecha: new Date().toLocaleDateString('es-BO', { day:'2-digit', month:'2-digit', year:'numeric' })
+    };
+
+    const { data, error } = await supabaseClient.from('pagos_caja').insert(pagoParaDB).select().single();
+    if(error){ alert('Error al registrar pago: ' + error.message); return; }
+
+    pagosCache.unshift({
+      id: data.id, concepto: data.concepto, monto: data.monto, metodo: data.metodo,
+      fecha: data.fecha, timestamp: new Date(data.created_at).getTime()
+    });
+
+    document.getElementById('pago-concepto').value = '';
+    document.getElementById('pago-monto').value = '';
+    renderPagos();
+  }
+
+  function pagosDeEstaSemana(lista){
+    const haceUnaSemana = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    return lista.filter(p => p.timestamp >= haceUnaSemana);
+  }
+
+  function nombreMetodo(m){
+    return { efectivo:'Efectivo', transferencia:'Transferencia', qr:'QR' }[m] || m;
+  }
+
+  function renderPagos(){
+    const lista = pagosDeEstaSemana(cargarPagos());
+    const cont = document.getElementById('lista-pagos');
+
+    if(lista.length === 0){
+      cont.innerHTML = '<div class="empty-list">Aún no registraste pagos esta semana</div>';
+    } else {
+      cont.innerHTML = lista.map(p => `
+        <div class="pago-row">
+          <div class="pago-tag metodo-${p.metodo}"></div>
+          <div class="pago-info">
+            <div class="pago-name">${p.concepto}</div>
+            <div class="pago-meta">${nombreMetodo(p.metodo)} · ${p.fecha}</div>
+          </div>
+          <div class="pago-amount">Bs ${p.monto.toLocaleString('es-BO')}</div>
+        </div>
+      `).join('');
+    }
+
+    const totales = { efectivo:0, transferencia:0, qr:0 };
+    lista.forEach(p => { totales[p.metodo] = (totales[p.metodo]||0) + p.monto; });
+    document.getElementById('resumen-efectivo').textContent = 'Bs ' + totales.efectivo.toLocaleString('es-BO');
+    document.getElementById('resumen-transferencia').textContent = 'Bs ' + totales.transferencia.toLocaleString('es-BO');
+    document.getElementById('resumen-qr').textContent = 'Bs ' + totales.qr.toLocaleString('es-BO');
+  }
+
+  // ========== COBRANZAS ==========
+  async function cargarCuentasDesdeSupabase(){
+    const { data, error } = await supabaseClient.from('cuentas_cobrar').select('*').order('created_at', { ascending:false });
+    if(error){ alert('Error cargando cuentas: ' + error.message); return; }
+
+    if((data || []).length === 0){
+      await sembrarCuentasEjemplo();
+      return cargarCuentasDesdeSupabase();
+    }
+
+    cuentasCache = data.map(mapearCuentaDesdeDB);
+  }
+
+  function mapearCuentaDesdeDB(row){
+    return {
+      id: row.id,
+      cliente: row.cliente,
+      concepto: row.concepto,
+      monto: row.monto,
+      vencimiento: new Date(row.vencimiento).getTime(),
+      cobrado: row.cobrado,
+      metodoCobro: row.metodo_cobro,
+      fechaCobro: row.fecha_cobro
+    };
+  }
+
+  async function sembrarCuentasEjemplo(){
+    const ahora = Date.now();
+    const dia = 24*60*60*1000;
+    const ejemplo = [
+      { cliente: 'Luis Flores', concepto: 'Venta a crédito - Refrigerador RX-300', monto: 2450, vencimiento: new Date(ahora - 2*dia).toISOString(), cobrado: false },
+      { cliente: 'Marta Quispe', concepto: 'Venta a crédito - Cocina CG-410', monto: 980, vencimiento: new Date(ahora + 3*dia).toISOString(), cobrado: false },
+      { cliente: 'Jorge Aramayo', concepto: 'Venta a crédito - Lavadora LA-12', monto: 1850, vencimiento: new Date(ahora - 5*dia).toISOString(), cobrado: false },
+    ];
+    await supabaseClient.from('cuentas_cobrar').insert(ejemplo);
+  }
+
+  function cargarCuentas(){
+    return cuentasCache;
+  }
+
+  function estaVencida24h(cuenta){
+    const dia = 24*60*60*1000;
+    return (Date.now() - cuenta.vencimiento) >= dia;
+  }
+
+  function renderCuentas(){
+    const todas = cargarCuentas();
+    const pendientes = todas.filter(c => !c.cobrado);
+    const cont = document.getElementById('lista-cuentas');
+    const alertaCont = document.getElementById('alerta-cobranzas');
+
+    // Alerta: si alguna cuenta lleva 24h o más vencida sin cobrar
+    const vencidas = pendientes.filter(estaVencida24h);
+    if(vencidas.length > 0){
+      alertaCont.innerHTML = `
+        <div class="alerta-box">
+          <div class="icon">⚠️</div>
+          <div class="txt">
+            <strong>${vencidas.length} cuenta(s) con más de 24h de retraso</strong>
+            Hay cobros pendientes que superaron el plazo. Contacta a estos clientes lo antes posible.
+          </div>
+        </div>
+      `;
+    } else {
+      alertaCont.innerHTML = '';
+    }
+
+    if(pendientes.length === 0){
+      cont.innerHTML = '<div class="empty-list">No hay cuentas pendientes de cobro 🎉</div>';
+      return;
+    }
+
+    cont.innerHTML = pendientes.map(c => {
+      const vencida = estaVencida24h(c);
+      const fechaVenc = new Date(c.vencimiento).toLocaleDateString('es-BO', { day:'2-digit', month:'2-digit', year:'numeric' });
+      return `
+        <div class="cuenta-card ${vencida ? 'vencida' : ''}">
+          <div class="cuenta-top">
+            <div>
+              <div class="cuenta-cliente">${c.cliente}</div>
+              <div class="cuenta-meta">${c.concepto}</div>
+              <div class="cuenta-meta">Vencimiento: ${fechaVenc}</div>
+            </div>
+            <div class="cuenta-monto">Bs ${c.monto.toLocaleString('es-BO')}</div>
+          </div>
+          ${vencida ? '<div class="badge-vencida">⚠ Vencida +24h</div>' : ''}
+          <button class="btn-cobrar" onclick="abrirCobro('${c.id}')">Marcar como cobrado</button>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function abrirCobro(id){
+    const todas = cargarCuentas();
+    const cuenta = todas.find(c => c.id === id);
+    if(!cuenta) return;
+
+    const metodo = prompt('¿Cómo se cobró? Escribe: Efectivo, Transferencia o QR', 'Efectivo');
+    if(!metodo) return;
+
+    const fechaCobro = new Date().toLocaleString('es-BO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+
+    const { error } = await supabaseClient.from('cuentas_cobrar').update({
+      cobrado: true, metodo_cobro: metodo, fecha_cobro: fechaCobro
+    }).eq('id', id);
+    if(error){ alert('Error al registrar el cobro: ' + error.message); return; }
+
+    cuenta.cobrado = true;
+    cuenta.metodoCobro = metodo;
+    cuenta.fechaCobro = fechaCobro;
+
+    // También lo sumamos al resumen de pagos de la semana
+    const metodoNormalizado = metodo.toLowerCase().includes('transfer') ? 'transferencia' :
+                               metodo.toLowerCase().includes('qr') ? 'qr' : 'efectivo';
+
+    const pagoParaDB = {
+      concepto: 'Cobro - ' + cuenta.cliente,
+      monto: cuenta.monto,
+      metodo: metodoNormalizado,
+      fecha: new Date().toLocaleDateString('es-BO', { day:'2-digit', month:'2-digit', year:'numeric' })
+    };
+    const { data: pagoData, error: pagoError } = await supabaseClient.from('pagos_caja').insert(pagoParaDB).select().single();
+    if(!pagoError && pagoData){
+      pagosCache.unshift({
+        id: pagoData.id, concepto: pagoData.concepto, monto: pagoData.monto, metodo: pagoData.metodo,
+        fecha: pagoData.fecha, timestamp: new Date(pagoData.created_at).getTime()
+      });
+    }
+
+    mostrarComprobanteCobro(cuenta);
+    renderCuentas();
+    renderPagos();
+  }
+
+  // ========== Comprobante de cobro ==========
+  function mostrarComprobanteCobro(cuenta){
+    cotizacionActualParaCompartir = cuenta;
+    document.getElementById('doc-fechahora').textContent = cuenta.fechaCobro;
+    document.getElementById('doc-cliente').textContent = cuenta.cliente;
+    document.getElementById('doc-concepto').textContent = cuenta.concepto;
+    document.getElementById('doc-monto').textContent = 'Bs ' + cuenta.monto.toLocaleString('es-BO');
+    document.getElementById('doc-metodo').textContent = cuenta.metodoCobro;
+    document.getElementById('modal-comprobante').style.display = 'flex';
+  }
+
+  function cerrarComprobante(){
+    document.getElementById('modal-comprobante').style.display = 'none';
+  }
+
+  function descargarPDF(){
+    const nodo = document.getElementById('documento-comprobante');
+    html2canvas(nodo, { scale: 2, backgroundColor: '#ffffff' }).then(canvas => {
+      const { jsPDF } = window.jspdf;
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const imgWidth = pageWidth - 40;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 20, 20, imgWidth, imgHeight);
+      pdf.save('comprobante-cobro.pdf');
+    });
+  }
+
+  function enviarWhatsApp(){
+    const c = cotizacionActualParaCompartir;
+    if(!c) return;
+    const texto = `*Cobro registrado*\nCliente: ${c.cliente}\nConcepto: ${c.concepto}\nMonto: Bs ${c.monto.toLocaleString('es-BO')}\nMétodo: ${c.metodoCobro}\nFecha: ${c.fechaCobro}`;
+    window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank');
+  }
+
+  // ========== Navegación ==========
+  function cambiarTab(nombre){
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === nombre));
+    document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + nombre));
+  }
+
+  // Inicializar
+  (async () => {
+    await cargarPagosDesdeSupabase();
+    await cargarCuentasDesdeSupabase();
+    renderPagos();
+    renderCuentas();
+  })();
+</script>
+
+</body>
+</html>

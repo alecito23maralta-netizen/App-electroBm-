@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Catálogo de precios</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700&display=swap');
+
+  :root{
+    --bg: #1A1D29;
+    --bg-soft: #232735;
+    --bg-soft2: #2A2F40;
+    --line: #2E3344;
+    --text: #F4F2ED;
+    --text-dim: #9499AC;
+    --accent: #A8E063;
+    --accent-dim: rgba(168,224,99,0.16);
+    --danger: #FF6B6B;
+  }
+
+  *{ margin:0; padding:0; box-sizing:border-box; }
+
+  html, body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .screen{
+    max-width: 480px;
+    margin: 0 auto;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .topbar{
+    display:flex;
+    align-items:center;
+    gap: 14px;
+    padding: 20px 20px 16px;
+  }
+
+  .back{
+    flex-shrink:0;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    text-decoration:none;
+    color: var(--text);
+  }
+
+  .back svg{ width: 18px; height: 18px; stroke: var(--text); }
+
+  .topbar h1{
+    font-family: 'Archivo Black', sans-serif;
+    font-size: 20px;
+    line-height: 1.1;
+  }
+
+  .topbar .sub{
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  .tabs{
+    display:flex;
+    gap: 6px;
+    padding: 0 16px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .tab{
+    flex: 1;
+    text-align:center;
+    padding: 10px 6px;
+    border-radius: 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-dim);
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .tab.active{ background: var(--accent); color: #14151c; }
+
+  .panel{
+    display:none;
+    flex: 1;
+    padding: 18px 20px 32px;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .panel.active{ display:flex; }
+
+  .field-label{
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+
+  input[type="text"], input[type="number"]{
+    width: 100%;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 13px 14px;
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+  }
+
+  /* ---------- Add article box ---------- */
+  .add-box{
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px;
+    display:flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .add-row{
+    display:grid;
+    grid-template-columns: 1fr 110px;
+    gap: 10px;
+  }
+
+  .btn-add{
+    background: var(--accent);
+    color: #14151c;
+    border: none;
+    border-radius: 12px;
+    padding: 12px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 13.5px;
+    cursor: pointer;
+  }
+
+  .btn-add:active{ transform: scale(0.98); }
+
+  /* ---------- Article list ---------- */
+  .articulo-row{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px;
+  }
+
+  .articulo-info{ flex:1; min-width:0; }
+
+  .articulo-nombre{
+    font-size: 13.5px;
+    font-weight: 700;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    width: 100%;
+    padding: 2px 0;
+  }
+
+  .articulo-precio-wrap{
+    display:flex;
+    align-items:center;
+    gap: 4px;
+    margin-top: 4px;
+  }
+
+  .articulo-precio-wrap span{
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .articulo-precio{
+    width: 90px;
+    background: var(--bg-soft2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 5px 8px;
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 13px;
+  }
+
+  .articulo-remove{
+    flex-shrink:0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+
+  .empty-list{
+    text-align:center;
+    padding: 24px 10px;
+    color: var(--text-dim);
+    font-size: 13px;
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+  }
+
+  .save-hint{
+    font-size: 12px;
+    color: var(--text-dim);
+    text-align:center;
+    padding: 4px 8px 0;
+  }
+
+  .save-hint.show{ color: var(--accent); }
+
+  :focus-visible{
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+</style>
+</head>
+<body>
+
+<div class="screen">
+
+  <div class="topbar">
+    <a class="back" href="inicio.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 18l-6-6 6-6"/>
+      </svg>
+    </a>
+    <div>
+      <h1>Catálogo de precios</h1>
+      <div class="sub">Productos, repuestos y herramientas</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-cat="productos" onclick="cambiarCategoria('productos')">Productos</div>
+    <div class="tab" data-cat="repuestos" onclick="cambiarCategoria('repuestos')">Repuestos</div>
+    <div class="tab" data-cat="herramientas" onclick="cambiarCategoria('herramientas')">Herramientas</div>
+  </div>
+
+  <div class="panel active" id="panel-catalogo">
+
+    <div class="add-box">
+      <div class="field-label" style="margin-bottom:0;">Agregar artículo</div>
+      <div class="add-row">
+        <input type="text" id="nuevo-nombre" placeholder="Ej: Refrigerador 2P RX-300">
+        <input type="text" id="nuevo-codigo" placeholder="Código (opcional)">
+      </div>
+      <div class="add-row">
+        <input type="number" id="nuevo-precio" placeholder="Precio Bs" inputmode="decimal">
+        <input type="number" id="nuevo-stock" placeholder="Stock" inputmode="numeric">
+      </div>
+      <button class="btn-add" onclick="agregarArticulo()">+ Agregar a la categoría</button>
+    </div>
+
+    <div>
+      <div class="field-label" id="lista-titulo">Productos cargados</div>
+      <div id="lista-articulos" style="display:flex; flex-direction:column; gap:8px;"></div>
+    </div>
+
+    <div class="save-hint" id="save-hint">Los cambios se guardan automáticamente en la nube</div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = 'https://omxzisjowcmkvqpviuat.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_OGujpzzM0UVDAsgGRplMwA_u1oURINP';
+const ADMIN_EMAIL = 'alejandro23mtz@electrodomesticosbm.com';
+
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+async function requireSession(){
+  const { data, error } = await supabaseClient.auth.getSession();
+  if(error || !data.session){ window.location.href = 'login.html'; return null; }
+  return data.session;
+}
+
+async function esAdmin(){
+  const { data } = await supabaseClient.auth.getSession();
+  return data.session && data.session.user.email === ADMIN_EMAIL;
+}
+
+async function cerrarSesion(){
+  await supabaseClient.auth.signOut();
+  window.location.href = 'login.html';
+}
+
+async function mostrarUsuarioEnElemento(elementId){
+  const { data } = await supabaseClient.auth.getSession();
+  const el = document.getElementById(elementId);
+  if(el && data.session) el.textContent = data.session.user.email;
+}
+
+</script>
+<script>requireSession();</script>
+
+<script>
+  const nombresCategoria = {
+    productos: 'Productos cargados',
+    repuestos: 'Repuestos cargados',
+    herramientas: 'Herramientas cargadas'
+  };
+
+  const PREFIJOS = { productos: 'PRD', repuestos: 'REP', herramientas: 'HER' };
+
+  // catalogo[categoria] = array de artículos. Cada artículo guarda su `id` de Supabase.
+  let catalogo = { productos: [], repuestos: [], herramientas: [] };
+  let categoriaActual = 'productos';
+
+  async function cargarCatalogo(){
+    const { data, error } = await supabaseClient.from('catalogo').select('*').order('created_at');
+    if(error){
+      alert('Error cargando catálogo: ' + error.message);
+      return;
+    }
+
+    catalogo = { productos: [], repuestos: [], herramientas: [] };
+    (data || []).forEach(row => {
+      catalogo[row.categoria].push({
+        id: row.id,
+        nombre: row.nombre,
+        codigo: row.codigo,
+        precio: row.precio,
+        stock: row.stock
+      });
+    });
+
+    // Si la tabla está vacía (primera vez), sembrar datos de ejemplo
+    if((data || []).length === 0){
+      await sembrarCatalogoEjemplo();
+      return cargarCatalogo();
+    }
+
+    renderLista();
+  }
+
+  async function sembrarCatalogoEjemplo(){
+    const ejemplo = [
+      { categoria:'productos', codigo:'PRD-001', nombre:"Refrigerador 2 puertas RX-300", precio:2450, stock:10 },
+      { categoria:'productos', codigo:'PRD-002', nombre:"Cocina a gas 4 hornillas CG-410", precio:980, stock:10 },
+      { categoria:'productos', codigo:'PRD-003', nombre:"Lavadora automática 12kg LA-12", precio:1850, stock:10 },
+      { categoria:'productos', codigo:'PRD-004', nombre:"Calefón a gas 10L CF-10", precio:720, stock:10 },
+      { categoria:'repuestos', codigo:'REP-001', nombre:"Termostato universal", precio:85, stock:10 },
+      { categoria:'repuestos', codigo:'REP-002', nombre:"Válvula de gas 3/8\"", precio:60, stock:10 },
+      { categoria:'repuestos', codigo:'REP-003', nombre:"Motor de lavadora 1/4 HP", precio:320, stock:10 },
+      { categoria:'repuestos', codigo:'REP-004', nombre:"Bandeja interna refrigerador", precio:140, stock:10 },
+      { categoria:'herramientas', codigo:'HER-001', nombre:"Juego de destornilladores", precio:95, stock:10 },
+      { categoria:'herramientas', codigo:'HER-002', nombre:"Multímetro digital", precio:180, stock:10 },
+      { categoria:'herramientas', codigo:'HER-003', nombre:"Pinza amperimétrica", precio:250, stock:10 },
+      { categoria:'herramientas', codigo:'HER-004', nombre:"Llave de gas ajustable", precio:70, stock:10 },
+    ];
+    await supabaseClient.from('catalogo').insert(ejemplo);
+  }
+
+  function siguienteCodigo(cat){
+    const usados = new Set(catalogo[cat].map(a => a.codigo));
+    let n = catalogo[cat].length + 1;
+    let codigo = PREFIJOS[cat] + '-' + String(n).padStart(3,'0');
+    while(usados.has(codigo)){
+      n++;
+      codigo = PREFIJOS[cat] + '-' + String(n).padStart(3,'0');
+    }
+    return codigo;
+  }
+
+  function mostrarHintGuardado(texto){
+    const hint = document.getElementById('save-hint');
+    hint.textContent = texto;
+    hint.classList.add('show');
+    setTimeout(() => {
+      hint.textContent = 'Los cambios se guardan automáticamente en la nube';
+      hint.classList.remove('show');
+    }, 1200);
+  }
+
+  function cambiarCategoria(cat){
+    categoriaActual = cat;
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.cat === cat));
+    document.getElementById('lista-titulo').textContent = nombresCategoria[cat];
+    renderLista();
+  }
+
+  async function agregarArticulo(){
+    const nombreInput = document.getElementById('nuevo-nombre');
+    const codigoInput = document.getElementById('nuevo-codigo');
+    const precioInput = document.getElementById('nuevo-precio');
+    const stockInput = document.getElementById('nuevo-stock');
+
+    const nombre = nombreInput.value.trim();
+    const precio = parseFloat(precioInput.value);
+    let codigo = codigoInput.value.trim();
+    let stock = parseInt(stockInput.value, 10);
+    if(isNaN(stock) || stock < 0) stock = 0;
+
+    if(!nombre){ nombreInput.focus(); return; }
+    if(isNaN(precio) || precio < 0){ precioInput.focus(); return; }
+    if(!codigo) codigo = siguienteCodigo(categoriaActual);
+
+    const { data, error } = await supabaseClient.from('catalogo')
+      .insert({ categoria: categoriaActual, codigo, nombre, precio, stock })
+      .select().single();
+
+    if(error){ alert('Error al guardar: ' + error.message); return; }
+
+    catalogo[categoriaActual].push({ id: data.id, nombre, codigo, precio, stock });
+    mostrarHintGuardado('Artículo agregado');
+    nombreInput.value = '';
+    codigoInput.value = '';
+    precioInput.value = '';
+    stockInput.value = '';
+    renderLista();
+  }
+
+  async function actualizarNombre(i, valor){
+    const art = catalogo[categoriaActual][i];
+    art.nombre = valor;
+    const { error } = await supabaseClient.from('catalogo').update({ nombre: valor }).eq('id', art.id);
+    if(error){ alert('Error al actualizar: ' + error.message); return; }
+    mostrarHintGuardado('Cambios guardados');
+  }
+
+  async function actualizarCodigo(i, valor){
+    const art = catalogo[categoriaActual][i];
+    art.codigo = valor.trim();
+    const { error } = await supabaseClient.from('catalogo').update({ codigo: art.codigo }).eq('id', art.id);
+    if(error){ alert('Error al actualizar: ' + error.message); return; }
+    mostrarHintGuardado('Cambios guardados');
+  }
+
+  async function actualizarPrecio(i, valor){
+    const precio = parseFloat(valor);
+    const precioFinal = isNaN(precio) ? 0 : precio;
+    const art = catalogo[categoriaActual][i];
+    art.precio = precioFinal;
+    const { error } = await supabaseClient.from('catalogo').update({ precio: precioFinal }).eq('id', art.id);
+    if(error){ alert('Error al actualizar: ' + error.message); return; }
+    mostrarHintGuardado('Cambios guardados');
+  }
+
+  async function actualizarStock(i, valor){
+    let stock = parseInt(valor, 10);
+    if(isNaN(stock) || stock < 0) stock = 0;
+    const art = catalogo[categoriaActual][i];
+    art.stock = stock;
+    const { error } = await supabaseClient.from('catalogo').update({ stock }).eq('id', art.id);
+    if(error){ alert('Error al actualizar: ' + error.message); return; }
+    mostrarHintGuardado('Cambios guardados');
+    renderLista();
+  }
+
+  async function quitarArticulo(i){
+    const art = catalogo[categoriaActual][i];
+    const { error } = await supabaseClient.from('catalogo').delete().eq('id', art.id);
+    if(error){ alert('Error al eliminar: ' + error.message); return; }
+    catalogo[categoriaActual].splice(i, 1);
+    renderLista();
+  }
+
+  function renderLista(){
+    const cont = document.getElementById('lista-articulos');
+    const lista = catalogo[categoriaActual];
+    cont.innerHTML = '';
+
+    if(lista.length === 0){
+      cont.innerHTML = '<div class="empty-list">Aún no hay artículos en esta categoría</div>';
+      return;
+    }
+
+    lista.forEach((art, i) => {
+      const row = document.createElement('div');
+      row.className = 'articulo-row';
+      row.innerHTML = `
+        <div class="articulo-info">
+          <input class="articulo-nombre" type="text" value="${escaparHtml(art.nombre)}" onchange="actualizarNombre(${i}, this.value)">
+          <div class="articulo-precio-wrap">
+            <span>Cód.</span>
+            <input class="articulo-precio" type="text" value="${escaparHtml(art.codigo || '')}" onchange="actualizarCodigo(${i}, this.value)" style="width:80px;">
+            <span>Bs</span>
+            <input class="articulo-precio" type="number" value="${art.precio}" onchange="actualizarPrecio(${i}, this.value)">
+            <span>Stock</span>
+            <input class="articulo-precio" type="number" value="${art.stock || 0}" onchange="actualizarStock(${i}, this.value)" style="width:60px; color:${(art.stock||0) <= 3 ? 'var(--danger)' : 'var(--accent)'};">
+          </div>
+        </div>
+        <button class="articulo-remove" onclick="quitarArticulo(${i})">✕</button>
+      `;
+      cont.appendChild(row);
+    });
+  }
+
+  function escaparHtml(str){
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  cargarCatalogo();
+</script>
+
+</body>
+</html>

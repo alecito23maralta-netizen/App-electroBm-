@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Inicio — Electrodomésticos BM</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1A1D29">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BM App">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700&display=swap');
 
@@ -75,9 +82,14 @@
 
   footer{margin-top:20px;text-align:center;font-size:12px;color:var(--text-dim);}
   :focus-visible{outline:2px solid var(--c-cotiza);outline-offset:2px;}
+
+  /* --- PWA: banner de sin conexión --- */
+  .pwa-offline-banner{display:none;background:var(--danger,#FF6B6B);color:#14151c;text-align:center;font-size:12.5px;font-weight:700;padding:9px 14px;font-family:'Inter',sans-serif;}
+  .pwa-offline-banner.show{display:block;}
 </style>
 </head>
 <body>
+<div id="pwa-offline-banner" class="pwa-offline-banner">📡 Sin conexión — los datos podrían no actualizarse</div>
 
 <div class="screen">
   <header>
@@ -290,6 +302,27 @@ async function crearUsuario(){
     lista.push({ email, fecha: new Date().toLocaleDateString('es-BO') });
     localStorage.setItem('usuariosCreados', JSON.stringify(lista));
   }
+}
+</script>
+
+<script>
+(function(){
+  var banner = document.getElementById('pwa-offline-banner');
+  function actualizarEstadoConexion(){
+    if(!banner) return;
+    banner.classList.toggle('show', !navigator.onLine);
+  }
+  window.addEventListener('online', actualizarEstadoConexion);
+  window.addEventListener('offline', actualizarEstadoConexion);
+  actualizarEstadoConexion();
+})();
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', function(){
+    navigator.serviceWorker.register('sw.js').catch(function(err){
+      console.warn('No se pudo registrar el service worker:', err);
+    });
+  });
 }
 </script>
 </body>

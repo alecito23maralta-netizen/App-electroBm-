@@ -1,0 +1,11 @@
+# Node / npm
+node_modules/
+npm-debug.log*
+
+# macOS / editores
+.DS_Store
+.vscode/
+
+# iOS (si en el futuro se agrega la plataforma)
+ios/App/Pods/
+ios/App/App.xcworkspace/xcshareddata/

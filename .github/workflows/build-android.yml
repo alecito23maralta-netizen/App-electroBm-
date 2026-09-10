@@ -1,0 +1,53 @@
+name: Build Android APK
+
+# Compila el APK de depuración (debug, sin firmar) cada vez que se hace push
+# a main o manualmente desde la pestaña "Actions" de GitHub.
+# El .apk resultante queda como artefacto descargable del run.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'app/**'
+      - 'android/**'
+      - 'capacitor.config.json'
+      - 'package.json'
+      - '.github/workflows/build-android.yml'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Configurar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm ci || npm install
+
+      - name: Sincronizar proyecto Android (Capacitor)
+        run: npx cap sync android
+
+      - name: Compilar APK de depuración
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Subir APK como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: electrobm-app-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk

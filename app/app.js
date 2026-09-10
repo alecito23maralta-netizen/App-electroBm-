@@ -15,7 +15,6 @@ let promocionesCache = [];
 let intervaloAlertaPendientes = null;
 let intervaloNotificaciones = null;
 let vistaActual = 'cotizaciones';
-let chatNoLeidos = 0;
 let canalChatGlobal = null;
 let sesionCajaActual = null;
 let cajaVistaAdmin = 'mia'; // 'mia' | 'todas'
@@ -32,6 +31,11 @@ let descuentoAdicionalPctActual = 0;
 let cuota2PctActual = 0;
 let cuota2DiasActual = '';
 let ventaOrigenCotizacion = null;
+let garantiasCache = [];
+let ventasParaGarantiaCache = [];
+let vendedoresCache = [];       // usado por el admin para elegir con quién chatear
+let chatModo = 'general';       // 'general' | 'individual'
+let chatHiloVendedorId = null;  // hilo elegido por el admin en modo individual (null = lista)
 
 // ------------------------------------------------------------
 // Utilidades
@@ -136,6 +140,7 @@ async function iniciarApp() {
   $('#nav-usuarios').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-inventario').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-caja').style.display = profile.rol === 'admin' ? '' : 'none';
+  $('#nav-garantias').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-group-gestion').style.display = profile.rol === 'admin' ? '' : 'none';
   $('.nav-group[data-group="ventas"]')?.classList.add('open');
   if (profile.rol === 'admin') $('#nav-group-gestion')?.classList.add('open');
@@ -407,13 +412,11 @@ function cerrarMenuMobile() {
 }
 
 async function switchView(view) {
-  if ((view === 'usuarios' || view === 'inventario' || view === 'caja') && profile.rol !== 'admin') view = 'cotizaciones';
+  if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias') && profile.rol !== 'admin') view = 'cotizaciones';
   vistaActual = view;
   $$('.view').forEach(v => v.hidden = true);
   $(`#view-${view}`).hidden = false;
   $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-
-  if (view === 'chat') marcarChatVisto();
 
   if (view === 'cotizaciones') await renderCotizaciones();
   if (view === 'ventas') await renderVentas();
@@ -422,6 +425,7 @@ async function switchView(view) {
   if (view === 'inventario') await renderInventario();
   if (view === 'caja') await renderCaja();
   if (view === 'usuarios') await renderUsuarios();
+  if (view === 'garantias') await renderGarantias();
   if (view === 'chat') await renderChat();
   if (view === 'comprobantes') await renderComprobantes();
 }
@@ -2304,55 +2308,365 @@ function abrirFormPromocion(existing) {
 }
 
 // ============================================================
-// MÓDULO: CHAT (mensajes y fotos entre vendedores y admin)
+// MÓDULO: GARANTÍAS (exclusivo del administrador)
+// ============================================================
+let busquedaGarantias = '';
+
+function estadoGarantia(g) {
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const venc = new Date(g.fecha_vencimiento + 'T00:00:00');
+  return venc >= hoy ? 'vigente' : 'vencida';
+}
+
+async function cargarGarantias() {
+  const { data, error } = await sb.from('garantias').select('*').order('fecha_vencimiento', { ascending: true });
+  if (error) { toast('Error cargando garantías: ' + error.message, 'error'); garantiasCache = []; return; }
+  garantiasCache = data || [];
+}
+
+async function renderGarantias() {
+  const el = $('#view-garantias');
+  el.innerHTML = `
+    <div class="section-head">
+      <div><h2>Garantías</h2><p class="sub">Registrá hasta qué fecha queda cubierta cada venta</p></div>
+      <button class="btn btn-primary" id="btn-nueva-garantia">+ Registrar garantía</button>
+    </div>
+    <div class="field" style="margin-bottom:14px">
+      <input id="gar-buscar" placeholder="🔍 Buscar por cliente o producto…" value="${escapeHtml(busquedaGarantias)}" />
+    </div>
+    <div id="garantias-table"><div class="empty-state">Cargando…</div></div>
+  `;
+  $('#btn-nueva-garantia').addEventListener('click', () => abrirFormGarantia());
+  $('#gar-buscar').addEventListener('input', (e) => { busquedaGarantias = e.target.value; renderTablaGarantias(); });
+
+  await cargarGarantias();
+  renderTablaGarantias();
+}
+
+function renderTablaGarantias() {
+  const cont = $('#garantias-table');
+  if (!cont) return;
+  const q = busquedaGarantias.trim().toLowerCase();
+  const lista = garantiasCache.filter(g =>
+    !q || g.cliente_nombre.toLowerCase().includes(q) || g.producto_descripcion.toLowerCase().includes(q)
+  );
+
+  if (lista.length === 0) {
+    cont.innerHTML = `<div class="empty-state">${q ? 'Sin resultados.' : 'Todavía no registraste ninguna garantía.'}</div>`;
+    return;
+  }
+
+  cont.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Cliente</th><th>Producto</th><th>Venta</th><th>Vence</th><th>Estado</th><th>Acciones</th></tr></thead>
+    <tbody>
+      ${lista.map(g => {
+        const estado = estadoGarantia(g);
+        return `
+        <tr>
+          <td>${escapeHtml(g.cliente_nombre)}${g.cliente_telefono ? `<div style="color:var(--text-dim);font-size:11px;margin-top:1px">${escapeHtml(g.cliente_telefono)}</div>` : ''}</td>
+          <td>${escapeHtml(g.producto_descripcion)}</td>
+          <td>${g.venta_numero ? '#' + g.venta_numero : '—'}</td>
+          <td>${fecha(g.fecha_vencimiento)}</td>
+          <td><span class="badge ${estado === 'vigente' ? 'badge-ok' : 'badge-rechazada'}">${estado === 'vigente' ? 'Vigente' : 'Vencida'}</span></td>
+          <td><div class="row-actions">
+            <button class="icon-btn" data-act="eliminar" data-id="${g.id}" title="Eliminar">🗑</button>
+          </div></td>
+        </tr>
+      `;}).join('')}
+    </tbody>
+  </table></div>`;
+
+  cont.querySelectorAll('[data-act="eliminar"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('¿Eliminar esta garantía?')) return;
+      const { error } = await sb.from('garantias').delete().eq('id', btn.dataset.id);
+      if (error) { toast('Error: ' + error.message, 'error'); return; }
+      toast('Garantía eliminada');
+      await cargarGarantias();
+      renderTablaGarantias();
+    });
+  });
+}
+
+async function abrirFormGarantia() {
+  const { data } = await sb.from('ventas').select('*').order('created_at', { ascending: false }).limit(500);
+  ventasParaGarantiaCache = data || [];
+
+  openModal(`
+    <div class="sheet-head"><h3>Registrar garantía</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+
+    <div class="field"><label>Venta *</label>
+      <input id="g-venta-busqueda" list="ventas-datalist" placeholder="Buscá por N° o nombre del cliente…" autocomplete="off" required />
+      <datalist id="ventas-datalist">${ventasParaGarantiaCache.map(v => `<option value="#${v.numero} — ${escapeHtml(v.cliente_nombre)}"></option>`).join('')}</datalist>
+    </div>
+
+    <div class="field" style="margin-top:10px"><label>Producto de esa venta *</label>
+      <select id="g-producto" disabled><option value="">Elegí primero una venta…</option></select>
+    </div>
+
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Cliente *</label><input id="g-cliente" required /></div>
+      <div class="field"><label>Teléfono</label><input id="g-telefono" /></div>
+    </div>
+
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Fecha de compra</label><input type="date" id="g-fecha-compra" /></div>
+      <div class="field"><label>Garantía vence el *</label><input type="date" id="g-fecha-vencimiento" required /></div>
+    </div>
+
+    <div class="field" style="margin-top:10px"><label>Notas (opcional)</label><input id="g-notas" placeholder="Ej: 6 meses por defectos de fábrica" /></div>
+
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
+      <button class="btn btn-primary" id="btn-guardar">💾 Guardar garantía</button>
+    </div>
+  `);
+
+  let ventaSeleccionada = null;
+
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+
+  $('#g-venta-busqueda').addEventListener('change', (e) => {
+    const m = e.target.value.match(/^#(\d+)/);
+    ventaSeleccionada = m ? ventasParaGarantiaCache.find(v => v.numero === Number(m[1])) : null;
+
+    const selProducto = $('#g-producto');
+    if (!ventaSeleccionada) {
+      selProducto.disabled = true;
+      selProducto.innerHTML = '<option value="">Venta no encontrada — elegí una de la lista</option>';
+      return;
+    }
+
+    const items = Array.isArray(ventaSeleccionada.items) ? ventaSeleccionada.items : [];
+    selProducto.disabled = false;
+    selProducto.innerHTML = items.length
+      ? items.map((it, i) => `<option value="${i}">${escapeHtml(it.descripcion)}</option>`).join('')
+      : '<option value="">Esa venta no tiene ítems cargados</option>';
+
+    $('#g-cliente').value = ventaSeleccionada.cliente_nombre || '';
+    $('#g-telefono').value = ventaSeleccionada.cliente_telefono || '';
+    $('#g-fecha-compra').value = (ventaSeleccionada.created_at || '').slice(0, 10);
+  });
+
+  $('#btn-guardar').addEventListener('click', async () => {
+    const cliente_nombre = $('#g-cliente').value.trim();
+    const fecha_vencimiento = $('#g-fecha-vencimiento').value;
+    const idxItem = $('#g-producto').value;
+    const items = ventaSeleccionada && Array.isArray(ventaSeleccionada.items) ? ventaSeleccionada.items : [];
+    const producto_descripcion = items[idxItem]?.descripcion || '';
+
+    if (!cliente_nombre) { toast('Falta el nombre del cliente', 'error'); return; }
+    if (!producto_descripcion) { toast('Elegí una venta y un producto', 'error'); return; }
+    if (!fecha_vencimiento) { toast('Falta la fecha de vencimiento de la garantía', 'error'); return; }
+
+    const payload = {
+      venta_id: ventaSeleccionada?.id || null,
+      venta_numero: ventaSeleccionada?.numero || null,
+      cliente_nombre,
+      cliente_telefono: $('#g-telefono').value.trim(),
+      producto_descripcion,
+      fecha_compra: $('#g-fecha-compra').value || new Date().toISOString().slice(0, 10),
+      fecha_vencimiento,
+      notas: $('#g-notas').value.trim(),
+      registrado_por: profile.id
+    };
+
+    const { error } = await sb.from('garantias').insert(payload);
+    if (error) { toast('Error al guardar: ' + error.message, 'error'); return; }
+
+    toast('Garantía registrada ✓');
+    closeModal();
+    await cargarGarantias();
+    renderTablaGarantias();
+  });
+}
+
+// ============================================================
+// MÓDULO: CHAT — general (todo el equipo) + individuales
+// (cada vendedor con la administración; cualquier admin ve y
+// responde todos los hilos individuales)
 // ============================================================
 let chatImagenPendiente = null;
+let chatNoLeidosPorHilo = {}; // 'general' | <id de vendedor> -> cantidad de no leídos
 
-function claveVistoChat() {
-  return `bm_chat_visto_${profile.id}`;
+// 'general' usa la misma clave de siempre (no perder el estado ya guardado
+// en el dispositivo); los hilos individuales usan una clave por vendedor.
+function claveVistoHilo(hilo) {
+  return hilo === 'general' ? `bm_chat_visto_${profile.id}` : `bm_chat_visto_${profile.id}_ind_${hilo}`;
 }
-function marcarChatVisto() {
-  localStorage.setItem(claveVistoChat(), new Date().toISOString());
-  chatNoLeidos = 0;
+function totalNoLeidos() {
+  return Object.values(chatNoLeidosPorHilo).reduce((a, b) => a + b, 0);
+}
+function marcarHiloVisto(hilo) {
+  localStorage.setItem(claveVistoHilo(hilo), new Date().toISOString());
+  chatNoLeidosPorHilo[hilo] = 0;
   actualizarBadgeChat();
 }
 function actualizarBadgeChat() {
   const badge = $('#chat-badge');
   if (!badge) return;
-  if (chatNoLeidos > 0) { badge.hidden = false; badge.textContent = chatNoLeidos > 9 ? '9+' : chatNoLeidos; }
+  const total = totalNoLeidos();
+  if (total > 0) { badge.hidden = false; badge.textContent = total > 9 ? '9+' : total; }
   else { badge.hidden = true; }
 }
 
+// A qué hilo pertenece un mensaje: null (general) o el id del vendedor dueño del hilo.
+function hiloDeMensaje(m) {
+  return m.conversacion_con || 'general';
+}
+// Si me corresponde enterarme de este mensaje (el admin ve todos los hilos,
+// un vendedor solo el general y el suyo — coincide con la policy de RLS).
+function esMensajeRelevante(m) {
+  if (profile.rol === 'admin') return true;
+  return !m.conversacion_con || m.conversacion_con === profile.id;
+}
+
+// Timbre corto generado con Web Audio (sin archivo externo, funciona
+// offline) + vibración en celulares que la soportan.
+function sonarNotificacion() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + 0.25);
+  } catch (e) { /* el navegador puede bloquear audio sin interacción previa */ }
+  if (navigator.vibrate) navigator.vibrate(200);
+}
+
+async function cargarVendedores() {
+  const { data } = await sb.from('profiles').select('*').eq('rol', 'vendedor').order('nombre');
+  vendedoresCache = data || [];
+}
+
 async function inicializarNotificacionesChat() {
-  const ultimoVisto = localStorage.getItem(claveVistoChat()) || new Date(0).toISOString();
-  const { count } = await sb.from('mensajes').select('*', { count: 'exact', head: true })
-    .gt('created_at', ultimoVisto).neq('usuario_id', profile.id);
-  chatNoLeidos = count || 0;
+  chatNoLeidosPorHilo = {};
+
+  const vistoGeneral = localStorage.getItem(claveVistoHilo('general')) || new Date(0).toISOString();
+  const { count: nGeneral } = await sb.from('mensajes').select('*', { count: 'exact', head: true })
+    .is('conversacion_con', null).gt('created_at', vistoGeneral).neq('usuario_id', profile.id);
+  chatNoLeidosPorHilo.general = nGeneral || 0;
+
+  if (profile.rol === 'admin') {
+    await cargarVendedores();
+    for (const v of vendedoresCache) {
+      const visto = localStorage.getItem(claveVistoHilo(v.id)) || new Date(0).toISOString();
+      const { count } = await sb.from('mensajes').select('*', { count: 'exact', head: true })
+        .eq('conversacion_con', v.id).gt('created_at', visto).neq('usuario_id', profile.id);
+      chatNoLeidosPorHilo[v.id] = count || 0;
+    }
+  } else {
+    const visto = localStorage.getItem(claveVistoHilo(profile.id)) || new Date(0).toISOString();
+    const { count } = await sb.from('mensajes').select('*', { count: 'exact', head: true })
+      .eq('conversacion_con', profile.id).gt('created_at', visto).neq('usuario_id', profile.id);
+    chatNoLeidosPorHilo[profile.id] = count || 0;
+  }
   actualizarBadgeChat();
 
   if (canalChatGlobal) sb.removeChannel(canalChatGlobal);
   canalChatGlobal = sb.channel('mensajes-global')
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'mensajes' }, (payload) => {
-      if (payload.new.usuario_id === profile.id) return; // el propio ya se agrega al enviar
-      if (vistaActual === 'chat') {
-        agregarMensajeAlDOM(payload.new);
+      const m = payload.new;
+      if (m.usuario_id === profile.id) return; // el propio ya se agrega al enviar
+      if (!esMensajeRelevante(m)) return;
+
+      const hilo = hiloDeMensaje(m);
+      const hiloAbierto = chatModo === 'general' ? 'general' : (profile.rol === 'admin' ? chatHiloVendedorId : profile.id);
+      const viendoEsteHilo = vistaActual === 'chat' && hilo === hiloAbierto;
+
+      if (viendoEsteHilo) {
+        agregarMensajeAlDOM(m);
         const c = $('#chat-mensajes');
         if (c) c.scrollTop = c.scrollHeight;
-        marcarChatVisto();
+        marcarHiloVisto(hilo);
       } else {
-        chatNoLeidos++;
+        chatNoLeidosPorHilo[hilo] = (chatNoLeidosPorHilo[hilo] || 0) + 1;
         actualizarBadgeChat();
+        if (vistaActual === 'chat' && chatModo === 'individual' && profile.rol === 'admin' && !chatHiloVendedorId) {
+          renderListaVendedoresChat();
+        }
       }
+      sonarNotificacion();
     })
     .subscribe();
 }
 
 async function renderChat() {
   const el = $('#view-chat');
+  const soyAdmin = profile.rol === 'admin';
   el.innerHTML = `
     <div class="section-head">
-      <div><h2>Chat del equipo</h2><p class="sub">Mensajes y fotos entre vendedores y administración</p></div>
+      <div><h2>Chat</h2><p class="sub">${soyAdmin ? 'Chat general del equipo y conversaciones individuales' : 'Chat general y conversación privada con administración'}</p></div>
     </div>
+    <div class="tabs" id="chat-tabs">
+      <button class="tab-btn ${chatModo === 'general' ? 'active' : ''}" data-modo="general">General</button>
+      <button class="tab-btn ${chatModo === 'individual' ? 'active' : ''}" data-modo="individual">${soyAdmin ? 'Individuales' : 'Con administración'}</button>
+    </div>
+    <div id="chat-cuerpo"></div>
+  `;
+
+  $$('#chat-tabs .tab-btn').forEach(btn => btn.addEventListener('click', () => {
+    chatModo = btn.dataset.modo;
+    if (chatModo === 'general') chatHiloVendedorId = null;
+    renderChatCuerpo();
+  }));
+
+  await renderChatCuerpo();
+}
+
+async function renderChatCuerpo() {
+  $$('#chat-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.modo === chatModo));
+
+  if (chatModo === 'individual' && profile.rol === 'admin' && !chatHiloVendedorId) {
+    await renderListaVendedoresChat();
+    return;
+  }
+  const hilo = chatModo === 'general' ? 'general' : (profile.rol === 'admin' ? chatHiloVendedorId : profile.id);
+  await renderHiloChat(hilo);
+}
+
+async function renderListaVendedoresChat() {
+  const cont = $('#chat-cuerpo');
+  await cargarVendedores();
+  if (vendedoresCache.length === 0) {
+    cont.innerHTML = `<div class="empty-state">Todavía no hay vendedores registrados.</div>`;
+    return;
+  }
+  cont.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Vendedor</th><th></th></tr></thead>
+    <tbody>
+      ${vendedoresCache.map(v => {
+        const n = chatNoLeidosPorHilo[v.id] || 0;
+        return `<tr class="chat-vendedor-row" data-id="${v.id}" style="cursor:pointer">
+          <td>${escapeHtml(v.nombre || v.usuario)}</td>
+          <td style="text-align:right">${n > 0 ? `<span class="badge badge-pendiente">${n > 9 ? '9+' : n}</span>` : '<span style="color:var(--text-faint)">Abrir →</span>'}</td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table></div>`;
+
+  cont.querySelectorAll('.chat-vendedor-row').forEach(row => {
+    row.addEventListener('click', () => { chatHiloVendedorId = row.dataset.id; renderChatCuerpo(); });
+  });
+}
+
+async function renderHiloChat(hilo) {
+  const cont = $('#chat-cuerpo');
+  const volverBtn = (chatModo === 'individual' && profile.rol === 'admin')
+    ? `<button class="btn btn-secondary btn-sm" id="chat-volver-lista" style="margin-bottom:10px">← Vendedores</button>`
+    : '';
+  const tituloHilo = (chatModo === 'individual' && profile.rol === 'admin')
+    ? `<p class="sub" style="margin:-4px 0 10px">Con ${escapeHtml(vendedoresCache.find(v => v.id === hilo)?.nombre || 'vendedor')}</p>`
+    : '';
+
+  cont.innerHTML = `
+    ${volverBtn}
+    ${tituloHilo}
     <div class="chat-box">
       <div class="chat-mensajes" id="chat-mensajes"><div class="empty-state">Cargando…</div></div>
       <div class="chat-preview-img" id="chat-preview-img" hidden>
@@ -2367,15 +2681,20 @@ async function renderChat() {
     </div>
   `;
 
-  const { data, error } = await sb.from('mensajes').select('*').order('created_at', { ascending: true }).limit(200);
-  const cont = $('#chat-mensajes');
+  $('#chat-volver-lista')?.addEventListener('click', () => { chatHiloVendedorId = null; renderChatCuerpo(); });
+
+  let query = sb.from('mensajes').select('*').order('created_at', { ascending: true }).limit(200);
+  query = hilo === 'general' ? query.is('conversacion_con', null) : query.eq('conversacion_con', hilo);
+  const { data, error } = await query;
+
+  const msgCont = $('#chat-mensajes');
   chatImagenPendiente = null;
 
-  if (error) { cont.innerHTML = `<div class="empty-state">No se pudo cargar el chat.</div>`; }
+  if (error) { msgCont.innerHTML = `<div class="empty-state">No se pudo cargar el chat.</div>`; }
   else {
-    cont.innerHTML = data.length === 0 ? `<div class="empty-state">Todavía no hay mensajes. ¡Escribí el primero!</div>` : '';
+    msgCont.innerHTML = data.length === 0 ? `<div class="empty-state">Todavía no hay mensajes. ¡Escribí el primero!</div>` : '';
     data.forEach(m => agregarMensajeAlDOM(m));
-    cont.scrollTop = cont.scrollHeight;
+    msgCont.scrollTop = msgCont.scrollHeight;
   }
 
   $('#chat-file').addEventListener('change', async (e) => {
@@ -2392,10 +2711,10 @@ async function renderChat() {
     $('#chat-file').value = '';
     $('#chat-preview-img').hidden = true;
   });
-  $('#chat-enviar').addEventListener('click', enviarMensajeChat);
-  $('#chat-texto').addEventListener('keydown', (e) => { if (e.key === 'Enter') enviarMensajeChat(); });
+  $('#chat-enviar').addEventListener('click', () => enviarMensajeChat(hilo));
+  $('#chat-texto').addEventListener('keydown', (e) => { if (e.key === 'Enter') enviarMensajeChat(hilo); });
 
-  marcarChatVisto();
+  marcarHiloVisto(hilo);
 }
 
 function agregarMensajeAlDOM(m) {
@@ -2417,7 +2736,7 @@ function agregarMensajeAlDOM(m) {
   cont.appendChild(div);
 }
 
-async function enviarMensajeChat() {
+async function enviarMensajeChat(hilo) {
   const input = $('#chat-texto');
   const texto = input.value.trim();
   if (!texto && !chatImagenPendiente) return;
@@ -2429,7 +2748,8 @@ async function enviarMensajeChat() {
     nombre_remitente: profile.nombre || profile.usuario,
     rol_remitente: profile.rol,
     texto: texto || null,
-    imagen_base64: chatImagenPendiente || null
+    imagen_base64: chatImagenPendiente || null,
+    conversacion_con: hilo === 'general' ? null : hilo
   };
   const { data, error } = await sb.from('mensajes').insert(payload).select().single();
   btn.disabled = false;

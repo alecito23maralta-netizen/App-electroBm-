@@ -3,7 +3,7 @@
 // abra al instante y sea instalable. Las llamadas a Supabase (datos en
 // vivo) y los scripts de terceros (CDN) NUNCA se sirven desde caché.
 
-const CACHE_VERSION = 'bm-app-v1';
+const CACHE_VERSION = 'bm-app-v2';
 const APP_SHELL = [
   'index.html',
   'catalogo.html',
@@ -16,7 +16,12 @@ const APP_SHELL = [
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/icon-maskable-512.png',
-  'icons/apple-touch-icon.png'
+  'icons/apple-touch-icon.png',
+  'vendor/capacitor/capacitor-core.js',
+  'vendor/capacitor/synapse.js',
+  'vendor/capacitor/bridge-alias.js',
+  'vendor/capacitor/filesystem-plugin.js',
+  'vendor/capacitor/share-plugin.js'
 ];
 
 self.addEventListener('install', (event) => {

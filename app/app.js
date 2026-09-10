@@ -1916,15 +1916,31 @@ function dataURLtoBlob(dataurl) {
   return new Blob([u8arr], { type: mime });
 }
 
-// Comparte uno o más archivos + texto por WhatsApp. Usa el selector nativo
-// del celular (navigator.share) cuando está disponible: ahí WhatsApp
-// aparece como una opción y manda la foto y el texto juntos, en un solo
-// paso. Si el navegador no lo soporta (típico en computadora, o algunos
-// Android viejos) descarga los archivos al dispositivo y abre WhatsApp
-// con el texto, para adjuntarlos a mano desde Descargas — más confiable
-// que abrir la imagen en otra pestaña, que en muchos celulares no se deja
-// adjuntar directo desde ahí.
+// Comparte uno o más archivos + texto por WhatsApp.
+//
+// Dentro de la app instalada (APK), el WebView de Android no manda bien los
+// archivos a través de navigator.share (llega solo el texto), así que ahí
+// usamos los plugins nativos de Capacitor (Filesystem + Share): guardan la
+// foto en la caché de la app y la comparten junto con el texto por el
+// selector nativo de Android, en un solo paso — ese es el camino confiable.
+//
+// En el navegador (PWA/computadora) usamos navigator.share cuando existe, y
+// si no está disponible descargamos los archivos y abrimos WhatsApp con el
+// texto, para adjuntarlos a mano — último recurso, solo fuera de la app.
 async function compartirArchivosWhatsapp({ files, texto, titulo, numeroWa }) {
+  const nativo = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+
+  if (nativo) {
+    try {
+      await compartirArchivosNativo({ files, texto, titulo });
+      return true;
+    } catch (e) {
+      if (e && e.message === 'Share canceled') return true; // el usuario cerró el panel nativo: no insistir con otro flujo
+      console.error('Error compartiendo (nativo):', e);
+      // seguimos abajo con los mismos fallbacks que en el navegador
+    }
+  }
+
   try {
     if (navigator.canShare && navigator.canShare({ files })) {
       await navigator.share({ files, text: texto, title: titulo });
@@ -1941,6 +1957,42 @@ async function compartirArchivosWhatsapp({ files, texto, titulo, numeroWa }) {
   const base = numeroWa ? `https://wa.me/${numeroWa}` : 'https://wa.me/';
   window.open(`${base}?text=${encodeURIComponent(texto + aviso)}`, '_blank');
   return false;
+}
+
+// Comparte por el selector nativo de Android (Intent.ACTION_SEND /
+// ACTION_SEND_MULTIPLE vía @capacitor/share), previa escritura de cada
+// archivo en la caché de la app (@capacitor/filesystem) para obtener una
+// ruta file:// que el plugin de Share pueda adjuntar. Tira si el usuario
+// cierra el panel nativo (Share.share rechaza con "Share canceled").
+async function compartirArchivosNativo({ files, texto, titulo }) {
+  const { Filesystem, Share } = window.Capacitor.Plugins;
+  const { Directory } = window.capacitorFilesystemPluginCapacitor || {};
+
+  const uris = [];
+  for (const file of files) {
+    const base64 = await fileABase64Puro(file);
+    const nombre = `bm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${file.name}`;
+    const { uri } = await Filesystem.writeFile({
+      path: nombre,
+      data: base64,
+      directory: Directory.Cache,
+      recursive: true,
+    });
+    uris.push(uri);
+  }
+
+  await Share.share({ title: titulo, text: texto, files: uris, dialogTitle: 'Compartir' });
+}
+
+// Convierte un File/Blob a base64 puro (sin el prefijo "data:...;base64,"),
+// tal como lo espera Filesystem.writeFile para escribir datos binarios.
+function fileABase64Puro(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 function descargarArchivo(file) {

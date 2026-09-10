@@ -1916,6 +1916,44 @@ function dataURLtoBlob(dataurl) {
   return new Blob([u8arr], { type: mime });
 }
 
+// Comparte uno o más archivos + texto por WhatsApp. Usa el selector nativo
+// del celular (navigator.share) cuando está disponible: ahí WhatsApp
+// aparece como una opción y manda la foto y el texto juntos, en un solo
+// paso. Si el navegador no lo soporta (típico en computadora, o algunos
+// Android viejos) descarga los archivos al dispositivo y abre WhatsApp
+// con el texto, para adjuntarlos a mano desde Descargas — más confiable
+// que abrir la imagen en otra pestaña, que en muchos celulares no se deja
+// adjuntar directo desde ahí.
+async function compartirArchivosWhatsapp({ files, texto, titulo, numeroWa }) {
+  try {
+    if (navigator.canShare && navigator.canShare({ files })) {
+      await navigator.share({ files, text: texto, title: titulo });
+      return true;
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') return true; // canceló el panel nativo: no insistir con otro flujo
+    // cualquier otro error: seguimos al fallback de descarga + wa.me
+  }
+  files.forEach(descargarArchivo);
+  const aviso = files.length > 1
+    ? '\n\n(Descargamos las fotos a tu dispositivo — adjuntalas vos en este chat)'
+    : '\n\n(Descargamos la foto a tu dispositivo — adjuntala vos en este chat)';
+  const base = numeroWa ? `https://wa.me/${numeroWa}` : 'https://wa.me/';
+  window.open(`${base}?text=${encodeURIComponent(texto + aviso)}`, '_blank');
+  return false;
+}
+
+function descargarArchivo(file) {
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = file.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 function abrirSelectorMedioPago(doc, tipoLabel) {
   if (mediosPagoCache.length === 0) {
     toast('Todavía no cargaste ninguna cuenta ni QR en Caja → Medios de pago', 'error');
@@ -1953,18 +1991,9 @@ async function compartirMedioPagoWhatsapp(doc, tipoLabel, medio) {
   const numeroWa = (doc.cliente_telefono || '').replace(/[^0-9]/g, '');
 
   if (medio.imagen_base64) {
-    try {
-      const blob = dataURLtoBlob(medio.imagen_base64);
-      const file = new File([blob], 'medio_pago.jpg', { type: blob.type });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], text: texto, title: 'Medio de pago' });
-        closeModal();
-        return;
-      }
-    } catch (e) { /* seguimos al fallback de abajo */ }
-    window.open(`https://wa.me/${numeroWa}?text=${encodeURIComponent(texto + '\n\n(Adjuntá también la imagen del QR que se abrió en la otra pestaña)')}`, '_blank');
-    const winImg = window.open();
-    if (winImg) winImg.document.write(`<img src="${medio.imagen_base64}" style="max-width:100%">`);
+    const blob = dataURLtoBlob(medio.imagen_base64);
+    const file = new File([blob], 'medio_pago.jpg', { type: blob.type });
+    await compartirArchivosWhatsapp({ files: [file], texto, titulo: 'Medio de pago', numeroWa });
   } else {
     window.open(`https://wa.me/${numeroWa}?text=${encodeURIComponent(texto)}`, '_blank');
   }
@@ -2218,17 +2247,9 @@ function verProductoCatalogo(p) {
 async function compartirProductoCatalogo(p) {
   const texto = `*${p.descripcion}*${p.subcategoria ? '\n' + p.subcategoria : ''}\nPrecio: ${money(p.precio_venta)}\n\n_Electrodomésticos BM_`;
   if (p.imagen_base64) {
-    try {
-      const blob = dataURLtoBlob(p.imagen_base64);
-      const file = new File([blob], 'producto.jpg', { type: blob.type });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], text: texto, title: p.descripcion });
-        return;
-      }
-    } catch (e) { /* seguimos al fallback */ }
-    window.open(`https://wa.me/?text=${encodeURIComponent(texto + '\n\n(Adjuntá también la foto que se abrió en la otra pestaña)')}`, '_blank');
-    const winImg = window.open();
-    if (winImg) winImg.document.write(`<img src="${p.imagen_base64}" style="max-width:100%">`);
+    const blob = dataURLtoBlob(p.imagen_base64);
+    const file = new File([blob], 'producto.jpg', { type: blob.type });
+    await compartirArchivosWhatsapp({ files: [file], texto, titulo: p.descripcion });
   } else {
     window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
   }
@@ -2347,19 +2368,15 @@ function mostrarPopupPromosVendedor() {
   });
 }
 
-function compartirPromocionWhatsapp(p) {
+async function compartirPromocionWhatsapp(p) {
   const texto = `*🎉 ${p.titulo}*\n${p.descripcion}${p.fecha_fin ? '\nVálido hasta ' + fecha(p.fecha_fin) : ''}\n\n_Electrodomésticos BM_`;
   if (p.imagen_base64) {
-    try {
-      const blob = dataURLtoBlob(p.imagen_base64);
-      const file = new File([blob], 'promo.jpg', { type: blob.type });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        navigator.share({ files: [file], text: texto, title: p.titulo });
-        return;
-      }
-    } catch (e) { /* seguimos al fallback */ }
+    const blob = dataURLtoBlob(p.imagen_base64);
+    const file = new File([blob], 'promo.jpg', { type: blob.type });
+    await compartirArchivosWhatsapp({ files: [file], texto, titulo: p.titulo });
+  } else {
+    window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
   }
-  window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
 }
 
 async function renderPromos() {
@@ -3365,13 +3382,7 @@ async function generarYCompartirComprobanteImagen(c) {
     const texto = `*Comprobante de pago N° ${String(c.numero).padStart(5, '0')} — Electrodomésticos BM*\nRecibimos de: ${c.cliente_nombre}\nMonto: ${money(c.monto_total)}`;
     if (blob) {
       const file = new File([blob], `comprobante_${c.numero}.png`, { type: 'image/png' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], text: texto, title: 'Comprobante de pago' });
-        return;
-      }
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
-      window.open(`https://wa.me/?text=${encodeURIComponent(texto + '\n\n(Adjuntá también la imagen que se abrió en la otra pestaña)')}`, '_blank');
+      await compartirArchivosWhatsapp({ files: [file], texto, titulo: 'Comprobante de pago' });
     }
   } catch (e) {
     toast('No se pudo generar la imagen del comprobante', 'error');
@@ -3714,23 +3725,11 @@ async function compartirFotosItems(items, doc, prefijo) {
   const numeroWa = (doc.cliente_telefono || '').replace(/[^0-9]/g, '');
   const texto = `Fotos de los artículos — ${numeroDoc(doc, prefijo)}\n` + items.map(it => `• ${it.descripcion} — ${money(it.precio_unitario)}`).join('\n');
 
-  try {
-    const files = items.map((it, i) => {
-      const blob = dataURLtoBlob(it.imagen);
-      return new File([blob], `articulo_${i + 1}.jpg`, { type: blob.type });
-    });
-    if (navigator.canShare && navigator.canShare({ files })) {
-      await navigator.share({ files, text: texto, title: 'Artículos cotizados' });
-      return;
-    }
-  } catch (e) { /* seguimos al fallback de abajo */ }
-
-  // Fallback: abrimos cada foto en una pestaña nueva y el texto por WhatsApp aparte
-  items.forEach(it => {
-    const w = window.open();
-    if (w) w.document.write(`<img src="${it.imagen}" style="max-width:100%">`);
+  const files = items.map((it, i) => {
+    const blob = dataURLtoBlob(it.imagen);
+    return new File([blob], `articulo_${i + 1}.jpg`, { type: blob.type });
   });
-  window.open(`https://wa.me/${numeroWa}?text=${encodeURIComponent(texto + '\n\n(Las fotos se abrieron en pestañas nuevas para que las adjuntes)')}`, '_blank');
+  await compartirArchivosWhatsapp({ files, texto, titulo: 'Artículos cotizados', numeroWa });
 }
 
 async function compartirImagenDocumentoWhatsapp(doc, tipoLabel, prefijo) {
@@ -3751,16 +3750,7 @@ async function compartirImagenDocumentoWhatsapp(doc, tipoLabel, prefijo) {
 
     if (blob) {
       const file = new File([blob], `${prefijo}_${doc.numero}.png`, { type: 'image/png' });
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], text: texto, title: tipoLabel });
-        return;
-      }
-      // Fallback: no se puede compartir el archivo directo — abrimos la imagen en
-      // otra pestaña para descargarla/reenviarla, y el texto por WhatsApp aparte
-      const url = URL.createObjectURL(blob);
-      const winImg = window.open(url, '_blank');
-      if (!winImg) toast('Habilitá las ventanas emergentes para ver la imagen generada', 'error');
-      window.open(`https://wa.me/${numeroTel}?text=${encodeURIComponent(texto + '\n\n(Adjuntá también la imagen que se abrió en la otra pestaña)')}`, '_blank');
+      await compartirArchivosWhatsapp({ files: [file], texto, titulo: tipoLabel, numeroWa: numeroTel });
     } else {
       compartirWhatsapp(doc, tipoLabel, prefijo);
     }

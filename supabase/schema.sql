@@ -652,3 +652,62 @@ alter table public.comprobantes add column if not exists firma_base64 text;
 -- ============================================================
 alter table public.productos add column if not exists precio_anterior numeric(12,2);
 alter table public.productos add column if not exists precio_actualizado_at timestamptz;
+
+-- ============================================================
+-- ACTUALIZACIÓN: Garantías (ligadas a una venta ya guardada)
+-- El admin registra hasta qué fecha queda cubierta cada venta.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.garantias (
+  id uuid primary key default gen_random_uuid(),
+  venta_id uuid references public.ventas (id) on delete set null,
+  venta_numero integer,
+  cliente_nombre text not null,
+  cliente_telefono text not null default '',
+  producto_descripcion text not null,
+  fecha_compra date not null default current_date,
+  fecha_vencimiento date not null,
+  notas text not null default '',
+  registrado_por uuid references public.profiles (id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.garantias enable row level security;
+
+-- Cualquier usuario logueado puede consultar (útil para atender un reclamo
+-- de un cliente aunque no haya sido el vendedor que hizo la venta).
+-- Solo el admin registra, edita o borra garantías.
+drop policy if exists "garantias_select" on public.garantias;
+create policy "garantias_select" on public.garantias
+  for select using (auth.uid() is not null);
+
+drop policy if exists "garantias_write" on public.garantias;
+create policy "garantias_write" on public.garantias
+  for all using (public.is_admin()) with check (public.is_admin());
+
+-- ============================================================
+-- ACTUALIZACIÓN: Chat individual (cada vendedor con la administración),
+-- además del chat general que ya existía.
+-- conversacion_con = null      -> mensaje del chat general (como antes)
+-- conversacion_con = <id de un vendedor> -> hilo privado de ESE vendedor
+--   con la administración. Cualquier admin puede leer/escribir en
+--   cualquier hilo; un vendedor solo ve y escribe el suyo.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.mensajes add column if not exists conversacion_con uuid references public.profiles (id);
+
+drop policy if exists "mensajes_select" on public.mensajes;
+create policy "mensajes_select" on public.mensajes
+  for select using (
+    conversacion_con is null
+    or conversacion_con = auth.uid()
+    or usuario_id = auth.uid()
+    or public.is_admin()
+  );
+
+drop policy if exists "mensajes_insert" on public.mensajes;
+create policy "mensajes_insert" on public.mensajes
+  for insert with check (
+    usuario_id = auth.uid()
+    and (conversacion_con is null or conversacion_con = auth.uid() or public.is_admin())
+  );

@@ -1208,7 +1208,7 @@ function abrirFormProducto(existing) {
       <div class="field"><label>Stock mínimo (alerta)</label><input type="number" id="f-stockmin" value="${existing ? existing.stock_minimo : 5}" min="0" /></div>
     </div>
     <div class="field" style="margin-top:10px"><label>Foto (para el catálogo de clientes)</label><input type="file" id="f-imagen-producto" accept="image/*" /></div>
-    ${existing?.imagen_base64 ? `<img src="${existing.imagen_base64}" style="width:100%;max-width:200px;border-radius:8px;margin-top:8px" />` : ''}
+    <div id="preview-imagen-producto">${existing?.imagen_base64 ? `<img src="${existing.imagen_base64}" style="width:100%;max-width:200px;border-radius:8px;margin-top:8px" />` : ''}</div>
     <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:var(--text-dim)">
       <input type="checkbox" id="f-visible-catalogo" ${(existing ? existing.visible_catalogo !== false : true) ? 'checked' : ''} style="width:16px;height:16px" />
       Mostrar este producto en el Catálogo para clientes
@@ -1224,14 +1224,21 @@ function abrirFormProducto(existing) {
   $('#f-cat').addEventListener('change', (e) => {
     $('#campos-codigos').style.display = e.target.value === 'Herramientas' ? '' : 'none';
   });
+
+  let imagenNuevaBase64 = null;
+  $('#f-imagen-producto').addEventListener('change', async (e) => {
+    const archivo = e.target.files[0];
+    if (!archivo) return;
+    const recortada = await abrirRecortadorFoto(archivo);
+    e.target.value = ''; // el archivo ya se procesó; lo que vale de acá en más es imagenNuevaBase64
+    if (!recortada) return; // canceló el recorte: se queda con la foto que ya tenía (si había)
+    imagenNuevaBase64 = recortada;
+    $('#preview-imagen-producto').innerHTML = `<img src="${recortada}" style="width:100%;max-width:200px;border-radius:8px;margin-top:8px" />`;
+  });
+
   $('#btn-guardar').addEventListener('click', async () => {
     const esHerramienta = $('#f-cat').value === 'Herramientas';
-    const archivo = $('#f-imagen-producto').files[0];
-    let imagen_base64 = existing?.imagen_base64 || null;
-    if (archivo) {
-      try { imagen_base64 = await fileToResizedBase64(archivo); }
-      catch (e) { toast('Error al procesar la imagen: ' + e.message, 'error'); return; }
-    }
+    const imagen_base64 = imagenNuevaBase64 || existing?.imagen_base64 || null;
     const nuevoPrecioVenta = Number($('#f-precio').value || 0);
     const payload = {
       descripcion: $('#f-desc').value.trim(),
@@ -1651,6 +1658,127 @@ async function renderLibroDiario() {
 
   target.innerHTML = html;
 }
+
+// Recortador de fotos de producto: arrastrar para mover + zoom, siempre
+// encuadrado en cuadrado (así se ven en el catálogo). Se usa antes de
+// guardar, para que el vendedor vea el resultado en vez de confiar en
+// que el recorte automático del centro salga bien.
+// Devuelve un dataURL JPEG cuadrado, o null si se canceló.
+// Es un overlay propio (no usa openModal/closeModal) para poder mostrarse
+// arriba del formulario de producto sin perder lo que ya se completó ahí.
+function abrirRecortadorFoto(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onerror = () => resolve(null);
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => resolve(null);
+      img.onload = () => {
+        const overlay = document.createElement('div');
+        overlay.className = 'overlay show';
+        overlay.style.zIndex = '60';
+        overlay.innerHTML = `
+          <div class="sheet">
+            <div class="sheet-head"><h3>Encuadrá la foto</h3><button class="sheet-close" id="crop-cerrar">✕</button></div>
+            <p style="color:var(--text-dim);font-size:13px;margin-bottom:12px">Arrastrá para mover y usá el control para acercar. Así se va a ver en el catálogo.</p>
+            <div id="crop-viewport" style="position:relative;width:100%;max-width:320px;aspect-ratio:1/1;margin:0 auto;overflow:hidden;border-radius:12px;background:var(--surface-2);border:1px solid var(--border);touch-action:none;cursor:grab">
+              <img id="crop-img" src="${reader.result}" draggable="false" style="position:absolute;top:0;left:0;transform-origin:0 0;user-select:none;pointer-events:none" />
+            </div>
+            <div class="field" style="margin-top:14px"><label>Zoom</label><input type="range" id="crop-zoom" min="100" max="300" value="100" style="width:100%" /></div>
+            <div class="form-actions">
+              <button class="btn btn-secondary" id="crop-cancelar">Cancelar</button>
+              <button class="btn btn-primary" id="crop-confirmar">✓ Usar esta foto</button>
+            </div>
+          </div>
+        `;
+        document.body.appendChild(overlay);
+
+        const viewport = overlay.querySelector('#crop-viewport');
+        const imgEl = overlay.querySelector('#crop-img');
+        const zoomInput = overlay.querySelector('#crop-zoom');
+        const VIEW = viewport.clientWidth;
+
+        const scaleBase = VIEW / Math.min(img.width, img.height); // cubre el cuadro a zoom 1
+        let zoom = 1;
+        let pos = { x: 0, y: 0 };
+
+        function tamano() {
+          const s = scaleBase * zoom;
+          return { w: img.width * s, h: img.height * s };
+        }
+        function clampPos() {
+          const { w, h } = tamano();
+          const minX = Math.min(0, VIEW - w), minY = Math.min(0, VIEW - h);
+          pos.x = Math.min(0, Math.max(minX, pos.x));
+          pos.y = Math.min(0, Math.max(minY, pos.y));
+        }
+        function aplicar() {
+          const { w, h } = tamano();
+          imgEl.style.width = w + 'px';
+          imgEl.style.height = h + 'px';
+          imgEl.style.transform = `translate(${pos.x}px, ${pos.y}px)`;
+        }
+
+        pos = { x: (VIEW - tamano().w) / 2, y: (VIEW - tamano().h) / 2 };
+        aplicar();
+
+        let arrastrando = false;
+        let inicio = { x: 0, y: 0 };
+        let posInicio = { x: 0, y: 0 };
+
+        viewport.addEventListener('pointerdown', (e) => {
+          arrastrando = true;
+          viewport.style.cursor = 'grabbing';
+          inicio = { x: e.clientX, y: e.clientY };
+          posInicio = { ...pos };
+          viewport.setPointerCapture?.(e.pointerId);
+        });
+        viewport.addEventListener('pointermove', (e) => {
+          if (!arrastrando) return;
+          pos = { x: posInicio.x + (e.clientX - inicio.x), y: posInicio.y + (e.clientY - inicio.y) };
+          clampPos();
+          aplicar();
+        });
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => viewport.addEventListener(ev, () => {
+          arrastrando = false;
+          viewport.style.cursor = 'grab';
+        }));
+
+        zoomInput.addEventListener('input', () => {
+          // Mantiene fijo el centro del recorte mientras se acerca/aleja.
+          const { w: wAntes, h: hAntes } = tamano();
+          const fracX = (VIEW / 2 - pos.x) / wAntes;
+          const fracY = (VIEW / 2 - pos.y) / hAntes;
+          zoom = zoomInput.value / 100;
+          const { w: wDespues, h: hDespues } = tamano();
+          pos = { x: VIEW / 2 - fracX * wDespues, y: VIEW / 2 - fracY * hDespues };
+          clampPos();
+          aplicar();
+        });
+
+        function cerrar(valor) {
+          overlay.remove();
+          resolve(valor);
+        }
+        overlay.querySelector('#crop-cerrar').addEventListener('click', () => cerrar(null));
+        overlay.querySelector('#crop-cancelar').addEventListener('click', () => cerrar(null));
+        overlay.querySelector('#crop-confirmar').addEventListener('click', () => {
+          const SALIDA = 800; // foto final cuadrada, en px
+          const factor = SALIDA / VIEW;
+          const { w, h } = tamano();
+          const canvas = document.createElement('canvas');
+          canvas.width = SALIDA; canvas.height = SALIDA;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, pos.x * factor, pos.y * factor, w * factor, h * factor);
+          cerrar(canvas.toDataURL('image/jpeg', 0.85));
+        });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function fileToResizedBase64(file, maxWidth = 640, quality = 0.85) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

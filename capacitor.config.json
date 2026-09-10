@@ -1,0 +1,9 @@
+{
+  "appId": "com.electrodomesticosbm.app",
+  "appName": "Electrodomesticos BM",
+  "webDir": "app",
+  "server": {
+    "url": "https://calm-grass-5e53.alecito23maralta.workers.dev",
+    "cleartext": false
+  }
+}

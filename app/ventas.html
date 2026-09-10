@@ -1,0 +1,1844 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ventas</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1A1D29">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BM App">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700&display=swap');
+
+  :root{
+    --bg: #1A1D29;
+    --bg-soft: #232735;
+    --bg-soft2: #2A2F40;
+    --line: #2E3344;
+    --text: #F4F2ED;
+    --text-dim: #9499AC;
+    --accent: #4FC3E0;
+    --accent-dim: rgba(79,195,224,0.16);
+    --danger: #FF6B6B;
+    --ok: #A8E063;
+  }
+
+  *{ margin:0; padding:0; box-sizing:border-box; }
+
+  html, body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .screen{
+    max-width: 480px;
+    margin: 0 auto;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 76px; /* espacio para la barra inferior */
+  }
+
+  /* ---------- Top bar ---------- */
+  .topbar{
+    display:flex;
+    align-items:center;
+    gap: 14px;
+    padding: 20px 20px 16px;
+  }
+
+  .back{
+    flex-shrink:0;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    text-decoration:none;
+    color: var(--text);
+  }
+
+  .back svg{ width: 18px; height: 18px; stroke: var(--text); }
+
+  .topbar h1{
+    font-family: 'Archivo Black', sans-serif;
+    font-size: 20px;
+    line-height: 1.1;
+  }
+
+  .topbar .sub{
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  /* ---------- Main view (lista de ventas) ---------- */
+  .view{
+    display:none;
+    flex: 1;
+    padding: 0 20px 24px;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .view.active{ display:flex; }
+
+  .field-label{
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+
+  .field-label .req{ color: var(--danger); margin-left: 2px; }
+
+  input[type="text"], select, textarea{
+    width: 100%;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 13px 14px;
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+  }
+
+  .section-title{
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  /* Cliente table */
+  .cliente-table{
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .cliente-row{
+    display:grid;
+    grid-template-columns: 110px 1fr;
+    border-bottom: 1px solid var(--line);
+  }
+  .cliente-row:last-child{ border-bottom: none; }
+  .cliente-row .lbl{
+    padding: 12px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-dim);
+    background: var(--bg-soft2);
+    display:flex;
+    align-items:center;
+  }
+  .cliente-row .val{ padding: 8px; position: relative; }
+  .cliente-row .val input, .cliente-row .val select{
+    background: transparent;
+    border: none;
+    padding: 6px 4px;
+  }
+
+  .btn-buscar-cliente{
+    width: 100%;
+    background: var(--accent-dim);
+    color: var(--accent);
+    border: 1px dashed var(--accent);
+    border-radius: 12px;
+    padding: 11px;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  /* Autocomplete dropdown */
+  .autocomplete-list{
+    position:absolute;
+    left:8px; right:8px; top: 100%;
+    background: var(--bg-soft2);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-top: 4px;
+    max-height: 160px;
+    overflow-y:auto;
+    z-index: 20;
+    display:none;
+  }
+  .autocomplete-list.show{ display:block; }
+  .autocomplete-item{
+    padding: 10px 12px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--line);
+    cursor:pointer;
+  }
+  .autocomplete-item:last-child{ border-bottom:none; }
+  .autocomplete-item:active{ background: var(--bg-soft); }
+
+  /* Pills */
+  .pill-group{ display:flex; gap: 8px; }
+  .pill{
+    flex: 1;
+    text-align:center;
+    padding: 11px 8px;
+    border-radius: 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .pill.active{
+    border-color: var(--accent);
+    background: var(--accent-dim);
+    color: var(--accent);
+  }
+
+  /* Categoria pills reused */
+  .cat-pill{ background:#A8E063; }
+  .cat-pill.repuestos{ background:#4FC3E0; }
+  .cat-pill.herramientas{ background:#FFD23F; }
+
+  .add-item-box{
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px;
+    display:flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .qty-row{ display:grid; grid-template-columns: 1fr 90px; gap: 10px; }
+
+  .btn-add{
+    background: var(--accent);
+    color: #14151c;
+    border: none;
+    border-radius: 12px;
+    padding: 12px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 13.5px;
+    cursor: pointer;
+  }
+  .btn-add:active{ transform: scale(0.98); }
+
+  .precio-preview{ font-size: 12px; color: var(--text-dim); }
+  .precio-preview strong{ color: var(--text); }
+
+  .item-row{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px;
+  }
+  .item-tag{ flex-shrink:0; width: 7px; height: 32px; border-radius: 4px; }
+  .item-tag.cat-productos{ background: #A8E063; }
+  .item-tag.cat-repuestos{ background: #4FC3E0; }
+  .item-tag.cat-herramientas{ background: #FFD23F; }
+  .item-info{ flex:1; min-width:0; }
+  .item-name{ font-size: 13.5px; font-weight: 700; }
+  .item-meta{ font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
+  .item-amount{ font-size: 14px; font-weight: 700; flex-shrink:0; }
+  .item-remove{
+    flex-shrink:0; width: 26px; height: 26px; border-radius: 50%;
+    border: 1px solid var(--line); background: transparent; color: var(--text-dim);
+    font-size: 14px; cursor: pointer; display:flex; align-items:center; justify-content:center;
+  }
+
+  .empty-list{
+    text-align:center;
+    padding: 22px 10px;
+    color: var(--text-dim);
+    font-size: 13px;
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+  }
+
+  .total-box{
+    background: var(--bg-soft2);
+    border: 1px solid var(--accent);
+    border-radius: 14px;
+    padding: 16px;
+    display:flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .total-label{ font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-dim); }
+  .total-value{ font-family: 'Archivo Black', sans-serif; font-size: 24px; color: var(--accent); }
+
+  .btn-primary{
+    background: var(--accent);
+    color: #14151c;
+    border: none;
+    border-radius: 14px;
+    padding: 16px;
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  .btn-primary:active{ transform: scale(0.98); }
+  .btn-primary:disabled{ opacity: 0.4; }
+
+  /* Venta list cards (vista principal / modificar / reimpresión) */
+  .venta-card{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 13px;
+    cursor: pointer;
+  }
+  .venta-card:active{ transform: scale(0.98); }
+  .venta-tag{ flex-shrink:0; width: 7px; height: 34px; border-radius: 4px; background: var(--accent); }
+  .venta-info{ flex:1; min-width:0; }
+  .venta-name{ font-size: 13.5px; font-weight: 700; }
+  .venta-meta{ font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
+  .venta-amount{ font-size: 14px; font-weight: 700; flex-shrink:0; }
+
+  /* ---------- Barra inferior ---------- */
+  .bottom-bar{
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    max-width: 480px;
+    margin: 0 auto;
+    background: var(--bg-soft);
+    border-top: 1px solid var(--line);
+    display:flex;
+    z-index: 40;
+  }
+  .bar-btn{
+    flex: 1;
+    display:flex;
+    flex-direction: column;
+    align-items:center;
+    gap: 4px;
+    padding: 10px 2px 12px;
+    color: var(--text-dim);
+    background: none;
+    border: none;
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+  }
+  .bar-btn .ic{ font-size: 17px; }
+  .bar-btn .lb{ font-size: 9.5px; font-weight: 700; text-align:center; line-height:1.15; }
+  .bar-btn.active{ color: var(--accent); }
+
+  /* Modal genérico (búsqueda clientes / lista ventas) */
+  .modal-sheet{
+    display:none;
+    position:fixed; inset:0;
+    background: rgba(10,11,16,0.78);
+    z-index: 60;
+    align-items:flex-end;
+    justify-content:center;
+  }
+  .modal-sheet.show{ display:flex; }
+  .sheet-content{
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+    border-radius: 20px 20px 0 0;
+    max-width: 480px;
+    width: 100%;
+    max-height: 82vh;
+    overflow-y: auto;
+    padding: 18px 20px 28px;
+  }
+  .sheet-header{
+    display:flex; justify-content:space-between; align-items:center;
+    margin-bottom: 14px;
+  }
+  .sheet-title{ font-family:'Archivo Black',sans-serif; font-size: 16px; }
+  .sheet-close{
+    width: 32px; height:32px; border-radius:50%;
+    border:1px solid var(--line); background:transparent; color:var(--text);
+    cursor:pointer; font-size:14px;
+  }
+
+  /* ---------- Ficha de cliente ---------- */
+  .ficha-tabs{
+    display:flex;
+    gap: 6px;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 10px;
+  }
+  .ficha-tab{
+    flex:1;
+    text-align:center;
+    padding: 9px 6px;
+    border-radius: 10px;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--text-dim);
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    cursor: pointer;
+  }
+  .ficha-tab.active{ background: var(--accent); color: #14151c; border-color: var(--accent); }
+
+  .ficha-panel{ display:none; flex-direction: column; gap: 12px; }
+  .ficha-panel.active{ display:flex; }
+
+  .ficha-row2{
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .ficha-field .field-label{ margin-bottom: 5px; }
+  .ficha-field .field-label.destacado{ color: var(--danger); }
+
+  .ficha-checkbox{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+  .ficha-checkbox input[type="checkbox"]{
+    width: 19px; height:19px; accent-color: var(--accent); flex-shrink:0;
+  }
+  .ficha-checkbox label{ font-size: 12.5px; color: var(--text); line-height:1.3; }
+
+  .ficha-acciones{
+    display:flex;
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .btn-ficha-guardar{
+    flex:1;
+    background: var(--ok);
+    color: #14151c;
+    border:none;
+    border-radius: 12px;
+    padding: 13px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor:pointer;
+  }
+  .btn-ficha-cancelar{
+    flex:1;
+    background: var(--bg-soft2);
+    color: var(--text-dim);
+    border:1px solid var(--line);
+    border-radius: 12px;
+    padding: 13px;
+    font-weight: 700;
+    font-size: 14px;
+    cursor:pointer;
+  }
+
+  .btn-nuevo-cliente{
+    width: 100%;
+    background: var(--accent-dim);
+    color: var(--accent);
+    border: 1px dashed var(--accent);
+    border-radius: 12px;
+    padding: 13px;
+    font-weight: 700;
+    font-size: 13.5px;
+    cursor: pointer;
+    margin-bottom: 4px;
+  }
+
+  .cliente-list-card{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 13px;
+    cursor:pointer;
+  }
+  .cliente-list-card:active{ transform: scale(0.98); }
+  .cliente-list-info{ flex:1; min-width:0; }
+  .cliente-list-name{ font-size: 13.5px; font-weight: 700; }
+  .cliente-list-meta{ font-size: 11.5px; color: var(--text-dim); margin-top: 1px; }
+
+  /* ---------- Ficha de venta (tipo imagen de referencia) ---------- */
+  .ficha-venta-header{
+    background: var(--bg-soft2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 14px;
+  }
+  .fv-titulo{
+    font-family: 'Archivo Black', sans-serif;
+    font-size: 12.5px;
+    letter-spacing: 0.02em;
+  }
+
+  .fv-icon-btn{
+    flex-shrink:0;
+    width: 44px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    font-size: 16px;
+    cursor: pointer;
+    color: var(--text);
+  }
+
+  .fv-box{
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px;
+    display:flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .fv-box-title{
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .fv-row-check{
+    display:flex;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .fv-radio-row{
+    display:flex;
+    gap: 18px;
+  }
+
+  .fv-check{
+    display:flex;
+    align-items:center;
+    gap: 7px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .fv-check input{
+    width: 17px; height: 17px;
+    accent-color: var(--accent);
+  }
+
+  .fv-totales-grid{
+    display:grid;
+    grid-template-columns: 1fr 1fr;
+    row-gap: 8px;
+    align-items:center;
+  }
+
+  .fv-total-lbl{
+    font-size: 12px;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .fv-total-val{
+    font-weight: 700;
+    font-size: 14px;
+    text-align: right;
+  }
+
+  .fv-desc-input{
+    background: var(--bg-soft2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 8px;
+    color: var(--text);
+    font-size: 13px;
+    text-align: right;
+    width: 100%;
+  }
+
+  .fv-moneda-select{
+    background: var(--bg-soft2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 8px;
+    color: var(--text);
+    font-size: 12px;
+    width: 100%;
+  }
+
+  .fv-total-neto-box{
+    background: var(--accent-dim);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    padding: 12px 14px;
+    display:flex;
+    justify-content: space-between;
+    align-items:center;
+    margin-top: 4px;
+  }
+
+  /* Ítem con código/stock visibles (tabla detalle de venta) */
+  .item-row-detail{
+    display:flex;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--bg-soft);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px;
+  }
+  .item-row-detail .top-line{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+  }
+  .item-row-detail .codigo-chip{
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--accent);
+    background: var(--accent-dim);
+    padding: 2px 7px;
+    border-radius: 6px;
+    flex-shrink:0;
+  }
+  .item-row-detail .bottom-line{
+    font-size: 11px;
+    color: var(--text-dim);
+    padding-left: 2px;
+  }
+
+  :focus-visible{ outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* --- PWA: banner de sin conexión --- */
+  .pwa-offline-banner{display:none;background:var(--danger,#FF6B6B);color:#14151c;text-align:center;font-size:12.5px;font-weight:700;padding:9px 14px;font-family:'Inter',sans-serif;}
+  .pwa-offline-banner.show{display:block;}
+</style>
+</head>
+<body>
+<div id="pwa-offline-banner" class="pwa-offline-banner">📡 Sin conexión — los datos podrían no actualizarse</div>
+
+<div class="screen">
+
+  <div class="topbar">
+    <a class="back" href="inicio.html">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 18l-6-6 6-6"/>
+      </svg>
+    </a>
+    <div>
+      <h1>Ventas</h1>
+      <div class="sub" id="topbar-sub">Registro e historial de ventas</div>
+    </div>
+  </div>
+
+  <!-- ---------- Vista: Principal (lista de ventas recientes) ---------- -->
+  <div class="view active" id="view-principal">
+    <div class="section-title">Ventas recientes</div>
+    <div id="lista-ventas-principal" style="display:flex; flex-direction:column; gap:8px;"></div>
+  </div>
+
+  <!-- ---------- Vista: Añadir / Modificar venta ---------- -->
+  <div class="view" id="view-form">
+
+    <div class="ficha-venta-header">
+      <div class="fv-titulo">FICHA DE VENTA — ELECTRODOMÉSTICOS BM</div>
+    </div>
+
+    <!-- Cliente + búsqueda -->
+    <div>
+      <div class="field-label">Cliente / Búsqueda<span class="req">*</span></div>
+      <div style="display:flex; gap:8px; position:relative;">
+        <input type="text" id="venta-cliente" placeholder="Nombre completo del cliente" autocomplete="off" oninput="filtrarClientes()" onfocus="filtrarClientes()" style="flex:1;">
+        <button class="fv-icon-btn" onclick="abrirFichaCliente(null)" title="Nuevo cliente">🆕</button>
+        <button class="fv-icon-btn" onclick="abrirClientes()" title="Buscar cliente">🔍</button>
+        <div class="autocomplete-list" id="autocomplete-clientes" style="left:0; right:96px;"></div>
+      </div>
+    </div>
+
+    <!-- Vendedor / NIT / Fecha -->
+    <div class="cliente-table">
+      <div class="cliente-row">
+        <div class="lbl">Vendedor</div>
+        <div class="val"><input type="text" id="venta-vendedor" placeholder="Quién realiza la venta"></div>
+      </div>
+      <div class="cliente-row">
+        <div class="lbl">NIT</div>
+        <div class="val"><input type="text" id="venta-nit" placeholder="N° NIT o Carnet de Identidad"></div>
+      </div>
+      <div class="cliente-row">
+        <div class="lbl">Fecha Venta</div>
+        <div class="val"><input type="text" id="venta-fechahora" readonly></div>
+      </div>
+    </div>
+
+    <!-- Condición de venta -->
+    <div class="fv-box">
+      <div class="fv-box-title">Condición de Venta</div>
+
+      <div class="ficha-field">
+        <div class="field-label">Tipo Venta</div>
+        <select id="venta-tipo-select" onchange="toggleParaEvento()">
+          <option value="VENTA DIRECTA">VENTA DIRECTA</option>
+          <option value="COBRO EN DOMICILIO">COBRO EN DOMICILIO</option>
+        </select>
+      </div>
+
+      <div class="fv-row-check">
+        <label class="fv-check"><input type="checkbox" id="venta-paraevento"> Para-Evento</label>
+        <label class="fv-check"><input type="checkbox" id="venta-congasto"> Venta con Gasto</label>
+      </div>
+
+      <div class="field-label" style="margin-top:6px;">Cond. Venta</div>
+      <div class="fv-radio-row">
+        <label class="fv-check"><input type="radio" name="condventa" value="Contado" checked onclick="toggleVencimiento(false)"> Contado</label>
+        <label class="fv-check"><input type="radio" name="condventa" value="Credito" onclick="toggleVencimiento(true)"> Crédito</label>
+      </div>
+      <div id="wrap-vencimiento" style="display:none; margin-top:8px;">
+        <div class="field-label">Días de plazo</div>
+        <input type="text" id="venta-vencimiento-dias" placeholder="Ej: 15" inputmode="numeric">
+      </div>
+    </div>
+
+    <!-- Facturado / Estado venta -->
+    <div class="fv-box">
+      <div class="fv-row-check">
+        <label class="fv-check"><input type="checkbox" id="venta-facturado" checked onchange="toggleFacturado()"> Facturado (calcula IVA)</label>
+      </div>
+      <div class="ficha-field" style="margin-top:8px;">
+        <div class="field-label">Estado Venta</div>
+        <select id="venta-estado">
+          <option>Pendiente</option>
+          <option>Entregado</option>
+          <option>Anulado</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Totales -->
+    <div class="fv-box">
+      <div class="fv-box-title">Totales</div>
+      <div class="fv-totales-grid">
+        <div class="fv-total-lbl">Total Vta.</div>
+        <div class="fv-total-val" id="fv-total-vta">0.00</div>
+
+        <div class="fv-total-lbl">Total IVA (13%)</div>
+        <div class="fv-total-val" id="fv-total-iva">0.00</div>
+
+        <div class="fv-total-lbl">Desc. %</div>
+        <input type="text" id="venta-descuento" value="0" inputmode="numeric" oninput="calcularTotalVenta()" class="fv-desc-input">
+
+        <div class="fv-total-lbl">Moneda</div>
+        <select id="venta-moneda" class="fv-moneda-select">
+          <option>BOLIVIANOS</option>
+          <option>DÓLARES</option>
+        </select>
+      </div>
+      <div class="fv-total-neto-box">
+        <div class="total-label">Total Neto</div>
+        <div class="total-value" id="total-general-venta">Bs 0.00</div>
+      </div>
+    </div>
+
+    <!-- Categoría + agregar ítem -->
+    <div>
+      <div class="field-label">Categoría</div>
+      <div class="pill-group" id="grupo-categoria-venta">
+        <div class="pill active" data-val="productos" onclick="seleccionarCategoria(this,'productos')">Productos</div>
+        <div class="pill" data-val="repuestos" onclick="seleccionarCategoria(this,'repuestos')">Repuestos</div>
+        <div class="pill" data-val="herramientas" onclick="seleccionarCategoria(this,'herramientas')">Herramientas</div>
+      </div>
+    </div>
+
+    <div class="add-item-box">
+      <div class="field-label" style="margin-bottom:0;">Artículo</div>
+      <select id="select-articulo-venta" onchange="actualizarPreviewVenta()"></select>
+      <div class="qty-row">
+        <div class="precio-preview">Precio unitario: <strong id="precio-unitario-preview-venta">Bs 0</strong> · Stock: <strong id="stock-preview-venta">0</strong></div>
+        <input type="text" id="input-cantidad-venta" value="1" inputmode="numeric" oninput="actualizarPreviewVenta()" style="text-align:center;">
+      </div>
+      <button class="btn-add" onclick="agregarItemVenta()">+ Agregar a la venta</button>
+    </div>
+
+    <!-- Tabla detalle de la venta -->
+    <div>
+      <div class="field-label">Detalle de la Venta</div>
+      <div id="lista-items-venta" style="display:flex; flex-direction:column; gap:8px;">
+        <div class="empty-list">&lt;No hay datos que mostrar&gt;</div>
+      </div>
+    </div>
+
+    <button class="btn-primary" id="btn-guardar-venta" disabled onclick="guardarVenta()">💾 Grabar venta</button>
+  </div>
+
+</div>
+
+<!-- ---------- Barra inferior fija ---------- -->
+<div class="bottom-bar">
+  <button class="bar-btn" onclick="abrirModificarVenta()">
+    <span class="ic">✏️</span><span class="lb">Modificar<br>venta</span>
+  </button>
+  <button class="bar-btn active" id="bar-anadir" onclick="abrirAnadirVenta()">
+    <span class="ic">➕</span><span class="lb">Añadir<br>venta</span>
+  </button>
+  <button class="bar-btn" onclick="abrirClientes()">
+    <span class="ic">👤</span><span class="lb">Clientes</span>
+  </button>
+  <button class="bar-btn" onclick="abrirReimpresion()">
+    <span class="ic">🖨️</span><span class="lb">Reimpresión<br>venta</span>
+  </button>
+  <button class="bar-btn" onclick="abrirFacturacion()">
+    <span class="ic">🧾</span><span class="lb">Facturación</span>
+  </button>
+  <button class="bar-btn" onclick="salirPestana()">
+    <span class="ic">🚪</span><span class="lb">Salir</span>
+  </button>
+</div>
+
+<!-- ---------- Modal: Lista de ventas (para Modificar / Reimpresión / Facturación) ---------- -->
+<div class="modal-sheet" id="modal-lista-ventas">
+  <div class="sheet-content">
+    <div class="sheet-header">
+      <div class="sheet-title" id="modal-lista-titulo">Selecciona una venta</div>
+      <button class="sheet-close" onclick="cerrarModalListaVentas()">✕</button>
+    </div>
+    <div id="modal-lista-contenido" style="display:flex; flex-direction:column; gap:8px;"></div>
+  </div>
+</div>
+
+<!-- ---------- Modal: Lista de clientes ---------- -->
+<div class="modal-sheet" id="modal-clientes">
+  <div class="sheet-content">
+    <div class="sheet-header">
+      <div class="sheet-title">Clientes guardados</div>
+      <button class="sheet-close" onclick="cerrarModalClientes()">✕</button>
+    </div>
+    <button class="btn-nuevo-cliente" onclick="abrirFichaCliente(null)">+ Nuevo cliente</button>
+    <input type="text" id="buscar-cliente-modal" placeholder="Buscar cliente..." oninput="renderClientesModal()" style="margin-bottom:12px;">
+    <div id="lista-clientes-modal" style="display:flex; flex-direction:column; gap:8px;"></div>
+  </div>
+</div>
+
+<!-- ---------- Modal: Ficha del cliente ---------- -->
+<div class="modal-sheet" id="modal-ficha-cliente">
+  <div class="sheet-content">
+    <div class="sheet-header">
+      <div class="sheet-title">Ficha del cliente</div>
+      <button class="sheet-close" onclick="cerrarFichaCliente()">✕</button>
+    </div>
+
+    <div class="ficha-tabs">
+      <div class="ficha-tab active" data-ftab="generales" onclick="cambiarFichaTab('generales')">Datos Generales</div>
+      <div class="ficha-tab" data-ftab="detalles" onclick="cambiarFichaTab('detalles')">Detalles</div>
+    </div>
+
+    <!-- ---- Panel: Datos Generales ---- -->
+    <div class="ficha-panel active" id="ficha-panel-generales">
+      <div class="ficha-row2">
+        <div class="ficha-field">
+          <div class="field-label">CI</div>
+          <input type="text" id="f-ci" placeholder="N° de carnet">
+        </div>
+        <div class="ficha-field">
+          <div class="field-label destacado">NIT</div>
+          <input type="text" id="f-nit" placeholder="N° de NIT">
+        </div>
+      </div>
+
+      <div class="ficha-field">
+        <div class="field-label">Nombres</div>
+        <input type="text" id="f-nombres" placeholder="Ej: Carlos">
+      </div>
+
+      <div class="ficha-row2">
+        <div class="ficha-field">
+          <div class="field-label">Ap. Paterno</div>
+          <input type="text" id="f-apaterno" placeholder="Ej: Condo">
+        </div>
+        <div class="ficha-field">
+          <div class="field-label">Materno</div>
+          <input type="text" id="f-amaterno" placeholder="Ej: Benavides">
+        </div>
+      </div>
+
+      <div class="ficha-field">
+        <div class="field-label destacado">Razón Social</div>
+        <input type="text" id="f-razonsocial" placeholder="Nombre o empresa para facturación">
+      </div>
+
+      <div class="ficha-field">
+        <div class="field-label">Teléfono</div>
+        <input type="text" id="f-telefono" placeholder="Teléfono fijo">
+      </div>
+
+      <div class="ficha-field">
+        <div class="field-label">Celular</div>
+        <input type="text" id="f-celular" placeholder="N° de celular">
+      </div>
+
+      <div class="ficha-field">
+        <div class="field-label">Email</div>
+        <input type="text" id="f-email" placeholder="correo@ejemplo.com">
+      </div>
+
+      <div class="ficha-field">
+        <div class="field-label">Dirección</div>
+        <input type="text" id="f-direccion" placeholder="Zona, calle, número">
+      </div>
+
+      <div class="ficha-field">
+        <div class="field-label">Dir. Trabajo</div>
+        <input type="text" id="f-dirtrabajo" placeholder="Dirección del trabajo">
+      </div>
+
+      <div class="ficha-field">
+        <div class="field-label">Teléfono Trab.</div>
+        <input type="text" id="f-teltrabajo" placeholder="Teléfono del trabajo">
+      </div>
+    </div>
+
+    <!-- ---- Panel: Detalles ---- -->
+    <div class="ficha-panel" id="ficha-panel-detalles">
+      <div class="ficha-field">
+        <div class="field-label">Departamento</div>
+        <select id="f-departamento">
+          <option>Oruro</option>
+          <option>Potosí</option>
+          <option>Sucre</option>
+          <option>La Paz</option>
+          <option>Bermejo</option>
+          <option>Yacuiba</option>
+          <option>Villazón</option>
+          <option selected>Tarija</option>
+        </select>
+      </div>
+
+      <div class="ficha-field">
+        <div class="field-label">Provincia</div>
+        <input type="text" id="f-provincia" placeholder="Ej: Cercado">
+      </div>
+
+      <div class="ficha-row2">
+        <div class="ficha-field">
+          <div class="field-label">Sector</div>
+          <select id="f-sector">
+            <option value="Distribuidor">Distribuidor</option>
+            <option value="Técnico">Técnico</option>
+            <option value="Cliente final">Cliente final</option>
+          </select>
+        </div>
+        <div class="ficha-field">
+          <div class="field-label">Tipo Cliente</div>
+          <select id="f-tipocliente">
+            <option value="Mayorista">Mayorista</option>
+            <option value="Minorista">Minorista</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="ficha-checkbox">
+        <input type="checkbox" id="f-mayorista-comision">
+        <label for="f-mayorista-comision">Cliente Mayorista, se cancela Comisión</label>
+      </div>
+
+      <div class="ficha-field">
+        <div class="field-label">Límite Crédito (Bs)</div>
+        <input type="text" id="f-limitecredito" inputmode="decimal" placeholder="Ej: 28000">
+      </div>
+    </div>
+
+    <div class="ficha-acciones">
+      <button class="btn-ficha-cancelar" onclick="cerrarFichaCliente()">Cancelar</button>
+      <button class="btn-ficha-guardar" onclick="guardarFichaCliente()">💾 Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ---------- Modal: Comprobante de venta ---------- -->
+<div id="modal-comprobante" style="display:none; position:fixed; inset:0; background:rgba(10,11,16,0.78); z-index:70; align-items:flex-start; justify-content:center; overflow-y:auto; padding: 20px 12px 90px;">
+  <div style="max-width:480px; width:100%; margin:0 auto;">
+
+    <div style="display:flex; gap:8px; margin-bottom:10px; position:sticky; top:0;">
+      <button onclick="descargarPDF()" style="flex:1; background:#3B82C4; color:#fff; border:none; border-radius:12px; padding:12px 8px; font-weight:700; font-size:13px; cursor:pointer; font-family:'Inter',sans-serif;">⬇ Descargar PDF</button>
+      <button onclick="enviarWhatsApp()" style="flex:1; background:#25D366; color:#0c2818; border:none; border-radius:12px; padding:12px 8px; font-weight:700; font-size:13px; cursor:pointer; font-family:'Inter',sans-serif;">📱 WhatsApp</button>
+      <button onclick="cerrarComprobante()" style="flex-shrink:0; width:42px; background:#3A3F52; color:#fff; border:none; border-radius:12px; font-weight:700; cursor:pointer;">✕</button>
+    </div>
+
+    <div id="documento-comprobante" style="background:#ffffff; color:#1a1a1a; border-radius:10px; padding:22px 18px; font-family:'Inter',sans-serif;">
+
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; border-bottom:3px solid #1a1a1a; padding-bottom:14px; margin-bottom:14px;">
+        <div>
+          <div style="font-family:'Archivo Black',sans-serif; font-size:20px; line-height:1.1;">ELECTRODOMÉSTICOS BM</div>
+          <div style="font-size:10.5px; color:#666; margin-top:4px;">Tarija · Bolivia</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:13px; font-weight:700; letter-spacing:0.04em;">NOTA DE VENTA</div>
+          <div style="font-size:19px; font-weight:800; color:#C0392B;" id="doc-numero">VTA-000001</div>
+          <div style="font-size:10px; color:#888; margin-top:2px;" id="doc-fechahora">--</div>
+        </div>
+      </div>
+
+      <div style="font-size:12.5px; margin-bottom:4px;"><strong>Cliente:</strong> <span id="doc-cliente">-</span></div>
+      <div style="font-size:12.5px; margin-bottom:4px;"><strong>NIT/CI:</strong> <span id="doc-nit">-</span></div>
+      <div style="font-size:12.5px; margin-bottom:12px;"><strong>Vendedor:</strong> <span id="doc-vendedor">-</span></div>
+
+      <table style="width:100%; border-collapse:collapse; font-size:11.5px; margin-bottom:14px;">
+        <thead>
+          <tr style="background:#1a1a1a; color:#fff;">
+            <th style="padding:7px 6px; text-align:left;">Artículo</th>
+            <th style="padding:7px 6px; text-align:center;">Cant.</th>
+            <th style="padding:7px 6px; text-align:right;">Precio</th>
+            <th style="padding:7px 6px; text-align:right;">P. Total</th>
+          </tr>
+        </thead>
+        <tbody id="doc-tabla-items"></tbody>
+      </table>
+
+      <div style="font-size:12px; font-weight:700; margin-bottom:8px;" id="doc-tipoventa">-</div>
+
+      <div id="doc-desglose" style="font-size:11.5px; color:#444; margin-bottom:8px;"></div>
+
+      <div style="display:flex; justify-content:flex-end; margin-bottom:6px;">
+        <div style="border:2px solid #1a1a1a; border-radius:6px; padding:8px 14px; text-align:center;">
+          <div style="font-size:10px; font-weight:700; letter-spacing:0.05em;">TOTAL NETO</div>
+          <div style="font-family:'Archivo Black',sans-serif; font-size:19px;" id="doc-total">Bs 0</div>
+        </div>
+      </div>
+      <div style="font-size:11px; color:#666; margin-bottom:12px;" id="doc-facturado">-</div>
+
+      <div style="font-size:10.5px; color:#777; line-height:1.5; border-top:1px dashed #ccc; padding-top:10px;">
+        Documento generado por Electrodomésticos BM — válido como nota de venta.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const SUPABASE_URL = 'https://omxzisjowcmkvqpviuat.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_OGujpzzM0UVDAsgGRplMwA_u1oURINP';
+const ADMIN_EMAIL = 'alejandro23mtz@electrodomesticosbm.com';
+
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+async function requireSession(){
+  const { data, error } = await supabaseClient.auth.getSession();
+  if(error || !data.session){ window.location.href = 'login.html'; return null; }
+  return data.session;
+}
+
+async function esAdmin(){
+  const { data } = await supabaseClient.auth.getSession();
+  return data.session && data.session.user.email === ADMIN_EMAIL;
+}
+
+async function cerrarSesion(){
+  await supabaseClient.auth.signOut();
+  window.location.href = 'login.html';
+}
+
+async function mostrarUsuarioEnElemento(elementId){
+  const { data } = await supabaseClient.auth.getSession();
+  const el = document.getElementById(elementId);
+  if(el && data.session) el.textContent = data.session.user.email;
+}
+
+</script>
+<script>requireSession();</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<script>
+  let catalogo = { productos: [], repuestos: [], herramientas: [] };
+  let categoriaActual = 'productos';
+
+  async function cargarCatalogoDesdeSupabase(){
+    const { data, error } = await supabaseClient.from('catalogo').select('*').order('created_at');
+    if(error){ alert('Error cargando catálogo: ' + error.message); return; }
+
+    catalogo = { productos: [], repuestos: [], herramientas: [] };
+    (data || []).forEach(row => {
+      catalogo[row.categoria].push({
+        id: row.id,
+        nombre: row.nombre,
+        codigo: row.codigo,
+        precio: row.precio,
+        stock: row.stock
+      });
+    });
+    poblarArticulosVenta();
+  }
+  let items = [];
+  let modoEdicion = null; // null = nueva venta, o el id de la venta que se está editando
+  let cotizacionActualParaCompartir = null;
+
+  // ========== Navegación de vistas principales ==========
+  function mostrarVista(id){
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === id));
+  }
+
+  function actualizarFechaHora(){
+    document.getElementById('venta-fechahora').value =
+      new Date().toLocaleString('es-BO', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  }
+
+  function abrirAnadirVenta(){
+    modoEdicion = null;
+    limpiarFormularioVenta();
+    actualizarFechaHora();
+    document.getElementById('topbar-sub').textContent = 'Nueva venta';
+    marcarBotonActivo('bar-anadir');
+    mostrarVista('view-form');
+  }
+
+  function marcarBotonActivo(id){
+    document.querySelectorAll('.bar-btn').forEach(b => b.classList.remove('active'));
+    if(id) document.getElementById(id).classList.add('active');
+  }
+
+  function salirPestana(){
+    modoEdicion = null;
+    document.getElementById('topbar-sub').textContent = 'Registro e historial de ventas';
+    marcarBotonActivo(null);
+    renderListaPrincipal();
+    mostrarVista('view-principal');
+  }
+
+  // ========== Cargar / guardar ventas ==========
+  let ventasCache = [];
+
+  async function cargarVentasDesdeSupabase(){
+    const { data, error } = await supabaseClient.from('ventas').select('*').order('created_at', { ascending:false });
+    if(error){ alert('Error cargando ventas: ' + error.message); return; }
+    ventasCache = (data || []).map(mapearVentaDesdeDB);
+  }
+
+  function mapearVentaDesdeDB(row){
+    return {
+      id: row.id,
+      numero: row.numero,
+      fechaHora: row.fecha_hora,
+      cliente: row.cliente,
+      nit: row.nit,
+      vendedor: row.vendedor,
+      tipoVenta: row.tipo_venta,
+      paraEvento: row.para_evento,
+      conGasto: row.con_gasto,
+      formaPago: row.forma_pago,
+      diasCredito: row.dias_credito,
+      facturado: row.facturado,
+      estadoVenta: row.estado_venta,
+      moneda: row.moneda,
+      descuentoPct: row.descuento_pct,
+      totalVta: row.total_vta,
+      totalIva: row.total_iva,
+      total: row.total,
+      items: row.items || []
+    };
+  }
+
+  function cargarVentas(){
+    return ventasCache; // ya sincronizado en memoria desde Supabase
+  }
+
+  async function siguienteNumeroVenta(){
+    const { count } = await supabaseClient.from('ventas').select('id', { count:'exact', head:true });
+    const n = (count || 0) + 1;
+    return 'VTA-' + String(n).padStart(6, '0');
+  }
+
+  function renderListaPrincipal(){
+    const ventas = cargarVentas();
+    const cont = document.getElementById('lista-ventas-principal');
+    if(ventas.length === 0){
+      cont.innerHTML = '<div class="empty-list">Aún no hay ventas registradas</div>';
+      return;
+    }
+    cont.innerHTML = ventas.slice(0,15).map(v => `
+      <div class="venta-card" onclick="verComprobanteDeVenta('${v.id}')">
+        <div class="venta-tag"></div>
+        <div class="venta-info">
+          <div class="venta-name">${v.numero} · ${v.cliente}</div>
+          <div class="venta-meta">${v.fechaHora} · ${v.formaPago}</div>
+        </div>
+        <div class="venta-amount">Bs ${v.total.toLocaleString('es-BO')}</div>
+      </div>
+    `).join('');
+  }
+
+  // ========== Clientes ==========
+  let clientesCache = [];
+
+  async function cargarClientesDesdeSupabase(){
+    const { data, error } = await supabaseClient.from('clientes').select('*').order('created_at', { ascending:false });
+    if(error){ alert('Error cargando clientes: ' + error.message); return; }
+    clientesCache = (data || []).map(mapearClienteDesdeDB);
+  }
+
+  function mapearClienteDesdeDB(row){
+    return {
+      id: row.id,
+      nombre: row.nombre,
+      nombres: row.nombres,
+      apaterno: row.apaterno,
+      amaterno: row.amaterno,
+      ci: row.ci,
+      nit: row.nit,
+      razonsocial: row.razonsocial,
+      telefono: row.telefono,
+      celular: row.celular,
+      email: row.email,
+      direccion: row.direccion,
+      dirtrabajo: row.dirtrabajo,
+      teltrabajo: row.teltrabajo,
+      departamento: row.departamento,
+      provincia: row.provincia,
+      sector: row.sector,
+      tipocliente: row.tipocliente,
+      mayoristaComision: row.mayorista_comision,
+      limitecredito: row.limitecredito
+    };
+  }
+
+  function cargarClientes(){
+    return clientesCache; // ya sincronizado en memoria desde Supabase
+  }
+
+  async function upsertCliente(datos){
+    const lista = cargarClientes();
+    const existente = lista.find(c => c.nombre.toLowerCase() === datos.nombre.toLowerCase());
+    if(existente){
+      if(datos.nit && datos.nit !== existente.nit){
+        await supabaseClient.from('clientes').update({ nit: datos.nit }).eq('id', existente.id);
+        existente.nit = datos.nit;
+      }
+    } else {
+      const nuevo = {
+        nombre: datos.nombre,
+        nit: datos.nit || '',
+        ci: '', apaterno:'', amaterno:'', razonsocial:'',
+        telefono:'', celular:'', email:'', direccion:'',
+        dirtrabajo:'', teltrabajo:'',
+        departamento:'Tarija', provincia:'', sector:'Cliente final', tipocliente:'Mayorista',
+        mayorista_comision:false, limitecredito:null
+      };
+      const { data, error } = await supabaseClient.from('clientes').insert(nuevo).select().single();
+      if(error){ alert('Error al guardar cliente: ' + error.message); return; }
+      lista.unshift(mapearClienteDesdeDB(data));
+    }
+  }
+
+  function filtrarClientes(){
+    const valor = document.getElementById('venta-cliente').value.trim().toLowerCase();
+    const cont = document.getElementById('autocomplete-clientes');
+    if(!valor){ cont.classList.remove('show'); cont.innerHTML=''; return; }
+
+    const clientes = cargarClientes().filter(c => c.nombre.toLowerCase().includes(valor));
+    if(clientes.length === 0){ cont.classList.remove('show'); cont.innerHTML=''; return; }
+
+    cont.innerHTML = clientes.slice(0,6).map(c => `
+      <div class="autocomplete-item" onclick="seleccionarClienteAutocomplete('${c.nombre.replace(/'/g,"\\'")}','${(c.nit||'').replace(/'/g,"\\'")}')">${c.nombre}${c.nit ? ' · '+c.nit : ''}</div>
+    `).join('');
+    cont.classList.add('show');
+  }
+
+  function seleccionarClienteAutocomplete(nombre, nit){
+    document.getElementById('venta-cliente').value = nombre;
+    if(nit) document.getElementById('venta-nit').value = nit;
+    document.getElementById('autocomplete-clientes').classList.remove('show');
+  }
+
+  document.addEventListener('click', function(e){
+    if(!e.target.closest('#venta-cliente') && !e.target.closest('#autocomplete-clientes')){
+      const cont = document.getElementById('autocomplete-clientes');
+      if(cont) cont.classList.remove('show');
+    }
+  });
+
+  function abrirClientes(){
+    document.getElementById('buscar-cliente-modal').value = '';
+    renderClientesModal();
+    document.getElementById('modal-clientes').classList.add('show');
+  }
+  function cerrarModalClientes(){
+    document.getElementById('modal-clientes').classList.remove('show');
+  }
+
+  function renderClientesModal(){
+    const filtro = document.getElementById('buscar-cliente-modal').value.trim().toLowerCase();
+    const clientes = cargarClientes().filter(c => c.nombre.toLowerCase().includes(filtro));
+    const cont = document.getElementById('lista-clientes-modal');
+
+    if(clientes.length === 0){
+      cont.innerHTML = '<div class="empty-list">No hay clientes guardados aún</div>';
+      return;
+    }
+
+    cont.innerHTML = clientes.map(c => `
+      <div class="cliente-list-card" onclick="abrirFichaCliente('${c.id}')">
+        <div class="venta-tag" style="background:var(--accent);"></div>
+        <div class="cliente-list-info">
+          <div class="cliente-list-name">${c.nombre}</div>
+          <div class="cliente-list-meta">${c.nit ? 'NIT: '+c.nit+' · ' : ''}${c.sector || 'Cliente final'}</div>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // ========== Ficha completa de cliente ==========
+  let fichaClienteId = null;
+
+  function cambiarFichaTab(nombre){
+    document.querySelectorAll('.ficha-tab').forEach(t => t.classList.toggle('active', t.dataset.ftab === nombre));
+    document.querySelectorAll('.ficha-panel').forEach(p => p.classList.toggle('active', p.id === 'ficha-panel-' + nombre));
+  }
+
+  function limpiarFichaCliente(){
+    ['f-ci','f-nit','f-nombres','f-apaterno','f-amaterno','f-razonsocial','f-telefono','f-celular',
+      'f-email','f-direccion','f-dirtrabajo','f-teltrabajo','f-provincia','f-limitecredito'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('f-departamento').value = 'Tarija';
+    document.getElementById('f-sector').value = 'Cliente final';
+    document.getElementById('f-tipocliente').value = 'Mayorista';
+    document.getElementById('f-mayorista-comision').checked = false;
+    cambiarFichaTab('generales');
+  }
+
+  function abrirFichaCliente(id){
+    fichaClienteId = id;
+    limpiarFichaCliente();
+
+    if(id){
+      const c = cargarClientes().find(x => x.id === id);
+      if(c){
+        document.getElementById('f-ci').value = c.ci || '';
+        document.getElementById('f-nit').value = c.nit || '';
+        document.getElementById('f-nombres').value = c.nombres || c.nombre || '';
+        document.getElementById('f-apaterno').value = c.apaterno || '';
+        document.getElementById('f-amaterno').value = c.amaterno || '';
+        document.getElementById('f-razonsocial').value = c.razonsocial || '';
+        document.getElementById('f-telefono').value = c.telefono || '';
+        document.getElementById('f-celular').value = c.celular || '';
+        document.getElementById('f-email').value = c.email || '';
+        document.getElementById('f-direccion').value = c.direccion || '';
+        document.getElementById('f-dirtrabajo').value = c.dirtrabajo || '';
+        document.getElementById('f-teltrabajo').value = c.teltrabajo || '';
+        document.getElementById('f-departamento').value = c.departamento || 'Tarija';
+        document.getElementById('f-provincia').value = c.provincia || '';
+        document.getElementById('f-sector').value = c.sector || 'Cliente final';
+        document.getElementById('f-tipocliente').value = c.tipocliente || 'Mayorista';
+        document.getElementById('f-mayorista-comision').checked = !!c.mayoristaComision;
+        document.getElementById('f-limitecredito').value = c.limitecredito || '';
+      }
+    }
+
+    document.getElementById('modal-ficha-cliente').classList.add('show');
+  }
+
+  function cerrarFichaCliente(){
+    document.getElementById('modal-ficha-cliente').classList.remove('show');
+  }
+
+  async function guardarFichaCliente(){
+    const nombres = document.getElementById('f-nombres').value.trim();
+    if(!nombres){
+      alert('Falta el nombre del cliente.');
+      document.getElementById('f-nombres').focus();
+      return;
+    }
+
+    const apaterno = document.getElementById('f-apaterno').value.trim();
+    const amaterno = document.getElementById('f-amaterno').value.trim();
+    const nombreCompleto = [nombres, apaterno, amaterno].filter(Boolean).join(' ');
+
+    const datos = {
+      nombre: nombreCompleto,
+      nombres: nombres,
+      apaterno: apaterno,
+      amaterno: amaterno,
+      ci: document.getElementById('f-ci').value.trim(),
+      nit: document.getElementById('f-nit').value.trim(),
+      razonsocial: document.getElementById('f-razonsocial').value.trim(),
+      telefono: document.getElementById('f-telefono').value.trim(),
+      celular: document.getElementById('f-celular').value.trim(),
+      email: document.getElementById('f-email').value.trim(),
+      direccion: document.getElementById('f-direccion').value.trim(),
+      dirtrabajo: document.getElementById('f-dirtrabajo').value.trim(),
+      teltrabajo: document.getElementById('f-teltrabajo').value.trim(),
+      departamento: document.getElementById('f-departamento').value,
+      provincia: document.getElementById('f-provincia').value.trim(),
+      sector: document.getElementById('f-sector').value,
+      tipocliente: document.getElementById('f-tipocliente').value,
+      mayorista_comision: document.getElementById('f-mayorista-comision').checked,
+      limitecredito: document.getElementById('f-limitecredito').value.trim() || null
+    };
+
+    if(fichaClienteId){
+      const { data, error } = await supabaseClient.from('clientes').update(datos).eq('id', fichaClienteId).select().single();
+      if(error){ alert('Error al guardar: ' + error.message); return; }
+      const idx = clientesCache.findIndex(c => c.id === fichaClienteId);
+      if(idx !== -1) clientesCache[idx] = mapearClienteDesdeDB(data);
+    } else {
+      const { data, error } = await supabaseClient.from('clientes').insert(datos).select().single();
+      if(error){ alert('Error al guardar: ' + error.message); return; }
+      clientesCache.unshift(mapearClienteDesdeDB(data));
+    }
+
+    cerrarFichaCliente();
+    renderClientesModal();
+  }
+
+  // ========== Pills genéricos ==========
+  function seleccionarPill(el, grupoId){
+    const grupo = document.getElementById(grupoId);
+    grupo.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  function seleccionarFormaVenta(el, val){
+    seleccionarPill(el, 'grupo-forma-venta');
+    document.getElementById('wrap-vencimiento').style.display = (val === 'credito') ? '' : 'none';
+  }
+
+  function seleccionarCategoria(el, cat){
+    seleccionarPill(el, 'grupo-categoria-venta');
+    categoriaActual = cat;
+    poblarArticulosVenta();
+  }
+
+  // ========== Ítems / catálogo ==========
+  function poblarArticulosVenta(){
+    const select = document.getElementById('select-articulo-venta');
+    select.innerHTML = '';
+    catalogo[categoriaActual].forEach((art, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = (art.codigo ? art.codigo + ' — ' : '') + art.nombre;
+      select.appendChild(opt);
+    });
+    actualizarPreviewVenta();
+  }
+
+  function actualizarPreviewVenta(){
+    const idx = document.getElementById('select-articulo-venta').value;
+    const art = catalogo[categoriaActual][idx];
+    if(!art) return;
+    document.getElementById('precio-unitario-preview-venta').textContent = 'Bs ' + art.precio.toLocaleString('es-BO');
+    document.getElementById('stock-preview-venta').textContent = (art.stock !== undefined ? art.stock : 0);
+  }
+
+  async function agregarItemVenta(){
+    const idx = document.getElementById('select-articulo-venta').value;
+    const art = catalogo[categoriaActual][idx];
+    let cantidad = parseInt(document.getElementById('input-cantidad-venta').value, 10);
+    if(isNaN(cantidad) || cantidad < 1) cantidad = 1;
+
+    const stockDisponible = art.stock !== undefined ? art.stock : 0;
+    if(cantidad > stockDisponible){
+      alert('No hay suficiente stock. Disponible: ' + stockDisponible);
+      return;
+    }
+
+    items.push({
+      categoria: categoriaActual,
+      nombre: art.nombre,
+      codigo: art.codigo || '',
+      precio: art.precio,
+      cantidad: cantidad
+    });
+
+    // Descontar del stock del catálogo (control real de stock, sincronizado en Supabase)
+    const nuevoStock = stockDisponible - cantidad;
+    art.stock = nuevoStock;
+    const { error } = await supabaseClient.from('catalogo').update({ stock: nuevoStock }).eq('id', art.id);
+    if(error){ alert('Error actualizando stock: ' + error.message); }
+
+    document.getElementById('input-cantidad-venta').value = 1;
+    poblarArticulosVenta(); // refresca el stock mostrado en el selector
+    renderItemsVenta();
+  }
+
+  async function quitarItemVenta(i){
+    // Devolver el stock al catálogo al quitar el ítem
+    const it = items[i];
+    const art = catalogo[it.categoria].find(a => a.codigo === it.codigo && a.nombre === it.nombre);
+    if(art){
+      const nuevoStock = (art.stock || 0) + it.cantidad;
+      art.stock = nuevoStock;
+      const { error } = await supabaseClient.from('catalogo').update({ stock: nuevoStock }).eq('id', art.id);
+      if(error){ alert('Error actualizando stock: ' + error.message); }
+    }
+
+    items.splice(i,1);
+    poblarArticulosVenta();
+    renderItemsVenta();
+  }
+
+  function renderItemsVenta(){
+    const cont = document.getElementById('lista-items-venta');
+    if(items.length === 0){
+      cont.innerHTML = '<div class="empty-list">&lt;No hay datos que mostrar&gt;</div>';
+    } else {
+      cont.innerHTML = items.map((it,i) => `
+        <div class="item-row-detail">
+          <div class="top-line">
+            <span class="codigo-chip">${it.codigo || 's/cód.'}</span>
+            <div class="item-info">
+              <div class="item-name">${it.nombre}</div>
+            </div>
+            <button class="item-remove" onclick="quitarItemVenta(${i})">✕</button>
+          </div>
+          <div class="bottom-line">Cant: ${it.cantidad} · P/Unit: Bs ${it.precio.toLocaleString('es-BO')} · Parcial: Bs ${(it.precio*it.cantidad).toLocaleString('es-BO')}</div>
+        </div>
+      `).join('');
+    }
+    calcularTotalVenta();
+  }
+
+  function toggleFacturado(){
+    calcularTotalVenta();
+  }
+
+  function toggleVencimiento(mostrar){
+    document.getElementById('wrap-vencimiento').style.display = mostrar ? '' : 'none';
+  }
+
+  function toggleParaEvento(){
+    // Reservado para lógica futura si Tipo Venta requiere comportamiento especial
+  }
+
+  function calcularTotalVenta(){
+    const totalVta = items.reduce((s,it) => s + it.precio*it.cantidad, 0);
+
+    const facturado = document.getElementById('venta-facturado').checked;
+    const totalIva = facturado ? totalVta * 0.13 : 0;
+
+    let descPct = parseFloat(document.getElementById('venta-descuento').value);
+    if(isNaN(descPct) || descPct < 0) descPct = 0;
+    const montoDesc = totalVta * (descPct / 100);
+
+    const totalNeto = totalVta - montoDesc;
+
+    document.getElementById('fv-total-vta').textContent = totalVta.toLocaleString('es-BO', {minimumFractionDigits:2, maximumFractionDigits:2});
+    document.getElementById('fv-total-iva').textContent = totalIva.toLocaleString('es-BO', {minimumFractionDigits:2, maximumFractionDigits:2});
+    document.getElementById('total-general-venta').textContent = 'Bs ' + totalNeto.toLocaleString('es-BO', {minimumFractionDigits:2, maximumFractionDigits:2});
+    document.getElementById('btn-guardar-venta').disabled = items.length === 0;
+
+    return { totalVta, totalIva, montoDesc, totalNeto, descPct };
+  }
+
+  function leerActivo(grupoId){
+    const grupo = document.getElementById(grupoId);
+    const a = grupo.querySelector('.pill.active');
+    return a ? a.textContent.trim() : '';
+  }
+  function leerActivoVal(grupoId){
+    const grupo = document.getElementById(grupoId);
+    const a = grupo.querySelector('.pill.active');
+    return a ? a.dataset.val : '';
+  }
+  function leerCondVenta(){
+    const r = document.querySelector('input[name="condventa"]:checked');
+    return r ? r.value : 'Contado';
+  }
+
+  function limpiarFormularioVenta(){
+    document.getElementById('venta-cliente').value = '';
+    document.getElementById('venta-vendedor').value = '';
+    document.getElementById('venta-nit').value = '';
+    document.getElementById('venta-vencimiento-dias').value = '';
+    document.getElementById('wrap-vencimiento').style.display = 'none';
+    document.getElementById('venta-tipo-select').value = 'VENTA DIRECTA';
+    document.getElementById('venta-paraevento').checked = false;
+    document.getElementById('venta-congasto').checked = false;
+    document.getElementById('venta-facturado').checked = true;
+    document.getElementById('venta-estado').value = 'Pendiente';
+    document.getElementById('venta-descuento').value = '0';
+    document.getElementById('venta-moneda').value = 'BOLIVIANOS';
+    document.querySelector('input[name="condventa"][value="Contado"]').checked = true;
+
+    items = [];
+    categoriaActual = 'productos';
+    renderItemsVenta();
+    poblarArticulosVenta();
+
+    document.querySelectorAll('#grupo-categoria-venta .pill').forEach((p,i)=>p.classList.toggle('active', i===0));
+  }
+
+  // ========== Guardar venta ==========
+  async function guardarVenta(){
+    const cliente = document.getElementById('venta-cliente').value.trim();
+    if(!cliente){
+      alert('Falta el nombre del cliente.');
+      document.getElementById('venta-cliente').focus();
+      return;
+    }
+    if(items.length === 0) return;
+
+    const nit = document.getElementById('venta-nit').value.trim();
+    await upsertCliente({ nombre: cliente, nit: nit });
+
+    const totales = calcularTotalVenta();
+    const condVenta = leerCondVenta();
+
+    const ventaParaDB = {
+      numero: modoEdicion ? buscarVentaPorId(modoEdicion).numero : await siguienteNumeroVenta(),
+      fecha_hora: document.getElementById('venta-fechahora').value,
+      cliente: cliente,
+      nit: nit,
+      vendedor: document.getElementById('venta-vendedor').value.trim(),
+      tipo_venta: document.getElementById('venta-tipo-select').value,
+      para_evento: document.getElementById('venta-paraevento').checked,
+      con_gasto: document.getElementById('venta-congasto').checked,
+      forma_pago: condVenta === 'Credito' ? 'Crédito' : 'Contado',
+      dias_credito: document.getElementById('venta-vencimiento-dias').value.trim(),
+      facturado: document.getElementById('venta-facturado').checked ? 'Con factura' : 'Sin factura',
+      estado_venta: document.getElementById('venta-estado').value,
+      moneda: document.getElementById('venta-moneda').value,
+      descuento_pct: totales.descPct,
+      total_vta: totales.totalVta,
+      total_iva: totales.totalIva,
+      total: totales.totalNeto,
+      items: items.slice()
+    };
+
+    let ventaGuardada;
+    if(modoEdicion){
+      const { data, error } = await supabaseClient.from('ventas').update(ventaParaDB).eq('id', modoEdicion).select().single();
+      if(error){ alert('Error al guardar venta: ' + error.message); return; }
+      ventaGuardada = mapearVentaDesdeDB(data);
+      const idx = ventasCache.findIndex(v => v.id === modoEdicion);
+      if(idx !== -1) ventasCache[idx] = ventaGuardada;
+    } else {
+      const { data, error } = await supabaseClient.from('ventas').insert(ventaParaDB).select().single();
+      if(error){ alert('Error al guardar venta: ' + error.message); return; }
+      ventaGuardada = mapearVentaDesdeDB(data);
+      ventasCache.unshift(ventaGuardada);
+    }
+
+    mostrarComprobanteVenta(ventaGuardada);
+    modoEdicion = null;
+  }
+
+  function buscarVentaPorId(id){
+    return cargarVentas().find(v => v.id === id);
+  }
+
+  // ========== Modificar venta ==========
+  function abrirModificarVenta(){
+    abrirModalListaVentas('Selecciona una venta para modificar', (venta) => {
+      cerrarModalListaVentas();
+      cargarVentaEnFormulario(venta);
+    });
+  }
+
+  function cargarVentaEnFormulario(venta){
+    modoEdicion = venta.id;
+    document.getElementById('venta-cliente').value = venta.cliente;
+    document.getElementById('venta-vendedor').value = venta.vendedor;
+    document.getElementById('venta-nit').value = venta.nit;
+    document.getElementById('venta-fechahora').value = venta.fechaHora;
+    document.getElementById('venta-vencimiento-dias').value = venta.diasCredito || '';
+
+    document.getElementById('venta-tipo-select').value = venta.tipoVenta || 'VENTA DIRECTA';
+    document.getElementById('venta-paraevento').checked = !!venta.paraEvento;
+    document.getElementById('venta-congasto').checked = !!venta.conGasto;
+    document.getElementById('venta-facturado').checked = (venta.facturado === 'Con factura');
+    document.getElementById('venta-estado').value = venta.estadoVenta || 'Pendiente';
+    document.getElementById('venta-moneda').value = venta.moneda || 'BOLIVIANOS';
+    document.getElementById('venta-descuento').value = venta.descuentoPct || 0;
+
+    const esCredito = venta.formaPago === 'Crédito';
+    document.querySelector('input[name="condventa"][value="' + (esCredito ? 'Credito' : 'Contado') + '"]').checked = true;
+    document.getElementById('wrap-vencimiento').style.display = esCredito ? '' : 'none';
+
+    items = venta.items.slice();
+    renderItemsVenta();
+
+    document.getElementById('topbar-sub').textContent = 'Editando ' + venta.numero;
+    marcarBotonActivo(null);
+    mostrarVista('view-form');
+  }
+
+  // ========== Modal genérico de lista de ventas (usado por Modificar / Reimpresión / Facturación) ==========
+  let callbackSeleccionVenta = null;
+
+  function abrirModalListaVentas(titulo, callback){
+    callbackSeleccionVenta = callback;
+    document.getElementById('modal-lista-titulo').textContent = titulo;
+    const ventas = cargarVentas();
+    const cont = document.getElementById('modal-lista-contenido');
+
+    if(ventas.length === 0){
+      cont.innerHTML = '<div class="empty-list">No hay ventas guardadas aún</div>';
+    } else {
+      cont.innerHTML = ventas.map(v => `
+        <div class="venta-card" onclick="seleccionarVentaModal('${v.id}')">
+          <div class="venta-tag"></div>
+          <div class="venta-info">
+            <div class="venta-name">${v.numero} · ${v.cliente}</div>
+            <div class="venta-meta">${v.fechaHora} · ${v.formaPago}</div>
+          </div>
+          <div class="venta-amount">Bs ${v.total.toLocaleString('es-BO')}</div>
+        </div>
+      `).join('');
+    }
+    document.getElementById('modal-lista-ventas').classList.add('show');
+  }
+
+  function seleccionarVentaModal(id){
+    const venta = buscarVentaPorId(id);
+    if(venta && callbackSeleccionVenta) callbackSeleccionVenta(venta);
+  }
+
+  function cerrarModalListaVentas(){
+    document.getElementById('modal-lista-ventas').classList.remove('show');
+  }
+
+  // ========== Reimpresión ==========
+  function abrirReimpresion(){
+    abrirModalListaVentas('Reimpresión — selecciona una venta', (venta) => {
+      cerrarModalListaVentas();
+      mostrarComprobanteVenta(venta);
+    });
+  }
+
+  function verComprobanteDeVenta(id){
+    const venta = buscarVentaPorId(id);
+    if(venta) mostrarComprobanteVenta(venta);
+  }
+
+  // ========== Facturación (alternar con/sin factura de una venta guardada) ==========
+  function abrirFacturacion(){
+    abrirModalListaVentas('Facturación — selecciona una venta', async (venta) => {
+      const actual = venta.facturado;
+      const nuevo = confirm(`Venta ${venta.numero} está marcada como "${actual}".\n\nPresiona Aceptar para cambiar a "${actual === 'Con factura' ? 'Sin factura' : 'Con factura'}".`);
+      if(nuevo){
+        const nuevoFacturado = (actual === 'Con factura') ? 'Sin factura' : 'Con factura';
+        const { error } = await supabaseClient.from('ventas').update({ facturado: nuevoFacturado }).eq('id', venta.id);
+        if(error){ alert('Error al actualizar: ' + error.message); return; }
+        venta.facturado = nuevoFacturado;
+        const idx = ventasCache.findIndex(v => v.id === venta.id);
+        if(idx !== -1) ventasCache[idx].facturado = nuevoFacturado;
+        alert('Actualizado: ahora está "' + venta.facturado + '"');
+      }
+      cerrarModalListaVentas();
+    });
+  }
+
+  // ========== Comprobante ==========
+  function mostrarComprobanteVenta(venta){
+    cotizacionActualParaCompartir = venta;
+    document.getElementById('doc-numero').textContent = venta.numero;
+    document.getElementById('doc-fechahora').textContent = venta.fechaHora;
+    document.getElementById('doc-cliente').textContent = venta.cliente;
+    document.getElementById('doc-nit').textContent = venta.nit || '-';
+    document.getElementById('doc-vendedor').textContent = venta.vendedor || '-';
+    document.getElementById('doc-total').textContent = (venta.moneda === 'DÓLARES' ? '$us ' : 'Bs ') + venta.total.toLocaleString('es-BO', {minimumFractionDigits:2, maximumFractionDigits:2});
+    document.getElementById('doc-tipoventa').textContent = venta.tipoVenta + ' · ' + venta.formaPago + (venta.estadoVenta ? ' · ' + venta.estadoVenta : '');
+    document.getElementById('doc-facturado').textContent = venta.facturado + (venta.diasCredito ? ' · Plazo: ' + venta.diasCredito + ' día(s)' : '');
+
+    const totalVta = venta.totalVta !== undefined ? venta.totalVta : venta.total;
+    const totalIva = venta.totalIva || 0;
+    const descPct = venta.descuentoPct || 0;
+    const montoDesc = totalVta * (descPct/100);
+
+    document.getElementById('doc-desglose').innerHTML = `
+      Subtotal: Bs ${totalVta.toLocaleString('es-BO',{minimumFractionDigits:2})}<br>
+      ${descPct > 0 ? 'Descuento (' + descPct + '%): -Bs ' + montoDesc.toLocaleString('es-BO',{minimumFractionDigits:2}) + '<br>' : ''}
+      IVA (13%): Bs ${totalIva.toLocaleString('es-BO',{minimumFractionDigits:2})}
+    `;
+
+    document.getElementById('doc-tabla-items').innerHTML = venta.items.map(it => `
+      <tr style="border-bottom:1px solid #e2e2e2;">
+        <td style="padding:6px;">${it.codigo ? '<strong>'+it.codigo+'</strong> — ' : ''}${it.nombre}</td>
+        <td style="padding:6px; text-align:center;">${it.cantidad}</td>
+        <td style="padding:6px; text-align:right;">${it.precio.toLocaleString('es-BO')}</td>
+        <td style="padding:6px; text-align:right; font-weight:700;">${(it.precio*it.cantidad).toLocaleString('es-BO')}</td>
+      </tr>
+    `).join('');
+
+    document.getElementById('modal-comprobante').style.display = 'flex';
+  }
+
+  function cerrarComprobante(){
+    document.getElementById('modal-comprobante').style.display = 'none';
+    limpiarFormularioVenta();
+    salirPestana();
+  }
+
+  function descargarPDF(){
+    const nodo = document.getElementById('documento-comprobante');
+    html2canvas(nodo, { scale: 2, backgroundColor: '#ffffff' }).then(canvas => {
+      const { jsPDF } = window.jspdf;
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const imgWidth = pageWidth - 40;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 20, 20, imgWidth, imgHeight);
+      const numero = cotizacionActualParaCompartir ? cotizacionActualParaCompartir.numero : 'venta';
+      pdf.save(numero + '.pdf');
+    });
+  }
+
+  function enviarWhatsApp(){
+    const v = cotizacionActualParaCompartir;
+    if(!v) return;
+    const lineas = v.items.map(it => `• ${it.nombre} x${it.cantidad} — Bs ${(it.precio*it.cantidad).toLocaleString('es-BO')}`).join('\n');
+    const texto = `*${v.numero}* — Nota de venta\nCliente: ${v.cliente}\n\n${lineas}\n\n*Total: Bs ${v.total.toLocaleString('es-BO')}*\n${v.tipoVenta} · ${v.formaPago} · ${v.facturado}`;
+    window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank');
+  }
+
+  // ========== Inicializar ==========
+  // ========== Inicializar ==========
+  (async () => {
+    await cargarCatalogoDesdeSupabase();
+    await cargarClientesDesdeSupabase();
+    await cargarVentasDesdeSupabase();
+    renderListaPrincipal();
+  })();
+</script>
+
+
+<script>
+(function(){
+  var banner = document.getElementById('pwa-offline-banner');
+  function actualizarEstadoConexion(){
+    if(!banner) return;
+    banner.classList.toggle('show', !navigator.onLine);
+  }
+  window.addEventListener('online', actualizarEstadoConexion);
+  window.addEventListener('offline', actualizarEstadoConexion);
+  actualizarEstadoConexion();
+})();
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', function(){
+    navigator.serviceWorker.register('sw.js').catch(function(err){
+      console.warn('No se pudo registrar el service worker:', err);
+    });
+  });
+}
+</script>
+</body>
+</html>

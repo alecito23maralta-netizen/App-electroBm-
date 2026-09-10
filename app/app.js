@@ -2174,15 +2174,45 @@ function renderGridCatalogo() {
         <div class="catalogo-desc">${escapeHtml(p.descripcion)}</div>
         ${p.subcategoria ? `<div class="catalogo-sub">${escapeHtml(p.subcategoria)}</div>` : ''}
         <div class="catalogo-precio">${money(p.precio_venta)}</div>
-        <button class="btn btn-secondary btn-sm btn-block" data-act="compartir" data-id="${p.id}" style="margin-top:8px">📤 Compartir</button>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn btn-secondary btn-sm" data-act="ver" data-id="${p.id}" style="flex:1">👁 Ver</button>
+          <button class="btn btn-secondary btn-sm" data-act="compartir" data-id="${p.id}" style="flex:1">📤 Compartir</button>
+        </div>
       </div>
     </div>
   `).join('')}</div>`;
 
+  cont.querySelectorAll('[data-act="ver"]').forEach(btn => {
+    const p = items.find(x => x.id === btn.dataset.id);
+    btn.addEventListener('click', () => verProductoCatalogo(p));
+  });
   cont.querySelectorAll('[data-act="compartir"]').forEach(btn => {
     const p = items.find(x => x.id === btn.dataset.id);
     btn.addEventListener('click', () => compartirProductoCatalogo(p));
   });
+}
+
+// Vista previa antes de compartir — así el vendedor ve exactamente lo
+// que le va a llegar al cliente (misma foto recortada en cuadrado).
+function verProductoCatalogo(p) {
+  openModal(`
+    <div class="sheet-head"><h3>Vista previa</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <div style="width:100%;aspect-ratio:1/1;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:flex;align-items:center;justify-content:center">
+      ${p.imagen_base64 ? `<img src="${p.imagen_base64}" style="width:100%;height:100%;object-fit:cover" />` : `<span style="color:var(--text-faint)">Sin foto</span>`}
+    </div>
+    <div style="margin-top:14px">
+      ${p.subcategoria ? `<div style="color:var(--accent);font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px">${escapeHtml(p.subcategoria)}</div>` : ''}
+      <div style="font-family:var(--font-display);font-weight:700;font-size:17px">${escapeHtml(p.descripcion)}</div>
+      <div style="font-family:var(--font-display);font-weight:800;font-size:22px;color:var(--accent);margin-top:6px">${money(p.precio_venta)}</div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cerrar-preview">Cerrar</button>
+      <button class="btn btn-primary" id="btn-compartir-preview">📤 Compartir</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cerrar-preview').addEventListener('click', closeModal);
+  $('#btn-compartir-preview').addEventListener('click', () => { closeModal(); compartirProductoCatalogo(p); });
 }
 
 async function compartirProductoCatalogo(p) {

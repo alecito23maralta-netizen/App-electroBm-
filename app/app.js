@@ -2661,7 +2661,7 @@ async function renderHiloChat(hilo) {
     ? `<button class="btn btn-secondary btn-sm" id="chat-volver-lista" style="margin-bottom:10px">← Vendedores</button>`
     : '';
   const tituloHilo = (chatModo === 'individual' && profile.rol === 'admin')
-    ? `<p class="sub" style="margin:-4px 0 10px">Con ${escapeHtml(vendedoresCache.find(v => v.id === hilo)?.nombre || 'vendedor')}</p>`
+    ? `<p style="color:var(--text-dim);font-size:13.5px;margin:-4px 0 10px">Con ${escapeHtml(vendedoresCache.find(v => v.id === hilo)?.nombre || 'vendedor')}</p>`
     : '';
 
   cont.innerHTML = `
@@ -3267,7 +3267,7 @@ async function renderUsuarios() {
     </div>
     <div id="usuarios-table"></div>
   `;
-  $('#btn-nuevo-usuario').addEventListener('click', abrirFormUsuario);
+  $('#btn-nuevo-usuario').addEventListener('click', () => abrirFormUsuario());
   $('#btn-redes-sociales').addEventListener('click', abrirFormRedesSociales);
 
   const { data, error } = await sb.from('profiles').select('*').order('created_at');
@@ -3285,82 +3285,100 @@ async function renderUsuarios() {
           <td style="text-transform:capitalize">${u.rol}</td>
           <td><span class="badge ${u.activo ? 'badge-ok' : 'badge-rechazada'}">${u.activo ? 'Activo' : 'Inactivo'}</span></td>
           <td><div class="row-actions">
-            <button class="icon-btn" data-act="editar" data-id="${u.id}" title="Editar nombre/teléfono">✎</button>
-            ${u.id !== profile.id ? `<button class="icon-btn" data-act="rol" data-id="${u.id}" title="Cambiar rol">🔁</button>
-            <button class="icon-btn" data-act="estado" data-id="${u.id}" title="${u.activo ? 'Desactivar' : 'Activar'}">${u.activo ? '⛔' : '✅'}</button>` : `<span style="color:var(--text-faint);font-size:12px">vos</span>`}
+            <button class="icon-btn" data-act="editar" data-id="${u.id}" title="Editar usuario">✎</button>
+            ${u.id === profile.id ? `<span style="color:var(--text-faint);font-size:12px">vos</span>` : ''}
           </div></td>
         </tr>
       `).join('')}
     </tbody>
   </table></div>`;
 
-  cont.querySelectorAll('[data-act]').forEach(btn => {
+  cont.querySelectorAll('[data-act="editar"]').forEach(btn => {
     const u = data.find(x => x.id === btn.dataset.id);
-    btn.addEventListener('click', async () => {
-      if (btn.dataset.act === 'estado') {
-        await sb.from('profiles').update({ activo: !u.activo }).eq('id', u.id);
-        toast(u.activo ? 'Usuario desactivado' : 'Usuario activado');
-        renderUsuarios();
-      }
-      if (btn.dataset.act === 'rol') {
-        const nuevoRol = u.rol === 'admin' ? 'vendedor' : 'admin';
-        await sb.from('profiles').update({ rol: nuevoRol }).eq('id', u.id);
-        toast('Rol actualizado a ' + nuevoRol);
-        renderUsuarios();
-      }
-      if (btn.dataset.act === 'editar') abrirFormEditarUsuario(u);
-    });
+    btn.addEventListener('click', () => abrirFormUsuario(u));
   });
 }
 
-function abrirFormEditarUsuario(u) {
+// Un solo formulario para crear y editar usuarios — solo el admin llega
+// acá (la vista Usuarios entera es admin-only). Crear, cambiar rol y
+// habilitar/deshabilitar quedan todos en el mismo lugar.
+function abrirFormUsuario(existing) {
+  const esUnoMismo = existing && existing.id === profile.id;
+  let estadoActual = existing ? existing.activo : true;
+
   openModal(`
-    <div class="sheet-head"><h3>Editar usuario</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <div class="field"><label>Nombre completo</label><input id="f-edit-nombre" value="${escapeHtml(u.nombre || '')}" /></div>
-    <div class="field" style="margin-top:10px"><label>Teléfono (para el catálogo enviado a clientes)</label><input id="f-edit-telefono" value="${escapeHtml(u.telefono || '')}" placeholder="+591 7xx xxxxx" /></div>
+    <div class="sheet-head"><h3>${existing ? 'Editar usuario' : 'Nuevo usuario'}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+
+    <div class="card-title">Datos de acceso</div>
+    <div class="field"><label>Nombre de usuario (login) *</label>
+      <input id="f-usuario" value="${existing ? escapeHtml(existing.usuario) : ''}" ${existing ? 'disabled' : ''} placeholder="sin espacios, ej: jperez" required />
+      ${existing ? `<p style="color:var(--text-dim);font-size:13.5px;margin-top:4px">No se puede cambiar una vez creado el usuario.</p>` : ''}
+    </div>
+    ${!existing ? `<div class="field" style="margin-top:10px"><label>Contraseña *</label><input type="password" id="f-password" required minlength="6" /></div>` : ''}
+
+    <div class="card-title" style="margin-top:18px">Datos personales</div>
+    <div class="field"><label>Nombre completo *</label><input id="f-nombre" value="${existing ? escapeHtml(existing.nombre || '') : ''}" required /></div>
+    <div class="field" style="margin-top:10px"><label>Teléfono (para el catálogo enviado a clientes)</label><input id="f-telefono" value="${existing ? escapeHtml(existing.telefono || '') : ''}" placeholder="+591 7xx xxxxx" /></div>
+
+    ${!esUnoMismo ? `
+    <div class="card-title" style="margin-top:18px">Rol</div>
+    <div class="field"><select id="f-rol">
+      <option value="vendedor" ${(!existing || existing.rol === 'vendedor') ? 'selected' : ''}>Vendedor / campo</option>
+      <option value="admin" ${existing?.rol === 'admin' ? 'selected' : ''}>Administrador</option>
+    </select></div>` : ''}
+
+    ${existing && !esUnoMismo ? `
+    <div class="card-title" style="margin-top:18px">Estado de la cuenta</div>
+    <div id="estado-box" style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px">
+      <div>
+        <div id="estado-titulo" style="font-weight:700">${existing.activo ? 'Habilitado' : 'Deshabilitado'}</div>
+        <p id="estado-sub" style="color:var(--text-dim);font-size:13.5px;margin-top:2px">${existing.activo ? 'Puede iniciar sesión normalmente.' : 'No puede iniciar sesión hasta que lo vuelvas a habilitar.'}</p>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" id="btn-toggle-estado" style="${existing.activo ? 'border-color:var(--danger);color:var(--danger)' : 'border-color:var(--accent);color:var(--accent)'}">${existing.activo ? 'Deshabilitar' : 'Habilitar'}</button>
+    </div>` : ''}
+
     <div class="form-actions">
       <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
-      <button class="btn btn-primary" id="btn-guardar">💾 Guardar</button>
+      <button class="btn btn-primary" id="btn-guardar">💾 ${existing ? 'Guardar cambios' : 'Crear usuario'}</button>
     </div>
   `);
+
   $('#sheet-close').addEventListener('click', closeModal);
   $('#btn-cancelar').addEventListener('click', closeModal);
-  $('#btn-guardar').addEventListener('click', async () => {
-    const { error } = await sb.from('profiles').update({
-      nombre: $('#f-edit-nombre').value.trim(),
-      telefono: $('#f-edit-telefono').value.trim()
-    }).eq('id', u.id);
-    if (error) { toast('Error: ' + error.message, 'error'); return; }
-    toast('Usuario actualizado');
-    closeModal();
-    if (u.id === profile.id) { profile.nombre = $('#f-edit-nombre').value.trim(); profile.telefono = $('#f-edit-telefono').value.trim(); }
-    renderUsuarios();
+
+  $('#btn-toggle-estado')?.addEventListener('click', () => {
+    estadoActual = !estadoActual;
+    $('#btn-toggle-estado').textContent = estadoActual ? 'Deshabilitar' : 'Habilitar';
+    $('#btn-toggle-estado').style.borderColor = estadoActual ? 'var(--danger)' : 'var(--accent)';
+    $('#btn-toggle-estado').style.color = estadoActual ? 'var(--danger)' : 'var(--accent)';
+    $('#estado-titulo').textContent = estadoActual ? 'Habilitado' : 'Deshabilitado';
+    $('#estado-sub').textContent = estadoActual ? 'Puede iniciar sesión normalmente.' : 'No puede iniciar sesión hasta que lo vuelvas a habilitar.';
   });
-}
-function abrirFormUsuario() {
-  openModal(`
-    <div class="sheet-head"><h3>Nuevo usuario</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <div class="field"><label>Nombre completo *</label><input id="f-nombre" required /></div>
-    <div class="field" style="margin-top:10px"><label>Teléfono (para el catálogo enviado a clientes)</label><input id="f-telefono-nuevo" placeholder="+591 7xx xxxxx" /></div>
-    <div class="field" style="margin-top:10px"><label>Usuario (sin espacios) *</label><input id="f-usuario" required /></div>
-    <div class="field" style="margin-top:10px"><label>Contraseña *</label><input type="password" id="f-password" required minlength="6" /></div>
-    <div class="field" style="margin-top:10px"><label>Rol</label>
-      <select id="f-rol"><option value="vendedor">Vendedor / campo</option><option value="admin">Administrador</option></select>
-    </div>
-    <div class="form-actions">
-      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
-      <button class="btn btn-primary" id="btn-guardar">💾 Crear usuario</button>
-    </div>
-  `);
-  $('#sheet-close').addEventListener('click', closeModal);
-  $('#btn-cancelar').addEventListener('click', closeModal);
+
   $('#btn-guardar').addEventListener('click', async () => {
     const nombre = $('#f-nombre').value.trim();
-    const telefono = $('#f-telefono-nuevo').value.trim();
+    const telefono = $('#f-telefono').value.trim();
+    if (!nombre) { toast('Falta el nombre completo', 'error'); return; }
+
+    if (existing) {
+      const payload = { nombre, telefono };
+      if (!esUnoMismo) {
+        payload.rol = $('#f-rol').value;
+        payload.activo = estadoActual;
+      }
+      const { error } = await sb.from('profiles').update(payload).eq('id', existing.id);
+      if (error) { toast('Error: ' + error.message, 'error'); return; }
+      toast('Usuario actualizado');
+      closeModal();
+      if (esUnoMismo) { profile.nombre = nombre; profile.telefono = telefono; }
+      renderUsuarios();
+      return;
+    }
+
     const usuario = $('#f-usuario').value.trim();
     const password = $('#f-password').value;
     const rol = $('#f-rol').value;
-    if (!nombre || !usuario || password.length < 6) { toast('Completá todos los campos (contraseña de 6+ caracteres)', 'error'); return; }
+    if (!usuario || password.length < 6) { toast('Completá usuario y contraseña (6+ caracteres)', 'error'); return; }
 
     const { error } = await sb.auth.signUp({
       email: emailFor(usuario),

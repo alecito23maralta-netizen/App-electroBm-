@@ -25,7 +25,22 @@ android/                  # Proyecto nativo Android generado por Capacitor
 resources/                # icon.png / splash.png fuente para generar los íconos nativos
 capacitor.config.json     # Configuración de Capacitor (appId, nombre, webDir)
 .github/workflows/        # CI que compila el .apk automáticamente
+supabase/                 # Migración SQL de roles (admin/vendedor) + RLS — ver supabase/README.md
 ```
+
+## Roles y seguridad (admin / vendedor)
+
+El rol de cada usuario vive en la tabla `profiles` de Supabase y se hace
+cumplir con Row Level Security (RLS) — no solo ocultando botones en el
+frontend. **Antes de desplegar el código de `app/` a producción hace falta
+correr la migración SQL una sola vez** (`supabase/migrations/0001_roles_and_rls.sql`).
+Instrucciones completas, qué protege cada policy y cómo revertir si algo
+sale mal: [`supabase/README.md`](supabase/README.md).
+
+⚠️ Si el código nuevo llega a producción sin haber corrido la migración,
+`caja.html` y `catalogo.html` van a redirigir a todos —admin incluido— de
+vuelta a `inicio.html`, porque la tabla `profiles` todavía no existe.
+Corré la migración primero.
 
 ## Cómo probarla localmente (navegador)
 

@@ -131,9 +131,20 @@
 <script>
 const SUPABASE_URL = 'https://omxzisjowcmkvqpviuat.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_OGujpzzM0UVDAsgGRplMwA_u1oURINP';
+// Ya no se usa para decidir permisos (eso ahora lo hace profiles.role
+// en Supabase, ver supabase/migrations). Se deja como referencia: es
+// el email que el trigger de la base de datos asigna como admin.
 const ADMIN_EMAIL = 'alejandro23mtz@electrodomesticosbm.com';
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Cliente aparte, sin sesión persistida, solo para crear usuarios nuevos
+// (auth.signUp). Usar el mismo supabaseClient de arriba reemplazaría la
+// sesión del admin logueado por la del usuario recién creado — un gotcha
+// conocido de supabase-js. Con este cliente aislado eso no pasa.
+const supabaseAdminClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false }
+});
 
 async function requireSession(){
   const { data, error } = await supabaseClient.auth.getSession();
@@ -142,7 +153,14 @@ async function requireSession(){
 }
 async function esAdmin(){
   const { data } = await supabaseClient.auth.getSession();
-  return data.session && data.session.user.email === ADMIN_EMAIL;
+  if(!data.session) return false;
+  const { data: perfil, error } = await supabaseClient
+    .from('profiles')
+    .select('role')
+    .eq('id', data.session.user.id)
+    .maybeSingle();
+  if(error){ console.error('Error verificando rol:', error.message); return false; }
+  return perfil?.role === 'admin';
 }
 async function cerrarSesion(){
   await supabaseClient.auth.signOut();
@@ -191,7 +209,7 @@ function cardHTML(m, num){
 
   mostrarUsuarioEnElemento('usuario-actual');
 
-  const admin = session.user.email === ADMIN_EMAIL;
+  const admin = await esAdmin();
   const modulos = admin ? MODULOS_ADMIN : MODULOS_ADMIN.filter(m => MODULOS_VENDEDOR.includes(m.mod));
 
   if(admin){
@@ -238,46 +256,49 @@ async function crearUsuario(){
   btn.disabled = true;
   btn.textContent = 'Creando...';
 
-  const { error } = await supabaseClient.auth.admin.createUser({
-    email: email,
-    password: pass,
-    email_confirm: true
-  });
+  // Se crea con supabaseAdminClient (un cliente Supabase aparte, sin sesión
+  // persistida) para no reemplazar la sesión del admin logueado. El anon
+  // key no puede usar auth.admin.createUser (requiere la service_role key,
+  // que nunca debe vivir en el navegador), así que se usa signUp: crea la
+  // cuenta real en Supabase Auth y el trigger de la base de datos le asigna
+  // el rol 'vendedor' automáticamente (ver supabase/migrations).
+  const { error } = await supabaseAdminClient.auth.signUp({ email, password: pass });
 
   btn.disabled = false;
   btn.textContent = 'Crear usuario';
 
-  if(error){
-    // Supabase anon key no puede usar admin.createUser; usamos signUp con autoconfirm
-    const { error: e2 } = await supabaseClient.auth.signUp({
-      email: email,
-      password: pass,
-      options: { data: { role: 'vendedor' } }
-    });
-    if(e2){ mostrarMsg('Error: ' + e2.message, 'err'); return; }
-  }
+  if(error){ mostrarMsg('Error: ' + error.message, 'err'); return; }
 
-  mostrarMsg('Usuario creado correctamente ✓', 'ok');
+  mostrarMsg('Usuario creado ✓ (según la configuración del proyecto, puede necesitar confirmar su correo antes de poder iniciar sesión)', 'ok');
   document.getElementById('nuevo-email').value = '';
   document.getElementById('nuevo-password').value = '';
-  cargarListaUsuarios();
+  // El perfil lo crea un trigger en Supabase casi al instante; esperamos
+  // un segundo antes de refrescar para darle tiempo a propagarse.
+  setTimeout(cargarListaUsuarios, 1000);
 }
 
 async function cargarListaUsuarios(){
   const cont = document.getElementById('lista-usuarios');
   cont.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:8px 0;">Cargando...</div>';
 
-  // Obtenemos la sesión actual para mostrar usuarios conocidos
-  // (la API admin no está disponible con anon key, así que mostramos solo info local)
-  const { data } = await supabaseClient.auth.getSession();
-  const emailActual = data.session?.user?.email || '';
+  const { data: sesion } = await supabaseClient.auth.getSession();
+  const miId = sesion.session?.user?.id;
 
-  // Lista de usuarios conocidos (los que se han logueado en este dispositivo)
-  // En Supabase con anon key no podemos listar todos los usuarios, pero sí los que el admin creó aquí
-  const usuarios = JSON.parse(localStorage.getItem('usuariosCreados') || '[]');
+  // Lista real de usuarios y roles, desde la tabla profiles (requiere la
+  // migración de supabase/migrations — un admin ve todas las filas gracias
+  // a la policy profiles_select).
+  const { data: usuarios, error } = await supabaseClient
+    .from('profiles')
+    .select('id, email, role, created_at')
+    .order('created_at', { ascending: true });
 
-  if(usuarios.length === 0){
-    cont.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:8px 0;">Los usuarios que crees aparecerán aquí. Para ver todos los usuarios del sistema, ve a Supabase → Authentication → Users.</div>';
+  if(error){
+    cont.innerHTML = '<div style="color:var(--danger);font-size:13px;padding:8px 0;">Error cargando usuarios: ' + error.message + '</div>';
+    return;
+  }
+
+  if(!usuarios || usuarios.length === 0){
+    cont.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:8px 0;">Todavía no hay usuarios.</div>';
     return;
   }
 
@@ -285,23 +306,23 @@ async function cargarListaUsuarios(){
     <div class="usuario-row">
       <div class="usuario-info">
         <div class="usuario-email">${u.email}</div>
-        <div class="usuario-meta">Creado: ${u.fecha}</div>
+        <div class="usuario-meta">${u.role === 'admin' ? '⚙️ Administrador' : '🧑‍💼 Vendedor'} · desde ${new Date(u.created_at).toLocaleDateString('es-BO')}</div>
       </div>
+      ${u.id === miId ? '' : `
+        <button class="btn-delete" style="width:auto;border-radius:10px;padding:6px 10px;font-size:11.5px;color:var(--text);white-space:nowrap;"
+          onclick="cambiarRol('${u.id}','${u.role === 'admin' ? 'vendedor' : 'admin'}')">
+          Hacer ${u.role === 'admin' ? 'vendedor' : 'admin'}
+        </button>`}
     </div>
   `).join('');
 }
 
-// Sobreescribir crearUsuario para guardar registro local de usuarios creados
-const _crearOriginal = crearUsuario;
-async function crearUsuario(){
-  const email = document.getElementById('nuevo-email').value.trim();
-  await _crearOriginal();
-  // Guardar referencia local del usuario creado
-  const lista = JSON.parse(localStorage.getItem('usuariosCreados') || '[]');
-  if(email && !lista.find(u => u.email === email)){
-    lista.push({ email, fecha: new Date().toLocaleDateString('es-BO') });
-    localStorage.setItem('usuariosCreados', JSON.stringify(lista));
-  }
+async function cambiarRol(id, nuevoRol){
+  if(!confirm('¿Cambiar este usuario a "' + nuevoRol + '"?')) return;
+  const { error } = await supabaseClient.from('profiles').update({ role: nuevoRol }).eq('id', id);
+  if(error){ mostrarMsg('Error: ' + error.message, 'err'); return; }
+  mostrarMsg('Rol actualizado ✓', 'ok');
+  cargarListaUsuarios();
 }
 </script>
 

@@ -1034,6 +1034,9 @@
 <script>
 const SUPABASE_URL = 'https://omxzisjowcmkvqpviuat.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_OGujpzzM0UVDAsgGRplMwA_u1oURINP';
+// Ya no se usa para decidir permisos (eso ahora lo hace profiles.role
+// en Supabase, ver supabase/migrations). Se deja como referencia: es
+// el email que el trigger de la base de datos asigna como admin.
 const ADMIN_EMAIL = 'alejandro23mtz@electrodomesticosbm.com';
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -1046,7 +1049,14 @@ async function requireSession(){
 
 async function esAdmin(){
   const { data } = await supabaseClient.auth.getSession();
-  return data.session && data.session.user.email === ADMIN_EMAIL;
+  if(!data.session) return false;
+  const { data: perfil, error } = await supabaseClient
+    .from('profiles')
+    .select('role')
+    .eq('id', data.session.user.id)
+    .maybeSingle();
+  if(error){ console.error('Error verificando rol:', error.message); return false; }
+  return perfil?.role === 'admin';
 }
 
 async function cerrarSesion(){
@@ -1466,11 +1476,22 @@ async function mostrarUsuarioEnElemento(elementId){
       cantidad: cantidad
     });
 
-    // Descontar del stock del catálogo (control real de stock, sincronizado en Supabase)
-    const nuevoStock = stockDisponible - cantidad;
+    // Descontar del stock del catálogo. Se hace vía RPC (ajustar_stock) en
+    // vez de un update directo a la tabla: los vendedores no tienen permiso
+    // de escritura sobre catalogo, solo de ajustar el stock al vender
+    // (ver supabase/migrations/0001_roles_and_rls.sql). La función además
+    // es atómica del lado del servidor, evitando condiciones de carrera
+    // entre ventas simultáneas.
+    const { data: nuevoStock, error } = await supabaseClient.rpc('ajustar_stock', {
+      p_articulo_id: art.id,
+      p_delta: -cantidad
+    });
+    if(error){
+      alert('Error actualizando stock: ' + error.message);
+      items.pop(); // revertir el ítem agregado, el stock no se tocó
+      return;
+    }
     art.stock = nuevoStock;
-    const { error } = await supabaseClient.from('catalogo').update({ stock: nuevoStock }).eq('id', art.id);
-    if(error){ alert('Error actualizando stock: ' + error.message); }
 
     document.getElementById('input-cantidad-venta').value = 1;
     poblarArticulosVenta(); // refresca el stock mostrado en el selector
@@ -1482,10 +1503,12 @@ async function mostrarUsuarioEnElemento(elementId){
     const it = items[i];
     const art = catalogo[it.categoria].find(a => a.codigo === it.codigo && a.nombre === it.nombre);
     if(art){
-      const nuevoStock = (art.stock || 0) + it.cantidad;
-      art.stock = nuevoStock;
-      const { error } = await supabaseClient.from('catalogo').update({ stock: nuevoStock }).eq('id', art.id);
+      const { data: nuevoStock, error } = await supabaseClient.rpc('ajustar_stock', {
+        p_articulo_id: art.id,
+        p_delta: it.cantidad
+      });
       if(error){ alert('Error actualizando stock: ' + error.message); }
+      else art.stock = nuevoStock;
     }
 
     items.splice(i,1);

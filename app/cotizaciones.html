@@ -557,7 +557,7 @@
       <button class="btn-add" style="margin-top:10px;" onclick="document.getElementById('qr-file-input').click()">Subir / cambiar foto del QR</button>
     </div>
 
-    <button class="btn-primary" onclick="guardarConfig()">Guardar datos de cuenta</button>
+    <button class="btn-primary" id="btn-guardar-config" onclick="guardarConfig()">Guardar datos de cuenta</button>
     <div class="save-hint" id="cfg-save-hint" style="font-size:12px; color:var(--text-dim); text-align:center;">Estos datos se usarán en todas las cotizaciones</div>
   </div>
 
@@ -636,6 +636,9 @@
 <script>
 const SUPABASE_URL = 'https://omxzisjowcmkvqpviuat.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_OGujpzzM0UVDAsgGRplMwA_u1oURINP';
+// Ya no se usa para decidir permisos (eso ahora lo hace profiles.role
+// en Supabase, ver supabase/migrations). Se deja como referencia: es
+// el email que el trigger de la base de datos asigna como admin.
 const ADMIN_EMAIL = 'alejandro23mtz@electrodomesticosbm.com';
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -648,7 +651,14 @@ async function requireSession(){
 
 async function esAdmin(){
   const { data } = await supabaseClient.auth.getSession();
-  return data.session && data.session.user.email === ADMIN_EMAIL;
+  if(!data.session) return false;
+  const { data: perfil, error } = await supabaseClient
+    .from('profiles')
+    .select('role')
+    .eq('id', data.session.user.id)
+    .maybeSingle();
+  if(error){ console.error('Error verificando rol:', error.message); return false; }
+  return perfil?.role === 'admin';
 }
 
 async function cerrarSesion(){
@@ -1061,11 +1071,30 @@ async function mostrarUsuarioEnElemento(elementId){
     window.open(url, '_blank');
   }
 
+  // La cuenta bancaria/QR de pago es sensible (define a dónde pagan los
+  // clientes): solo el admin puede editarla. Esto es cosmético — la
+  // protección real es la policy config_cuenta_write_admin en Supabase —
+  // pero evita mostrarle a un vendedor un formulario que luego va a fallar.
+  async function aplicarPermisoConfigCuenta(){
+    if(await esAdmin()) return;
+    ['cfg-titular','cfg-banco','cfg-cuenta','cfg-ci'].forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.disabled = true;
+    });
+    const btnGuardar = document.getElementById('btn-guardar-config');
+    if(btnGuardar) btnGuardar.style.display = 'none';
+    const hint = document.getElementById('cfg-save-hint');
+    if(hint) hint.textContent = 'Solo el administrador puede editar estos datos.';
+    const btnQR = document.querySelector('#panel-config .btn-add');
+    if(btnQR) btnQR.style.display = 'none';
+  }
+
   // Inicializar
   (async () => {
     await cargarCatalogoDesdeSupabase();
     await cargarConfigDesdeSupabase();
     await cargarCotizacionesDesdeSupabase();
+    await aplicarPermisoConfigCuenta();
   })();
 </script>
 

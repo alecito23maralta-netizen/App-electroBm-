@@ -473,6 +473,9 @@
 <script>
 const SUPABASE_URL = 'https://omxzisjowcmkvqpviuat.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_OGujpzzM0UVDAsgGRplMwA_u1oURINP';
+// Ya no se usa para decidir permisos (eso ahora lo hace profiles.role
+// en Supabase, ver supabase/migrations). Se deja como referencia: es
+// el email que el trigger de la base de datos asigna como admin.
 const ADMIN_EMAIL = 'alejandro23mtz@electrodomesticosbm.com';
 
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -485,7 +488,14 @@ async function requireSession(){
 
 async function esAdmin(){
   const { data } = await supabaseClient.auth.getSession();
-  return data.session && data.session.user.email === ADMIN_EMAIL;
+  if(!data.session) return false;
+  const { data: perfil, error } = await supabaseClient
+    .from('profiles')
+    .select('role')
+    .eq('id', data.session.user.id)
+    .maybeSingle();
+  if(error){ console.error('Error verificando rol:', error.message); return false; }
+  return perfil?.role === 'admin';
 }
 
 async function cerrarSesion(){
@@ -500,7 +510,18 @@ async function mostrarUsuarioEnElemento(elementId){
 }
 
 </script>
-<script>requireSession();</script>
+<script>
+  // Caja y Catálogo son exclusivos del admin. Ya no basta con ocultar la
+  // tarjeta en inicio.html: si un vendedor escribe la URL a mano, lo
+  // sacamos de acá también. La protección real (RLS) vive en Supabase.
+  (async () => {
+    const session = await requireSession();
+    if(!session) return;
+    if(!(await esAdmin())){
+      window.location.href = 'inicio.html';
+    }
+  })();
+</script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>

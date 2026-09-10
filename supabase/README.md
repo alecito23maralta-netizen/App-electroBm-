@@ -1,107 +1,63 @@
-# Roles reales (admin/vendedor) + seguridad en la base de datos
+# Base de datos (Supabase)
 
-Hasta ahora, quién era "administrador" se decidía comparando el email en el
-JavaScript del navegador. Eso es solo una etiqueta visual: no impedía que un
-vendedor (o cualquiera con el link directo a `caja.html` o `catalogo.html`)
-leyera o modificara datos que no debería, incluida la cuenta bancaria/QR de
-pago. Esta carpeta agrega la protección real, del lado del servidor.
+Proyecto real: **`eyrntbnmtysicctjewdz`** (llamado "ElectroBM.com" en el dashboard).
+La URL y la `anon key` ya están en [`../app/config.js`](../app/config.js) — la anon
+key es pública a propósito, la seguridad real la da RLS (Row Level Security),
+no el secreto de esa key.
 
-## Cómo aplicar la migración
+## Archivos
 
-1. Abrí tu proyecto en [supabase.com](https://supabase.com) → **SQL Editor**.
-2. Primero, verificá el tipo de la columna `id` de `catalogo` (la migración
-   asume `uuid`, que es el default de Supabase):
-   ```sql
-   select column_name, data_type
-   from information_schema.columns
-   where table_name = 'catalogo' and column_name = 'id';
-   ```
-   Si te da `bigint` en vez de `uuid`, abrí
-   `supabase/migrations/0001_roles_and_rls.sql`, buscá la función
-   `ajustar_stock` y cambiá `uuid` por `bigint` en su definición antes de
-   seguir.
-3. Pegá el contenido completo de
-   [`supabase/migrations/0001_roles_and_rls.sql`](migrations/0001_roles_and_rls.sql)
-   en el SQL Editor y ejecutalo (**Run**).
-4. Es seguro volver a correrla si hace falta (usa `if not exists` /
-   `or replace` / `drop policy if exists` en todos lados).
+- **`schema.sql`** — el esquema completo: tablas, roles (admin/vendedor),
+  triggers y políticas RLS. Está pensado para pegarse entero en el SQL
+  Editor de Supabase; usa `create table if not exists` / `add column if
+  not exists` / `drop policy if exists` en todos lados, así que correrlo
+  de nuevo sobre una base que ya lo tiene no rompe nada.
+- **`herramientas_import.sql`** — carga puntual de 1284 productos de la
+  categoría "Herramientas" (proveedor JADEVER). Ya se corrió una vez; es
+  solo de referencia, no hace falta volver a ejecutarlo salvo que se
+  reimporte ese catálogo desde cero.
 
-## Qué cambia
+## Cómo están protegidos los datos
 
-- Tabla nueva `profiles` (id, email, role) — el rol real de cada usuario,
-  asignado automáticamente al registrarse (admin solo para el email del
-  dueño, vendedor para el resto).
-- **Row Level Security (RLS)** activado en todas las tablas de negocio:
-  - `catalogo`: cualquier logueado puede leer; solo admin puede
-    crear/editar/borrar productos. Los vendedores ajustan stock al vender
-    a través de una función (`ajustar_stock`), no editando la tabla.
-  - `ventas`, `clientes`: ambos roles leen/crean/actualizan; borrar queda
-    para admin.
-  - `cotizaciones`, `propuestas_producto`: ambos roles leen/crean; editar o
-    borrar una ya guardada queda para admin.
-  - `config_cuenta` (cuenta bancaria/QR de pago): **cualquiera puede verla,
-    solo el admin puede cambiarla** — antes cualquier vendedor podía
-    modificar dónde pagan los clientes.
-  - `pagos_caja`, `cuentas_cobrar`: exclusivo del admin (todo el módulo
-    Caja lo es).
-  - Storage `qr-codes`: lectura pública, solo admin puede subir/reemplazar
-    el QR.
-- Función `ajustar_stock(articulo_id, delta)`: descuenta/devuelve stock de
-  forma atómica (evita condiciones de carrera entre ventas simultáneas) y
-  bloquea que el stock quede negativo, del lado del servidor.
+Todo el control de quién puede ver/editar qué vive en las políticas RLS
+de `schema.sql`, no en el JavaScript del frontend:
 
-El código de las 7 pantallas (rama `claude/amazing-hopper-p9qp7b`) ya está
-actualizado para usar `profiles.role` en vez del email hardcodeado, agregar
-un guard que saca a los vendedores de `caja.html`/`catalogo.html`, y llamar
-a `ajustar_stock` en vez de editar `catalogo` directamente.
+- Un **vendedor** solo ve sus propias cotizaciones, ventas y sesiones de
+  caja (`vendedor_id = auth.uid()` / `usuario_id = auth.uid()`).
+- Un **admin** ve todo de todos (`public.is_admin()`), y es el único que
+  puede editar el catálogo de productos, gestionar usuarios, y tocar caja
+  ajena.
+- El catálogo (`productos`), clientes, promociones y medios de pago son
+  de lectura libre para cualquier usuario logueado, pero de escritura
+  exclusiva del admin.
+- `catalogo_publico` (vista) y `configuracion` (redes sociales/WhatsApp)
+  son legibles incluso **sin login** (`grant select ... to anon`), para
+  que `catalogo.html` funcione como vidriera pública.
 
-## Verificar que funcionó
+## Verificar que todo está aplicado
+
+Si en algún momento hay dudas de si alguna actualización del `schema.sql`
+quedó sin correr en producción, esto lo confirma:
 
 ```sql
--- Tu usuario admin debe aparecer con role = 'admin'
-select email, role from public.profiles order by created_at;
+-- Deberían existir todas estas tablas
+select table_name from information_schema.tables
+where table_schema = 'public'
+order by table_name;
+-- esperado: caja_movimientos, caja_sesiones, catalogo_publico (view),
+-- clientes, comprobantes, configuracion, cotizaciones, medios_pago,
+-- mensajes, movimientos_inventario, productos, profiles, promociones,
+-- ventas
 
--- Debe listar policies para cada tabla (catalogo, ventas, clientes,
--- cotizaciones, config_cuenta, propuestas_producto, pagos_caja,
--- cuentas_cobrar, profiles)
+-- Debería haber policies para cada tabla de negocio
 select tablename, policyname from pg_policies where schemaname = 'public';
 ```
 
-Después, probá en la app:
-- Con la cuenta admin: entrás a Caja y Catálogo sin problema, ves la lista
-  de usuarios real en "Personal".
-- Con una cuenta vendedor: el menú de inicio no muestra Caja/Catálogo/
-  Personal, y si escribís la URL de `caja.html` a mano te redirige a
-  inicio. Podés cargar cotizaciones/ventas normalmente y el stock se
-  descuenta al vender.
+## Primer usuario admin
 
-## Rollback
-
-Si algo se rompe y necesitás volver rápido al comportamiento anterior
-(todo abierto para cualquier usuario logueado), desactivá RLS tabla por
-tabla sin perder los datos ni las policies (quedan guardadas, solo
-inactivas):
-
-```sql
-alter table public.catalogo disable row level security;
-alter table public.ventas disable row level security;
-alter table public.clientes disable row level security;
-alter table public.cotizaciones disable row level security;
-alter table public.config_cuenta disable row level security;
-alter table public.propuestas_producto disable row level security;
-alter table public.pagos_caja disable row level security;
-alter table public.cuentas_cobrar disable row level security;
-alter table public.profiles disable row level security;
-```
-
-Para deshacer todo por completo (borra también `profiles` y las
-funciones — los usuarios de `auth.users` no se tocan):
-
-```sql
-drop trigger if exists on_auth_user_created on auth.users;
-drop function if exists public.handle_new_user();
-drop function if exists public.ajustar_stock(uuid, integer);
-drop function if exists public.is_admin();
-drop table if exists public.profiles;
--- y volver a correr los "alter table ... disable row level security" de arriba
-```
+Ver instrucciones en [`../app/index.html`](../app/index.html) — resumen:
+Supabase → Authentication → Users → Add user, con email
+`usuario@bm.internal` (el dominio ficticio que usa `config.js` para
+convertir el "Usuario" que se escribe en el login en un email válido para
+Supabase Auth), marcar "Auto Confirm User", y luego en Table Editor →
+`profiles` cambiar `rol` a `admin` en esa fila.

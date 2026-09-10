@@ -1,17 +1,16 @@
 // Service Worker — Electrodomésticos BM
-// Cachea el "app shell" (las pantallas HTML y los íconos) para que la app
-// abra al instante y sea instalable, incluso con conexión débil.
-// Las llamadas a Supabase (datos en vivo) NUNCA se sirven desde caché.
+// Cachea el "app shell" (HTML/CSS/JS propios + íconos) para que la app
+// abra al instante y sea instalable. Las llamadas a Supabase (datos en
+// vivo) y los scripts de terceros (CDN) NUNCA se sirven desde caché.
 
 const CACHE_VERSION = 'bm-app-v1';
 const APP_SHELL = [
-  'login.html',
-  'inicio.html',
-  'mercados.html',
-  'cotizaciones.html',
-  'caja.html',
+  'index.html',
   'catalogo.html',
-  'ventas.html',
+  'style.css',
+  'app.js',
+  'catalogo-publico.js',
+  'config.js',
   'offline.html',
   'manifest.json',
   'icons/icon-192.png',
@@ -38,10 +37,11 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-function esLlamadaAPI(url) {
-  // Nunca interceptar Supabase (auth/datos/storage) ni CDNs externos: siempre red.
+function esRecursoExterno(url) {
+  // Nunca interceptar Supabase (auth/datos) ni CDNs externos: siempre red.
   return url.hostname.endsWith('supabase.co') ||
          url.hostname.includes('jsdelivr.net') ||
+         url.hostname.includes('cdnjs.cloudflare.com') ||
          url.hostname.includes('fonts.googleapis.com') ||
          url.hostname.includes('fonts.gstatic.com');
 }
@@ -51,7 +51,7 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return; // no cachear POST/PATCH/etc. (mutaciones a Supabase)
 
   const url = new URL(req.url);
-  if (esLlamadaAPI(url)) return; // dejar pasar directo a la red
+  if (esRecursoExterno(url)) return; // dejar pasar directo a la red
 
   // Navegación entre pantallas: red primero, con respaldo en caché y offline.html al final.
   if (req.mode === 'navigate') {

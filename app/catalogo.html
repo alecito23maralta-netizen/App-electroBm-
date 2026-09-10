@@ -1,578 +1,244 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Catálogo de precios</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Catálogo — Electrodomésticos BM</title>
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#1A1D29">
+<meta name="theme-color" content="#0d0f14">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="BM App">
+<meta name="apple-mobile-web-app-title" content="BM Panel">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css" />
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700&display=swap');
+  body { padding: 0; background: var(--bg); }
 
-  :root{
-    --bg: #1A1D29;
-    --bg-soft: #232735;
-    --bg-soft2: #2A2F40;
-    --line: #2E3344;
-    --text: #F4F2ED;
-    --text-dim: #9499AC;
-    --accent: #A8E063;
-    --accent-dim: rgba(168,224,99,0.16);
-    --danger: #FF6B6B;
+  /* -------- Header -------- */
+  .pub-header {
+    position: sticky; top: 0; z-index: 30;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 14px 20px; background: rgba(6, 10, 8, 0.85);
+    backdrop-filter: blur(10px); border-bottom: 1px solid #ffffff14;
+  }
+  .pub-header .brand { display: flex; align-items: center; gap: 10px; }
+  .pub-header .mark {
+    width: 34px; height: 34px; border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent), #00b384);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-display); font-weight: 700; color: #05130f; font-size: 14px; flex-shrink: 0;
+  }
+  .pub-header h1 { font-size: 15.5px; }
+  .pub-header span { display: block; font-size: 11px; color: var(--text-dim); }
+  .pub-header .btn { flex-shrink: 0; }
+  .pub-header-btn-inicio {
+    color: var(--accent); font-size: 12.5px; font-weight: 600; text-decoration: none;
+    padding: 8px 12px; border-radius: 999px; border: 1px dashed #00e5a044; white-space: nowrap;
+  }
+  .pub-header-btn-inicio:hover { background: var(--accent-dim); }
+
+  /* -------- Hero -------- */
+  .pub-hero {
+    position: relative; overflow: hidden;
+    padding: 54px 20px 46px;
+    background:
+      radial-gradient(circle at 15% 0%, #00e5a033, transparent 55%),
+      radial-gradient(circle at 90% 30%, #00b38433, transparent 50%),
+      linear-gradient(180deg, #06110d 0%, #05070a 65%, #000000 100%);
+    text-align: center;
+  }
+  .pub-hero-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--accent-dim); color: var(--accent); border: 1px solid #00e5a044;
+    font-size: 12px; font-weight: 700; padding: 6px 14px; border-radius: 999px; margin-bottom: 18px;
+  }
+  .pub-hero h2 {
+    font-family: var(--font-display); font-weight: 800; font-size: 34px; line-height: 1.15;
+    color: #fff; max-width: 640px; margin: 0 auto;
+  }
+  .pub-hero h2 em { font-style: normal; color: var(--accent); }
+  .pub-hero p {
+    color: var(--text-dim); font-size: 14.5px; max-width: 520px; margin: 16px auto 0; line-height: 1.55;
+  }
+  .pub-hero-cta { display: flex; gap: 12px; justify-content: center; margin-top: 26px; flex-wrap: wrap; }
+  .pub-btn {
+    border: none; border-radius: 12px; padding: 13px 22px; font-size: 14px; font-weight: 700;
+    cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 8px;
+  }
+  .pub-btn-primary { background: linear-gradient(135deg, var(--accent), #00b384); color: #05130f; }
+  .pub-btn-ghost { background: #ffffff12; color: #fff; border: 1px solid #ffffff2a; }
+
+  .pub-stats { display: flex; gap: 12px; justify-content: center; margin-top: 34px; flex-wrap: wrap; }
+  .pub-stat {
+    background: #ffffff0d; border: 1px solid #ffffff1f; border-radius: 14px;
+    padding: 14px 22px; min-width: 130px;
+  }
+  .pub-stat .num { font-family: var(--font-display); font-size: 22px; font-weight: 800; color: var(--accent); }
+  .pub-stat .lbl { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+
+  /* -------- Categorías -------- */
+  .pub-section { max-width: 1100px; margin: 0 auto; padding: 46px 20px; }
+  .pub-section-title { font-family: var(--font-display); font-size: 21px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+  .pub-section-sub { color: var(--text-dim); font-size: 13.5px; margin-bottom: 24px; }
+
+  .pub-cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+  .pub-cat-card {
+    background: linear-gradient(160deg, #10261d, #05090a 70%);
+    border: 1px solid #ffffff1a; border-radius: 16px; padding: 18px;
+  }
+  .pub-cat-card h3 { font-size: 15px; color: #fff; display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .pub-cat-card h3 .count { font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-dim); padding: 3px 9px; border-radius: 999px; }
+  .pub-subcat-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .pub-subcat-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: #ffffff08; border-radius: 9px; padding: 8px 12px; cursor: pointer;
+    font-size: 12.5px; color: var(--text-dim); border: 1px solid transparent; transition: border-color .15s ease;
+  }
+  .pub-subcat-item:hover { border-color: #00e5a044; color: #fff; }
+  .pub-subcat-item .n { color: var(--text-faint); font-size: 11.5px; }
+  .pub-cat-ver-todos {
+    width: 100%; background: none; border: 1px dashed #ffffff2a; color: var(--accent);
+    border-radius: 9px; padding: 9px; font-size: 12.5px; font-weight: 600; cursor: pointer;
   }
 
-  *{ margin:0; padding:0; box-sizing:border-box; }
+  /* -------- Grilla completa -------- */
+  #pub-grid-section { scroll-margin-top: 70px; }
+  .pub-empty { text-align: center; padding: 60px 20px; color: var(--text-faint); }
 
-  html, body{
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Inter', sans-serif;
-    min-height: 100vh;
-    -webkit-tap-highlight-color: transparent;
+  /* -------- Detalle de producto (modal) -------- */
+  .pub-detalle-overlay {
+    position: fixed; inset: 0; z-index: 250; background: rgba(0,0,0,0.7);
+    display: flex; align-items: flex-end; justify-content: center;
+    backdrop-filter: blur(2px);
   }
-
-  .screen{
-    max-width: 480px;
-    margin: 0 auto;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
+  .pub-detalle-card {
+    position: relative; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 20px 20px 0 0; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto;
+    animation: pub-detalle-up .2s ease;
   }
-
-  .topbar{
-    display:flex;
-    align-items:center;
-    gap: 14px;
-    padding: 20px 20px 16px;
+  @keyframes pub-detalle-up { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .pub-detalle-cerrar {
+    position: absolute; top: 12px; right: 12px; z-index: 2;
+    width: 32px; height: 32px; border-radius: 50%; border: none;
+    background: rgba(0,0,0,0.55); color: #fff; font-size: 15px; cursor: pointer;
   }
+  .pub-detalle-img { width: 100%; aspect-ratio: 1/1; background: var(--surface-2); display: flex; align-items: center; justify-content: center; }
+  .pub-detalle-img img { width: 100%; height: 100%; object-fit: cover; }
+  .pub-detalle-info { padding: 20px; }
+  .pub-detalle-etiqueta { font-size: 11.5px; color: var(--accent); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  .pub-detalle-info h3 { font-family: var(--font-display); font-size: 19px; color: #fff; line-height: 1.3; }
+  .pub-detalle-precio { font-family: var(--font-display); font-size: 26px; font-weight: 800; color: var(--accent); margin-top: 8px; }
+  .pub-detalle-divisor { border-top: 1px solid var(--border); margin: 16px 0; }
+  .pub-detalle-seccion-titulo { font-size: 12.5px; font-weight: 700; color: #fff; margin-bottom: 8px; }
+  .pub-detalle-pagos { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-dim); }
+  .pub-detalle-entrega { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; margin-top: 4px; }
 
-  .back{
-    flex-shrink:0;
-    width: 38px;
-    height: 38px;
-    border-radius: 50%;
-    border: 1px solid var(--line);
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    text-decoration:none;
-    color: var(--text);
+  /* -------- Formulario de consulta (previo a WhatsApp) -------- */
+  .pub-consulta-card { max-width: 480px; }
+  .pub-consulta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 420px) { .pub-consulta-grid { grid-template-columns: 1fr; } }
+
+  /* -------- CTA final -------- */
+  .pub-cta {
+    max-width: 1100px; margin: 10px auto 50px; padding: 0 20px;
   }
-
-  .back svg{ width: 18px; height: 18px; stroke: var(--text); }
-
-  .topbar h1{
-    font-family: 'Archivo Black', sans-serif;
-    font-size: 20px;
-    line-height: 1.1;
+  .pub-cta-box {
+    background: linear-gradient(135deg, #062018, #000000 75%);
+    border: 1px solid #00e5a033; border-radius: 20px;
+    padding: 40px 24px; text-align: center;
   }
+  .pub-cta-box h3 { font-family: var(--font-display); font-size: 24px; color: #fff; margin-bottom: 8px; }
+  .pub-cta-box p { color: var(--text-dim); font-size: 13.5px; margin-bottom: 22px; }
 
-  .topbar .sub{
-    font-size: 12px;
-    color: var(--text-dim);
-    margin-top: 2px;
+  .pub-redes-bar {
+    background: linear-gradient(135deg, #00b384, #00875f);
+    padding: 22px 18px; margin-top: 20px;
   }
-
-  .tabs{
-    display:flex;
-    gap: 6px;
-    padding: 0 16px 14px;
-    border-bottom: 1px solid var(--line);
+  .pub-footer { text-align: center; padding: 16px 18px 44px; color: var(--text-faint); font-size: 13px; font-weight: 700; letter-spacing: .02em; }
+  .pub-redes { display: flex; justify-content: center; gap: 16px; }
+  .pub-red-icon {
+    width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: #fff; text-decoration: none; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+    transition: transform .15s ease;
   }
+  .pub-red-icon svg { width: 22px; height: 22px; }
+  .pub-red-icon:hover { transform: translateY(-3px); }
 
-  .tab{
-    flex: 1;
-    text-align:center;
-    padding: 10px 6px;
-    border-radius: 12px;
-    font-size: 12.5px;
-    font-weight: 600;
-    color: var(--text-dim);
-    background: transparent;
-    cursor: pointer;
+  @media (max-width: 480px) {
+    .pub-hero h2 { font-size: 26px; }
   }
-
-  .tab.active{ background: var(--accent); color: #14151c; }
-
-  .panel{
-    display:none;
-    flex: 1;
-    padding: 18px 20px 32px;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  .panel.active{ display:flex; }
-
-  .field-label{
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    margin-bottom: 6px;
-  }
-
-  input[type="text"], input[type="number"]{
-    width: 100%;
-    background: var(--bg-soft);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 13px 14px;
-    color: var(--text);
-    font-family: 'Inter', sans-serif;
-    font-size: 14px;
-  }
-
-  /* ---------- Add article box ---------- */
-  .add-box{
-    background: var(--bg-soft);
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 14px;
-    display:flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .add-row{
-    display:grid;
-    grid-template-columns: 1fr 110px;
-    gap: 10px;
-  }
-
-  .btn-add{
-    background: var(--accent);
-    color: #14151c;
-    border: none;
-    border-radius: 12px;
-    padding: 12px;
-    font-family: 'Inter', sans-serif;
-    font-weight: 700;
-    font-size: 13.5px;
-    cursor: pointer;
-  }
-
-  .btn-add:active{ transform: scale(0.98); }
-
-  /* ---------- Article list ---------- */
-  .articulo-row{
-    display:flex;
-    align-items:center;
-    gap: 10px;
-    background: var(--bg-soft);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 12px;
-  }
-
-  .articulo-info{ flex:1; min-width:0; }
-
-  .articulo-nombre{
-    font-size: 13.5px;
-    font-weight: 700;
-    background: transparent;
-    border: none;
-    color: var(--text);
-    width: 100%;
-    padding: 2px 0;
-  }
-
-  .articulo-precio-wrap{
-    display:flex;
-    align-items:center;
-    gap: 4px;
-    margin-top: 4px;
-  }
-
-  .articulo-precio-wrap span{
-    font-size: 12px;
-    color: var(--text-dim);
-  }
-
-  .articulo-precio{
-    width: 90px;
-    background: var(--bg-soft2);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 5px 8px;
-    color: var(--accent);
-    font-weight: 700;
-    font-size: 13px;
-  }
-
-  .articulo-remove{
-    flex-shrink:0;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    border: 1px solid var(--line);
-    background: transparent;
-    color: var(--text-dim);
-    font-size: 14px;
-    cursor: pointer;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-  }
-
-  .empty-list{
-    text-align:center;
-    padding: 24px 10px;
-    color: var(--text-dim);
-    font-size: 13px;
-    border: 1px dashed var(--line);
-    border-radius: 12px;
-  }
-
-  .save-hint{
-    font-size: 12px;
-    color: var(--text-dim);
-    text-align:center;
-    padding: 4px 8px 0;
-  }
-
-  .save-hint.show{ color: var(--accent); }
-
-  :focus-visible{
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  /* --- PWA: banner de sin conexión --- */
-  .pwa-offline-banner{display:none;background:var(--danger,#FF6B6B);color:#14151c;text-align:center;font-size:12.5px;font-weight:700;padding:9px 14px;font-family:'Inter',sans-serif;}
-  .pwa-offline-banner.show{display:block;}
 </style>
 </head>
 <body>
-<div id="pwa-offline-banner" class="pwa-offline-banner">📡 Sin conexión — los datos podrían no actualizarse</div>
-
-<div class="screen">
-
-  <div class="topbar">
-    <a class="back" href="inicio.html">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M15 18l-6-6 6-6"/>
-      </svg>
-    </a>
-    <div>
-      <h1>Catálogo de precios</h1>
-      <div class="sub">Productos, repuestos y herramientas</div>
-    </div>
-  </div>
-
-  <div class="tabs">
-    <div class="tab active" data-cat="productos" onclick="cambiarCategoria('productos')">Productos</div>
-    <div class="tab" data-cat="repuestos" onclick="cambiarCategoria('repuestos')">Repuestos</div>
-    <div class="tab" data-cat="herramientas" onclick="cambiarCategoria('herramientas')">Herramientas</div>
-  </div>
-
-  <div class="panel active" id="panel-catalogo">
-
-    <div class="add-box">
-      <div class="field-label" style="margin-bottom:0;">Agregar artículo</div>
-      <div class="add-row">
-        <input type="text" id="nuevo-nombre" placeholder="Ej: Refrigerador 2P RX-300">
-        <input type="text" id="nuevo-codigo" placeholder="Código (opcional)">
+  <header class="pub-header">
+    <div class="brand">
+      <div class="mark">BM</div>
+      <div>
+        <h1>Electrodomésticos BM</h1>
+        <span>Bolivia</span>
       </div>
-      <div class="add-row">
-        <input type="number" id="nuevo-precio" placeholder="Precio Bs" inputmode="decimal">
-        <input type="number" id="nuevo-stock" placeholder="Stock" inputmode="numeric">
-      </div>
-      <button class="btn-add" onclick="agregarArticulo()">+ Agregar a la categoría</button>
     </div>
-
-    <div>
-      <div class="field-label" id="lista-titulo">Productos cargados</div>
-      <div id="lista-articulos" style="display:flex; flex-direction:column; gap:8px;"></div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <a class="pub-header-btn-inicio" href="index.html">🔑 Inicio</a>
+      <a class="btn btn-primary btn-sm" href="#" id="header-whatsapp-btn">💬 Cotizar</a>
     </div>
+  </header>
 
-    <div class="save-hint" id="save-hint">Los cambios se guardan automáticamente en la nube</div>
+  <section class="pub-hero">
+    <span class="pub-hero-badge">🟢 Catálogo online</span>
+    <h2>Confort en tu hogar, <em>garantizado.</em></h2>
+    <p id="pub-hero-tagline">Termotanques, calefones, estufas, aires acondicionados y más.<br>Rheem · Longvie · Elequi · Orbis · Eskabe · Volcan.<br>Seguimiento post-venta incluido en cada compra.</p>
+    <div class="pub-hero-cta">
+      <a href="#pub-grid-section" class="pub-btn pub-btn-primary">Ver todos los productos →</a>
+      <a href="#" id="hero-whatsapp-btn" class="pub-btn pub-btn-ghost">💬 Cotización por WhatsApp</a>
+    </div>
+    <div class="pub-stats" id="pub-stats"></div>
+  </section>
+
+  <section class="pub-section">
+    <div class="pub-section-title">Explorá por categoría</div>
+    <div class="pub-section-sub">Elegí lo que necesitás y mirá los modelos disponibles</div>
+    <div class="pub-cat-grid" id="pub-cat-grid"></div>
+  </section>
+
+  <section class="pub-section" id="pub-grid-section">
+    <div class="pub-section-title">Catálogo completo</div>
+    <div class="pub-section-sub">Buscá por nombre o filtrá por categoría</div>
+    <div class="field" style="margin-bottom:14px">
+      <input id="pub-buscar" placeholder="🔍 Buscar producto…" />
+    </div>
+    <div class="tabs" id="pub-tabs"></div>
+    <div id="pub-grid"><div class="empty-state">Cargando catálogo…</div></div>
+  </section>
+
+  <div class="pub-cta">
+    <div class="pub-cta-box">
+      <h3>¿Listo para cotizar?</h3>
+      <p>Escribinos por WhatsApp y te ayudamos a elegir el modelo ideal.</p>
+      <a href="#" id="cta-whatsapp-btn" class="pub-btn pub-btn-primary">💬 Cotizar por WhatsApp</a>
+    </div>
   </div>
 
-</div>
+  <div class="pub-redes-bar" id="pub-redes-bar">
+    <div id="pub-redes" class="pub-redes"></div>
+  </div>
+  <div class="pub-footer">Electrodomésticos BM · Bolivia</div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script>
-const SUPABASE_URL = 'https://omxzisjowcmkvqpviuat.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_OGujpzzM0UVDAsgGRplMwA_u1oURINP';
-// Ya no se usa para decidir permisos (eso ahora lo hace profiles.role
-// en Supabase, ver supabase/migrations). Se deja como referencia: es
-// el email que el trigger de la base de datos asigna como admin.
-const ADMIN_EMAIL = 'alejandro23mtz@electrodomesticosbm.com';
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="config.js"></script>
+  <script src="catalogo-publico.js"></script>
 
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-async function requireSession(){
-  const { data, error } = await supabaseClient.auth.getSession();
-  if(error || !data.session){ window.location.href = 'login.html'; return null; }
-  return data.session;
-}
-
-async function esAdmin(){
-  const { data } = await supabaseClient.auth.getSession();
-  if(!data.session) return false;
-  const { data: perfil, error } = await supabaseClient
-    .from('profiles')
-    .select('role')
-    .eq('id', data.session.user.id)
-    .maybeSingle();
-  if(error){ console.error('Error verificando rol:', error.message); return false; }
-  return perfil?.role === 'admin';
-}
-
-async function cerrarSesion(){
-  await supabaseClient.auth.signOut();
-  window.location.href = 'login.html';
-}
-
-async function mostrarUsuarioEnElemento(elementId){
-  const { data } = await supabaseClient.auth.getSession();
-  const el = document.getElementById(elementId);
-  if(el && data.session) el.textContent = data.session.user.email;
-}
-
-</script>
-<script>
-  // Caja y Catálogo son exclusivos del admin. Ya no basta con ocultar la
-  // tarjeta en inicio.html: si un vendedor escribe la URL a mano, lo
-  // sacamos de acá también. La protección real (RLS) vive en Supabase.
-  (async () => {
-    const session = await requireSession();
-    if(!session) return;
-    if(!(await esAdmin())){
-      window.location.href = 'inicio.html';
-    }
-  })();
-</script>
-
-<script>
-  const nombresCategoria = {
-    productos: 'Productos cargados',
-    repuestos: 'Repuestos cargados',
-    herramientas: 'Herramientas cargadas'
-  };
-
-  const PREFIJOS = { productos: 'PRD', repuestos: 'REP', herramientas: 'HER' };
-
-  // catalogo[categoria] = array de artículos. Cada artículo guarda su `id` de Supabase.
-  let catalogo = { productos: [], repuestos: [], herramientas: [] };
-  let categoriaActual = 'productos';
-
-  async function cargarCatalogo(){
-    const { data, error } = await supabaseClient.from('catalogo').select('*').order('created_at');
-    if(error){
-      alert('Error cargando catálogo: ' + error.message);
-      return;
-    }
-
-    catalogo = { productos: [], repuestos: [], herramientas: [] };
-    (data || []).forEach(row => {
-      catalogo[row.categoria].push({
-        id: row.id,
-        nombre: row.nombre,
-        codigo: row.codigo,
-        precio: row.precio,
-        stock: row.stock
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('sw.js').catch(function (err) {
+          console.warn('No se pudo registrar el service worker:', err);
+        });
       });
-    });
-
-    // Si la tabla está vacía (primera vez), sembrar datos de ejemplo
-    if((data || []).length === 0){
-      await sembrarCatalogoEjemplo();
-      return cargarCatalogo();
     }
-
-    renderLista();
-  }
-
-  async function sembrarCatalogoEjemplo(){
-    const ejemplo = [
-      { categoria:'productos', codigo:'PRD-001', nombre:"Refrigerador 2 puertas RX-300", precio:2450, stock:10 },
-      { categoria:'productos', codigo:'PRD-002', nombre:"Cocina a gas 4 hornillas CG-410", precio:980, stock:10 },
-      { categoria:'productos', codigo:'PRD-003', nombre:"Lavadora automática 12kg LA-12", precio:1850, stock:10 },
-      { categoria:'productos', codigo:'PRD-004', nombre:"Calefón a gas 10L CF-10", precio:720, stock:10 },
-      { categoria:'repuestos', codigo:'REP-001', nombre:"Termostato universal", precio:85, stock:10 },
-      { categoria:'repuestos', codigo:'REP-002', nombre:"Válvula de gas 3/8\"", precio:60, stock:10 },
-      { categoria:'repuestos', codigo:'REP-003', nombre:"Motor de lavadora 1/4 HP", precio:320, stock:10 },
-      { categoria:'repuestos', codigo:'REP-004', nombre:"Bandeja interna refrigerador", precio:140, stock:10 },
-      { categoria:'herramientas', codigo:'HER-001', nombre:"Juego de destornilladores", precio:95, stock:10 },
-      { categoria:'herramientas', codigo:'HER-002', nombre:"Multímetro digital", precio:180, stock:10 },
-      { categoria:'herramientas', codigo:'HER-003', nombre:"Pinza amperimétrica", precio:250, stock:10 },
-      { categoria:'herramientas', codigo:'HER-004', nombre:"Llave de gas ajustable", precio:70, stock:10 },
-    ];
-    await supabaseClient.from('catalogo').insert(ejemplo);
-  }
-
-  function siguienteCodigo(cat){
-    const usados = new Set(catalogo[cat].map(a => a.codigo));
-    let n = catalogo[cat].length + 1;
-    let codigo = PREFIJOS[cat] + '-' + String(n).padStart(3,'0');
-    while(usados.has(codigo)){
-      n++;
-      codigo = PREFIJOS[cat] + '-' + String(n).padStart(3,'0');
-    }
-    return codigo;
-  }
-
-  function mostrarHintGuardado(texto){
-    const hint = document.getElementById('save-hint');
-    hint.textContent = texto;
-    hint.classList.add('show');
-    setTimeout(() => {
-      hint.textContent = 'Los cambios se guardan automáticamente en la nube';
-      hint.classList.remove('show');
-    }, 1200);
-  }
-
-  function cambiarCategoria(cat){
-    categoriaActual = cat;
-    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.cat === cat));
-    document.getElementById('lista-titulo').textContent = nombresCategoria[cat];
-    renderLista();
-  }
-
-  async function agregarArticulo(){
-    const nombreInput = document.getElementById('nuevo-nombre');
-    const codigoInput = document.getElementById('nuevo-codigo');
-    const precioInput = document.getElementById('nuevo-precio');
-    const stockInput = document.getElementById('nuevo-stock');
-
-    const nombre = nombreInput.value.trim();
-    const precio = parseFloat(precioInput.value);
-    let codigo = codigoInput.value.trim();
-    let stock = parseInt(stockInput.value, 10);
-    if(isNaN(stock) || stock < 0) stock = 0;
-
-    if(!nombre){ nombreInput.focus(); return; }
-    if(isNaN(precio) || precio < 0){ precioInput.focus(); return; }
-    if(!codigo) codigo = siguienteCodigo(categoriaActual);
-
-    const { data, error } = await supabaseClient.from('catalogo')
-      .insert({ categoria: categoriaActual, codigo, nombre, precio, stock })
-      .select().single();
-
-    if(error){ alert('Error al guardar: ' + error.message); return; }
-
-    catalogo[categoriaActual].push({ id: data.id, nombre, codigo, precio, stock });
-    mostrarHintGuardado('Artículo agregado');
-    nombreInput.value = '';
-    codigoInput.value = '';
-    precioInput.value = '';
-    stockInput.value = '';
-    renderLista();
-  }
-
-  async function actualizarNombre(i, valor){
-    const art = catalogo[categoriaActual][i];
-    art.nombre = valor;
-    const { error } = await supabaseClient.from('catalogo').update({ nombre: valor }).eq('id', art.id);
-    if(error){ alert('Error al actualizar: ' + error.message); return; }
-    mostrarHintGuardado('Cambios guardados');
-  }
-
-  async function actualizarCodigo(i, valor){
-    const art = catalogo[categoriaActual][i];
-    art.codigo = valor.trim();
-    const { error } = await supabaseClient.from('catalogo').update({ codigo: art.codigo }).eq('id', art.id);
-    if(error){ alert('Error al actualizar: ' + error.message); return; }
-    mostrarHintGuardado('Cambios guardados');
-  }
-
-  async function actualizarPrecio(i, valor){
-    const precio = parseFloat(valor);
-    const precioFinal = isNaN(precio) ? 0 : precio;
-    const art = catalogo[categoriaActual][i];
-    art.precio = precioFinal;
-    const { error } = await supabaseClient.from('catalogo').update({ precio: precioFinal }).eq('id', art.id);
-    if(error){ alert('Error al actualizar: ' + error.message); return; }
-    mostrarHintGuardado('Cambios guardados');
-  }
-
-  async function actualizarStock(i, valor){
-    let stock = parseInt(valor, 10);
-    if(isNaN(stock) || stock < 0) stock = 0;
-    const art = catalogo[categoriaActual][i];
-    art.stock = stock;
-    const { error } = await supabaseClient.from('catalogo').update({ stock }).eq('id', art.id);
-    if(error){ alert('Error al actualizar: ' + error.message); return; }
-    mostrarHintGuardado('Cambios guardados');
-    renderLista();
-  }
-
-  async function quitarArticulo(i){
-    const art = catalogo[categoriaActual][i];
-    const { error } = await supabaseClient.from('catalogo').delete().eq('id', art.id);
-    if(error){ alert('Error al eliminar: ' + error.message); return; }
-    catalogo[categoriaActual].splice(i, 1);
-    renderLista();
-  }
-
-  function renderLista(){
-    const cont = document.getElementById('lista-articulos');
-    const lista = catalogo[categoriaActual];
-    cont.innerHTML = '';
-
-    if(lista.length === 0){
-      cont.innerHTML = '<div class="empty-list">Aún no hay artículos en esta categoría</div>';
-      return;
-    }
-
-    lista.forEach((art, i) => {
-      const row = document.createElement('div');
-      row.className = 'articulo-row';
-      row.innerHTML = `
-        <div class="articulo-info">
-          <input class="articulo-nombre" type="text" value="${escaparHtml(art.nombre)}" onchange="actualizarNombre(${i}, this.value)">
-          <div class="articulo-precio-wrap">
-            <span>Cód.</span>
-            <input class="articulo-precio" type="text" value="${escaparHtml(art.codigo || '')}" onchange="actualizarCodigo(${i}, this.value)" style="width:80px;">
-            <span>Bs</span>
-            <input class="articulo-precio" type="number" value="${art.precio}" onchange="actualizarPrecio(${i}, this.value)">
-            <span>Stock</span>
-            <input class="articulo-precio" type="number" value="${art.stock || 0}" onchange="actualizarStock(${i}, this.value)" style="width:60px; color:${(art.stock||0) <= 3 ? 'var(--danger)' : 'var(--accent)'};">
-          </div>
-        </div>
-        <button class="articulo-remove" onclick="quitarArticulo(${i})">✕</button>
-      `;
-      cont.appendChild(row);
-    });
-  }
-
-  function escaparHtml(str){
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  cargarCatalogo();
-</script>
-
-
-<script>
-(function(){
-  var banner = document.getElementById('pwa-offline-banner');
-  function actualizarEstadoConexion(){
-    if(!banner) return;
-    banner.classList.toggle('show', !navigator.onLine);
-  }
-  window.addEventListener('online', actualizarEstadoConexion);
-  window.addEventListener('offline', actualizarEstadoConexion);
-  actualizarEstadoConexion();
-})();
-
-if('serviceWorker' in navigator){
-  window.addEventListener('load', function(){
-    navigator.serviceWorker.register('sw.js').catch(function(err){
-      console.warn('No se pudo registrar el service worker:', err);
-    });
-  });
-}
-</script>
+  </script>
 </body>
 </html>

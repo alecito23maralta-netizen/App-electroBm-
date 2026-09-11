@@ -415,7 +415,8 @@ async function verificarNotificacionesVendedor() {
 // NAVEGACIÓN
 // ------------------------------------------------------------
 $$('.nav-item').forEach(btn => btn.addEventListener('click', () => {
-  switchView(btn.dataset.view);
+  if (btn.dataset.view) switchView(btn.dataset.view);
+  if (btn.dataset.calc) abrirCalculadora(btn.dataset.calc);
   cerrarMenuMobile();
 }));
 $$('.nav-group-header').forEach(btn => btn.addEventListener('click', () => {
@@ -4326,4 +4327,145 @@ async function eliminarRegistro(tabla, id, callback) {
 
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+
+// ============================================================
+// CALCULADORAS: calefacción (estufas), agua caliente (termotanques)
+// y aire acondicionado — mismo motor de balance térmico para
+// calefacción y aires, con distinta unidad de salida (Kcal/h y BTU).
+// Disponible para admin y vendedores, desde Ventas → Calculadoras.
+// ============================================================
+const ZONA_CLIMA_BOLIVIA = {
+  'La Paz': 'frio', 'El Alto': 'frio', 'Oruro': 'frio', 'Potosí': 'frio', 'Uyuni': 'frio',
+  'Cochabamba': 'templado', 'Sucre': 'templado', 'Tarija': 'templado', 'Tupiza': 'templado', 'Camargo': 'templado',
+  'Santa Cruz de la Sierra': 'calido', 'Trinidad': 'calido', 'Cobija': 'calido', 'Montero': 'calido',
+  'Warnes': 'calido', 'Riberalta': 'calido', 'Yacuiba': 'calido', 'Villamontes': 'calido'
+};
+const COEF_ZONA_CLIMA = {
+  frio: { calefaccion: 45, refrigeracion: 25 },
+  templado: { calefaccion: 35, refrigeracion: 40 },
+  calido: { calefaccion: 25, refrigeracion: 55 }
+};
+const MULT_TIPO_AMBIENTE = { dormitorio: 1, bano: 0.85, living: 1.15, cocina: 1, oficina: 1.05 };
+const TAMANOS_ESTUFA_KCAL = [1500, 2000, 2500, 3000, 4000, 5000, 6000, 8000, 10000];
+const TAMANOS_AC_BTU = [5000, 6000, 9000, 12000, 18000, 24000, 30000, 36000];
+const TAMANOS_TERMOTANQUE_L = [40, 55, 85, 110, 130, 150, 200];
+
+function redondearATamano(valor, tamanos) {
+  return tamanos.find(t => t >= valor) || tamanos[tamanos.length - 1];
+}
+// Balance térmico simplificado: volumen del ambiente × coeficiente de la
+// zona climática × factor según el tipo de ambiente. Se usa tanto para
+// calefacción (Kcal/h) como para aire acondicionado (BTU/h, convertido).
+function calcularBalanceTermico(largo, ancho, altura, ciudad, tipoAmbiente) {
+  const zona = ZONA_CLIMA_BOLIVIA[ciudad] || 'templado';
+  const volumen = Math.max(0, largo) * Math.max(0, ancho) * Math.max(0, altura || 2.6);
+  const coef = COEF_ZONA_CLIMA[zona];
+  const mult = MULT_TIPO_AMBIENTE[tipoAmbiente] || 1;
+  return {
+    volumen,
+    kcalCalefaccion: Math.round(volumen * coef.calefaccion * mult),
+    btuRefrigeracion: Math.round(volumen * coef.refrigeracion * mult * 3.97) // 1 Kcal/h ≈ 3.97 BTU/h
+  };
+}
+function calcularTermotanque(personas, banosSimultaneos) {
+  const litros = personas * 25 + (banosSimultaneos - 1) * 25;
+  return redondearATamano(litros, TAMANOS_TERMOTANQUE_L);
+}
+
+const CALC_INFO = {
+  calefaccion: { titulo: 'Calefacción (Estufas)', icono: '🔥' },
+  agua: { titulo: 'Agua caliente (Termotanques)', icono: '🚿' },
+  aires: { titulo: 'Aire acondicionado', icono: '❄️' }
+};
+
+function abrirCalculadora(tipo) {
+  const info = CALC_INFO[tipo];
+  const ciudades = Object.keys(ZONA_CLIMA_BOLIVIA);
+
+  const camposAmbiente = `
+    <div class="field"><label>¿Qué ambiente vas a climatizar?</label>
+      <select id="calc-ambiente">
+        <option value="dormitorio">Dormitorio</option>
+        <option value="living">Living / Comedor</option>
+        <option value="cocina">Cocina</option>
+        <option value="bano">Baño</option>
+        <option value="oficina">Oficina</option>
+      </select>
+    </div>
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Largo (m)</label><input type="number" id="calc-largo" min="0" step="0.1" placeholder="Ej: 4" /></div>
+      <div class="field"><label>Ancho (m)</label><input type="number" id="calc-ancho" min="0" step="0.1" placeholder="Ej: 3" /></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Altura (m) — dejalo vacío para usar 2,6m estándar</label><input type="number" id="calc-altura" min="0" step="0.1" placeholder="2.6" /></div>
+    <div class="field" style="margin-top:10px"><label>Ciudad del cliente</label>
+      <select id="calc-ciudad">${ciudades.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select>
+    </div>
+  `;
+  const camposAgua = `
+    <div class="grid-2">
+      <div class="field"><label>Personas en el hogar</label>
+        <select id="calc-personas">${[1, 2, 3, 4, 5, 6].map(n => `<option value="${n}">${n}${n === 6 ? '+' : ''}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Baños de uso simultáneo</label>
+        <select id="calc-banos">${[1, 2, 3].map(n => `<option value="${n}">${n}${n === 3 ? '+' : ''}</option>`).join('')}</select>
+      </div>
+    </div>
+  `;
+
+  openModal(`
+    <div class="sheet-head"><h3>${info.icono} ${info.titulo}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <div id="calc-form">${tipo === 'agua' ? camposAgua : camposAmbiente}</div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cerrar</button>
+      <button class="btn btn-primary" id="calc-btn-calcular">Calcular</button>
+    </div>
+    <div id="calc-resultado"></div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+
+  $('#calc-btn-calcular').addEventListener('click', () => {
+    const resultadoCont = $('#calc-resultado');
+    let resultadoHtml, textoWa;
+
+    if (tipo === 'agua') {
+      const personas = Number($('#calc-personas').value);
+      const banos = Number($('#calc-banos').value);
+      const litros = calcularTermotanque(personas, banos);
+      resultadoHtml = `Termotanque recomendado: <strong>${litros} litros</strong> (${personas} persona${personas > 1 ? 's' : ''}, ${banos} baño${banos > 1 ? 's' : ''} simultáneo${banos > 1 ? 's' : ''}).`;
+      textoWa = `Hola! Según la calculadora de agua caliente de Electrodomésticos BM, para ${personas} persona(s) y ${banos} baño(s) de uso simultáneo se recomienda un termotanque de ${litros}L.`;
+    } else {
+      const largo = Number($('#calc-largo').value);
+      const ancho = Number($('#calc-ancho').value);
+      const altura = Number($('#calc-altura').value) || 2.6;
+      const ciudad = $('#calc-ciudad').value;
+      const ambiente = $('#calc-ambiente').value;
+      if (!largo || !ancho) {
+        resultadoCont.innerHTML = `<p style="color:#e5484d;font-size:13px;margin-top:10px">Completá el largo y el ancho del ambiente.</p>`;
+        return;
+      }
+      const r = calcularBalanceTermico(largo, ancho, altura, ciudad, ambiente);
+      const m2 = (largo * ancho).toFixed(1);
+      if (tipo === 'calefaccion') {
+        const kcal = redondearATamano(r.kcalCalefaccion, TAMANOS_ESTUFA_KCAL);
+        resultadoHtml = `Estufa recomendada: <strong>${kcal.toLocaleString('es-BO')} Kcal/h</strong> para ${m2} m² en ${escapeHtml(ciudad)}.`;
+        textoWa = `Hola! Según la calculadora de calefacción de Electrodomésticos BM, para un ambiente de ${largo}x${ancho}x${altura}m en ${ciudad} se recomienda una estufa de ${kcal} Kcal/h.`;
+      } else {
+        const btu = redondearATamano(r.btuRefrigeracion, TAMANOS_AC_BTU);
+        resultadoHtml = `Aire acondicionado recomendado: <strong>${btu.toLocaleString('es-BO')} BTU</strong> para ${m2} m² en ${escapeHtml(ciudad)}.`;
+        textoWa = `Hola! Según la calculadora de aire acondicionado de Electrodomésticos BM, para un ambiente de ${largo}x${ancho}x${altura}m en ${ciudad} se recomienda un equipo de ${btu} BTU.`;
+      }
+    }
+
+    resultadoCont.innerHTML = `
+      <div class="calc-resultado-box">
+        <div class="calc-resultado-texto">${resultadoHtml}</div>
+        <button class="btn btn-primary" id="calc-btn-wa" style="width:100%;justify-content:center;margin-top:10px">📤 Enviar al cliente por WhatsApp</button>
+      </div>
+    `;
+    resultadoCont.querySelector('#calc-btn-wa').addEventListener('click', () => {
+      window.open(`https://wa.me/?text=${encodeURIComponent(textoWa)}`, '_blank');
+    });
+  });
 }

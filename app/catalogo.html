@@ -141,6 +141,36 @@
   .pub-consulta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   @media (max-width: 420px) { .pub-consulta-grid { grid-template-columns: 1fr; } }
 
+  /* -------- Botón flotante de la calculadora (arriba del de BAM) -------- */
+  .calc-flotante-cont {
+    position: fixed; bottom: 92px; right: 18px; z-index: 150;
+    display: flex; align-items: center; gap: 10px; cursor: pointer;
+  }
+  .calc-flotante { display: flex; align-items: center; justify-content: center; font-size: 26px; }
+  @media (max-width: 480px) {
+    .calc-flotante-cont { bottom: 86px; }
+  }
+
+  /* -------- Menú de la calculadora (elegir qué calcular) -------- */
+  .calc-menu { display: flex; flex-direction: column; gap: 8px; }
+  .calc-menu-item {
+    display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  .calc-menu-item:hover { border-color: #00e5a044; }
+  .calc-menu-icono { font-size: 22px; flex-shrink: 0; }
+  .calc-menu-item span:nth-child(2) { flex: 1; }
+  .calc-menu-flecha { color: var(--accent); flex-shrink: 0; }
+
+  /* -------- Resultado de la calculadora -------- */
+  .calc-resultado-box {
+    margin-top: 16px; background: var(--accent-dim); border: 1px solid #00e5a044;
+    border-radius: 12px; padding: 14px;
+  }
+  .calc-resultado-texto { font-size: 14px; color: #fff; line-height: 1.5; }
+  .calc-resultado-texto strong { color: var(--accent); }
+
   /* -------- CTA final -------- */
   .pub-cta {
     max-width: 1100px; margin: 10px auto 50px; padding: 0 20px;

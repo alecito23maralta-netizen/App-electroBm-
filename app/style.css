@@ -344,6 +344,14 @@ main.view { padding: 18px; max-width: 900px; margin: 0 auto; }
 
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
+/* Resultado de las calculadoras (calefacción / agua / aires) */
+.calc-resultado-box {
+  margin-top: 14px; background: var(--accent-dim); border: 1px solid #00e5a044;
+  border-radius: var(--radius-sm); padding: 14px;
+}
+.calc-resultado-texto { font-size: 13.5px; color: var(--text); line-height: 1.5; }
+.calc-resultado-texto strong { color: var(--accent); }
+
 /* Stats chips */
 .stats-row { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 16px; }
 .stat-chip {

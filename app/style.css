@@ -828,6 +828,27 @@ button.card:hover { border-color: var(--accent); background: var(--surface-2); }
 .comp-firma-linea { border-top: 1px solid #9ca3af; margin-bottom: 6px; }
 
 /* ============================================================
+   CERTIFICADO DE GARANTÍA (vista previa / PDF)
+   ============================================================ */
+.gar-producto-box {
+  background: #f3f4f6; border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;
+}
+.gar-producto-titulo { font-weight: 700; font-size: 13.5px; color: #14161c; margin-bottom: 6px; }
+.gar-vigencia-box {
+  display: flex; align-items: center; gap: 14px; background: #e6faf3;
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 16px;
+}
+.gar-vigencia-col { flex: 1; }
+.gar-vigencia-flecha { color: #00b384; font-size: 16px; font-weight: 700; }
+.gar-vigencia-label { font-size: 10.5px; color: #6b7280; text-transform: uppercase; letter-spacing: .03em; }
+.gar-vigencia-val { font-size: 13px; font-weight: 700; color: #14161c; margin-top: 2px; }
+.gar-condiciones-titulo { font-weight: 700; font-size: 12px; color: #14161c; margin-bottom: 6px; }
+.gar-condiciones-box {
+  font-size: 11px; line-height: 1.6; color: #374151; background: #fafafa;
+  border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px;
+}
+
+/* ============================================================
    CAJA: layout de dos columnas con panel lateral de recibos
    ============================================================ */
 .caja-layout { display: grid; grid-template-columns: 1fr; gap: 20px; }

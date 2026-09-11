@@ -711,3 +711,17 @@ create policy "mensajes_insert" on public.mensajes
     usuario_id = auth.uid()
     and (conversacion_con is null or conversacion_con = auth.uid() or public.is_admin())
   );
+
+-- ============================================================
+-- ACTUALIZACIÓN: Certificado de garantía — número correlativo,
+-- datos del producto/compra para el impreso, condiciones de
+-- cobertura y firma del cliente (igual que en comprobantes).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.garantias add column if not exists numero integer;
+alter table public.garantias add column if not exists cliente_ci text not null default '';
+alter table public.garantias add column if not exists numero_serie text not null default '';
+alter table public.garantias add column if not exists precio numeric(12,2);
+alter table public.garantias add column if not exists condiciones text not null default '';
+alter table public.garantias add column if not exists firma_base64 text;
+alter table public.garantias add column if not exists registrado_por_nombre text not null default '';

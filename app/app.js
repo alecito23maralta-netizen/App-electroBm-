@@ -2539,10 +2539,30 @@ function abrirFormPromocion(existing) {
 // ============================================================
 let busquedaGarantias = '';
 
+const CONDICIONES_GARANTIA_DEFAULT = `Esta garantía cubre defectos de fabricación del producto arriba descrito durante el período indicado, contado desde la fecha de compra. Incluye la reparación o el cambio de piezas defectuosas sin costo para el cliente.
+
+No cubre: daños por mal uso, golpes o caídas, humedad o líquidos, variaciones de voltaje, desgaste normal de piezas (focos, filtros, empaques, etc.) ni reparaciones realizadas por personal ajeno a Electrodomésticos BM.
+
+Para hacer válida la garantía, el cliente debe presentar este certificado junto con su comprobante de compra.`;
+
 function estadoGarantia(g) {
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   const venc = new Date(g.fecha_vencimiento + 'T00:00:00');
   return venc >= hoy ? 'vigente' : 'vencida';
+}
+
+// Duración legible entre dos fechas ISO (yyyy-mm-dd), en meses o días según
+// corresponda — para mostrar "Cobertura: 6 meses" en el certificado.
+function duracionLegible(fechaInicioISO, fechaFinISO) {
+  if (!fechaInicioISO || !fechaFinISO) return '';
+  const ini = new Date(fechaInicioISO + 'T00:00:00');
+  const fin = new Date(fechaFinISO + 'T00:00:00');
+  if (isNaN(ini) || isNaN(fin) || fin <= ini) return '';
+  let meses = (fin.getFullYear() - ini.getFullYear()) * 12 + (fin.getMonth() - ini.getMonth());
+  if (fin.getDate() < ini.getDate()) meses -= 1;
+  if (meses >= 1) return `${meses} ${meses === 1 ? 'mes' : 'meses'}`;
+  const dias = Math.round((fin - ini) / 86400000);
+  return `${dias} ${dias === 1 ? 'día' : 'días'}`;
 }
 
 async function cargarGarantias() {
@@ -2555,7 +2575,7 @@ async function renderGarantias() {
   const el = $('#view-garantias');
   el.innerHTML = `
     <div class="section-head">
-      <div><h2>Garantías</h2><p class="sub">Registrá hasta qué fecha queda cubierta cada venta</p></div>
+      <div><h2>Garantías</h2><p class="sub">Registrá la cobertura y generá el certificado firmado para el cliente</p></div>
       <button class="btn btn-primary" id="btn-nueva-garantia">+ Registrar garantía</button>
     </div>
     <div class="field" style="margin-bottom:14px">
@@ -2584,18 +2604,22 @@ function renderTablaGarantias() {
   }
 
   cont.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Cliente</th><th>Producto</th><th>Venta</th><th>Vence</th><th>Estado</th><th>Acciones</th></tr></thead>
+    <thead><tr><th>N°</th><th>Cliente</th><th>Producto</th><th>Venta</th><th>Vence</th><th>Estado</th><th>Acciones</th></tr></thead>
     <tbody>
       ${lista.map(g => {
         const estado = estadoGarantia(g);
         return `
         <tr>
+          <td>${g.numero ? '#' + String(g.numero).padStart(4, '0') : '—'}</td>
           <td>${escapeHtml(g.cliente_nombre)}${g.cliente_telefono ? `<div style="color:var(--text-dim);font-size:11px;margin-top:1px">${escapeHtml(g.cliente_telefono)}</div>` : ''}</td>
           <td>${escapeHtml(g.producto_descripcion)}</td>
           <td>${g.venta_numero ? '#' + g.venta_numero : '—'}</td>
           <td>${fecha(g.fecha_vencimiento)}</td>
           <td><span class="badge ${estado === 'vigente' ? 'badge-ok' : 'badge-rechazada'}">${estado === 'vigente' ? 'Vigente' : 'Vencida'}</span></td>
           <td><div class="row-actions">
+            <button class="icon-btn" data-act="previa" data-id="${g.id}" title="Ver certificado">👁</button>
+            <button class="icon-btn" data-act="pdf" data-id="${g.id}" title="Descargar PDF">⬇</button>
+            <button class="icon-btn" data-act="wa" data-id="${g.id}" title="WhatsApp">📷</button>
             <button class="icon-btn" data-act="eliminar" data-id="${g.id}" title="Eliminar">🗑</button>
           </div></td>
         </tr>
@@ -2603,14 +2627,21 @@ function renderTablaGarantias() {
     </tbody>
   </table></div>`;
 
-  cont.querySelectorAll('[data-act="eliminar"]').forEach(btn => {
+  cont.querySelectorAll('[data-act]').forEach(btn => {
+    const g = garantiasCache.find(x => x.id === btn.dataset.id);
     btn.addEventListener('click', async () => {
-      if (!confirm('¿Eliminar esta garantía?')) return;
-      const { error } = await sb.from('garantias').delete().eq('id', btn.dataset.id);
-      if (error) { toast('Error: ' + error.message, 'error'); return; }
-      toast('Garantía eliminada');
-      await cargarGarantias();
-      renderTablaGarantias();
+      const act = btn.dataset.act;
+      if (act === 'previa') abrirVistaPreviaGarantia(g);
+      if (act === 'pdf') generarPdfGarantia(g);
+      if (act === 'wa') compartirImagenGarantiaWhatsapp(g);
+      if (act === 'eliminar') {
+        if (!confirm('¿Eliminar esta garantía?')) return;
+        const { error } = await sb.from('garantias').delete().eq('id', g.id);
+        if (error) { toast('Error: ' + error.message, 'error'); return; }
+        toast('Garantía eliminada');
+        await cargarGarantias();
+        renderTablaGarantias();
+      }
     });
   });
 }
@@ -2633,7 +2664,13 @@ async function abrirFormGarantia() {
 
     <div class="grid-2" style="margin-top:10px">
       <div class="field"><label>Cliente *</label><input id="g-cliente" required /></div>
-      <div class="field"><label>Teléfono</label><input id="g-telefono" /></div>
+      <div class="field"><label>CI / NIT</label><input id="g-ci" placeholder="Cédula de identidad" /></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Teléfono</label><input id="g-telefono" /></div>
+
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>N° de serie / IMEI</label><input id="g-serie" placeholder="Si el producto lo tiene" /></div>
+      <div class="field"><label>Precio (Bs)</label><input type="number" id="g-precio" min="0" step="0.01" /></div>
     </div>
 
     <div class="grid-2" style="margin-top:10px">
@@ -2641,11 +2678,24 @@ async function abrirFormGarantia() {
       <div class="field"><label>Garantía vence el *</label><input type="date" id="g-fecha-vencimiento" required /></div>
     </div>
 
-    <div class="field" style="margin-top:10px"><label>Notas (opcional)</label><input id="g-notas" placeholder="Ej: 6 meses por defectos de fábrica" /></div>
+    <div class="field" style="margin-top:10px"><label>Notas internas (opcional)</label><input id="g-notas" placeholder="Ej: 6 meses por defectos de fábrica" /></div>
+
+    <div class="field" style="margin-top:10px"><label>Condiciones de la garantía (se imprimen en el certificado)</label>
+      <textarea id="g-condiciones" rows="6">${escapeHtml(CONDICIONES_GARANTIA_DEFAULT)}</textarea>
+    </div>
+
+    <div class="field" style="margin-top:12px">
+      <label>Firma del cliente (opcional acá — también se puede firmar después, desde 👁 Ver certificado)</label>
+      <div class="firma-box">
+        <canvas id="firma-canvas" class="firma-canvas"></canvas>
+        <button type="button" class="firma-borrar" id="btn-borrar-firma" title="Borrar firma">🗑</button>
+      </div>
+      <p style="font-size:11px;color:var(--text-faint);margin-top:4px">Dibujá la firma con el dedo o el mouse — el cliente firma como respaldo de que recibió y aceptó los términos de esta garantía.</p>
+    </div>
 
     <div class="form-actions">
       <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
-      <button class="btn btn-primary" id="btn-guardar">💾 Guardar garantía</button>
+      <button class="btn btn-primary" id="btn-guardar">💾 Guardar y generar certificado</button>
     </div>
   `);
 
@@ -2653,6 +2703,54 @@ async function abrirFormGarantia() {
 
   $('#sheet-close').addEventListener('click', closeModal);
   $('#btn-cancelar').addEventListener('click', closeModal);
+
+  const firmaCanvas = $('#firma-canvas');
+  const firmaCtx = firmaCanvas.getContext('2d');
+  function ajustarTamanoCanvas() {
+    const rect = firmaCanvas.getBoundingClientRect();
+    firmaCanvas.width = rect.width * 2;
+    firmaCanvas.height = rect.height * 2;
+    firmaCtx.scale(2, 2);
+    firmaCtx.strokeStyle = '#14161c';
+    firmaCtx.lineWidth = 2;
+    firmaCtx.lineCap = 'round';
+    firmaCtx.lineJoin = 'round';
+  }
+  setTimeout(ajustarTamanoCanvas, 0);
+
+  let dibujando = false, huboTrazo = false;
+  function posDesdeEvento(e) {
+    const rect = firmaCanvas.getBoundingClientRect();
+    const punto = e.touches ? e.touches[0] : e;
+    return { x: punto.clientX - rect.left, y: punto.clientY - rect.top };
+  }
+  function empezarTrazo(e) {
+    e.preventDefault();
+    dibujando = true; huboTrazo = true;
+    const { x, y } = posDesdeEvento(e);
+    firmaCtx.beginPath();
+    firmaCtx.moveTo(x, y);
+  }
+  function seguirTrazo(e) {
+    if (!dibujando) return;
+    e.preventDefault();
+    const { x, y } = posDesdeEvento(e);
+    firmaCtx.lineTo(x, y);
+    firmaCtx.stroke();
+  }
+  function terminarTrazo() { dibujando = false; }
+
+  firmaCanvas.addEventListener('mousedown', empezarTrazo);
+  firmaCanvas.addEventListener('mousemove', seguirTrazo);
+  window.addEventListener('mouseup', terminarTrazo);
+  firmaCanvas.addEventListener('touchstart', empezarTrazo, { passive: false });
+  firmaCanvas.addEventListener('touchmove', seguirTrazo, { passive: false });
+  firmaCanvas.addEventListener('touchend', terminarTrazo);
+
+  $('#btn-borrar-firma').addEventListener('click', () => {
+    firmaCtx.clearRect(0, 0, firmaCanvas.width, firmaCanvas.height);
+    huboTrazo = false;
+  });
 
   $('#g-venta-busqueda').addEventListener('change', (e) => {
     const m = e.target.value.match(/^#(\d+)/);
@@ -2674,6 +2772,13 @@ async function abrirFormGarantia() {
     $('#g-cliente').value = ventaSeleccionada.cliente_nombre || '';
     $('#g-telefono').value = ventaSeleccionada.cliente_telefono || '';
     $('#g-fecha-compra').value = (ventaSeleccionada.created_at || '').slice(0, 10);
+    if (items.length === 1) selProducto.dispatchEvent(new Event('change'));
+  });
+
+  $('#g-producto').addEventListener('change', (e) => {
+    const items = ventaSeleccionada && Array.isArray(ventaSeleccionada.items) ? ventaSeleccionada.items : [];
+    const it = items[e.target.value];
+    $('#g-precio').value = it ? it.subtotal ?? it.precio_unitario ?? '' : '';
   });
 
   $('#btn-guardar').addEventListener('click', async () => {
@@ -2687,26 +2792,236 @@ async function abrirFormGarantia() {
     if (!producto_descripcion) { toast('Elegí una venta y un producto', 'error'); return; }
     if (!fecha_vencimiento) { toast('Falta la fecha de vencimiento de la garantía', 'error'); return; }
 
+    const numeroSiguiente = garantiasCache.length > 0 ? Math.max(...garantiasCache.map(g => g.numero || 0)) + 1 : 1;
+
     const payload = {
+      numero: numeroSiguiente,
       venta_id: ventaSeleccionada?.id || null,
       venta_numero: ventaSeleccionada?.numero || null,
       cliente_nombre,
+      cliente_ci: $('#g-ci').value.trim(),
       cliente_telefono: $('#g-telefono').value.trim(),
       producto_descripcion,
+      numero_serie: $('#g-serie').value.trim(),
+      precio: $('#g-precio').value ? Number($('#g-precio').value) : null,
       fecha_compra: $('#g-fecha-compra').value || new Date().toISOString().slice(0, 10),
       fecha_vencimiento,
       notas: $('#g-notas').value.trim(),
-      registrado_por: profile.id
+      condiciones: $('#g-condiciones').value.trim(),
+      firma_base64: huboTrazo ? firmaCanvas.toDataURL('image/png') : null,
+      registrado_por: profile.id,
+      registrado_por_nombre: profile.nombre || profile.usuario
     };
 
-    const { error } = await sb.from('garantias').insert(payload);
+    const { data: nueva, error } = await sb.from('garantias').insert(payload).select().single();
     if (error) { toast('Error al guardar: ' + error.message, 'error'); return; }
 
     toast('Garantía registrada ✓');
     closeModal();
     await cargarGarantias();
     renderTablaGarantias();
+    abrirVistaPreviaGarantia(nueva);
   });
+}
+
+// ------------------------------------------------------------
+// CERTIFICADO DE GARANTÍA — vista previa, PDF y envío por WhatsApp
+// ------------------------------------------------------------
+function abrirVistaPreviaGarantia(g) {
+  const numeroFmt = g.numero ? `N° ${String(g.numero).padStart(4, '0')}` : '';
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="docprev-overlay" id="docprev-overlay">
+      <div class="docprev-topbar">
+        <span>Vista previa — Certificado de garantía ${numeroFmt}</span>
+        <div class="docprev-actions">
+          <button class="docprev-btn docprev-btn-pdf" id="docprev-pdf">⬇ Descargar PDF</button>
+          <button class="docprev-btn docprev-btn-wa" id="docprev-wa">📷 WhatsApp</button>
+          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
+        </div>
+      </div>
+      <div class="docprev-scroll">
+        <div class="docprev-paper" id="docprev-paper-el">
+          ${certificadoGarantiaHtml(g)}
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('docprev-close').addEventListener('click', () => document.getElementById('docprev-overlay').remove());
+  document.getElementById('docprev-pdf').addEventListener('click', () => generarPdfGarantia(g));
+  document.getElementById('docprev-wa').addEventListener('click', () => compartirImagenGarantiaWhatsapp(g));
+}
+
+function certificadoGarantiaHtml(g) {
+  const estado = estadoGarantia(g);
+  const duracion = duracionLegible(g.fecha_compra, g.fecha_vencimiento);
+  return `
+    <div class="docprev-header">
+      <div class="docprev-brand">
+        <div class="docprev-logo">BM</div>
+        <div>
+          <div class="docprev-brand-name">ELECTRODOMÉSTICOS BM</div>
+          <div class="docprev-brand-sub">Bolivia</div>
+        </div>
+      </div>
+      <div class="docprev-doc-info">
+        <div class="docprev-doc-title">CERTIFICADO DE GARANTÍA</div>
+        ${g.numero ? `<div class="docprev-doc-num">N° ${String(g.numero).padStart(4, '0')}</div>` : ''}
+        <div class="docprev-doc-date">${fecha(g.created_at || g.fecha_compra)}</div>
+      </div>
+    </div>
+    <div class="docprev-divider"></div>
+
+    <div class="docprev-fields">
+      <div><span class="docprev-flabel">Cliente:</span> ${escapeHtml(g.cliente_nombre)}</div>
+      <div><span class="docprev-flabel">CI / NIT:</span> ${escapeHtml(g.cliente_ci || '—')}</div>
+      <div><span class="docprev-flabel">Teléfono:</span> ${escapeHtml(g.cliente_telefono || '—')}</div>
+      <div><span class="docprev-flabel">N° de venta:</span> ${g.venta_numero ? '#' + g.venta_numero : '—'}</div>
+    </div>
+
+    <div class="gar-producto-box">
+      <div class="gar-producto-titulo">${escapeHtml(g.producto_descripcion)}</div>
+      <div class="docprev-fields" style="margin-bottom:0">
+        <div><span class="docprev-flabel">N° de serie / IMEI:</span> ${escapeHtml(g.numero_serie || '—')}</div>
+        <div><span class="docprev-flabel">Precio:</span> ${g.precio != null ? money(g.precio) : '—'}</div>
+      </div>
+    </div>
+
+    <div class="gar-vigencia-box">
+      <div class="gar-vigencia-col">
+        <div class="gar-vigencia-label">Fecha de compra</div>
+        <div class="gar-vigencia-val">${fecha(g.fecha_compra)}</div>
+      </div>
+      <div class="gar-vigencia-flecha">→</div>
+      <div class="gar-vigencia-col">
+        <div class="gar-vigencia-label">Garantía vence</div>
+        <div class="gar-vigencia-val">${fecha(g.fecha_vencimiento)}</div>
+      </div>
+      <div class="gar-vigencia-col" style="text-align:right">
+        ${duracion ? `<div class="gar-vigencia-label">Cobertura</div><div class="gar-vigencia-val">${duracion}</div>` : ''}
+        <span class="badge ${estado === 'vigente' ? 'badge-ok' : 'badge-rechazada'}" style="margin-top:4px;display:inline-block">${estado === 'vigente' ? 'Vigente' : 'Vencida'}</span>
+      </div>
+    </div>
+
+    <div class="gar-condiciones-titulo">Condiciones de la garantía</div>
+    <div class="gar-condiciones-box">${escapeHtml(g.condiciones || CONDICIONES_GARANTIA_DEFAULT).replace(/\n/g, '<br>')}</div>
+
+    ${g.notas ? `<div class="docprev-fields" style="margin-top:10px"><div><span class="docprev-flabel">Notas:</span> ${escapeHtml(g.notas)}</div></div>` : ''}
+
+    <div class="comp-firma-row">
+      <div class="comp-firma">
+        ${g.firma_base64 ? `<img src="${g.firma_base64}" class="comp-firma-img" />` : ''}
+        <div class="comp-firma-linea"></div>Firma del cliente${g.cliente_ci ? `<br>CI: ${escapeHtml(g.cliente_ci)}` : ''}
+      </div>
+      <div class="comp-firma"><div class="comp-firma-linea"></div>Registró<br><strong>${escapeHtml((g.registrado_por_nombre || '').toUpperCase())}</strong></div>
+    </div>
+
+    <div class="docprev-gracias">Conserve este certificado junto a su comprobante de compra — es necesario para hacer válido cualquier reclamo de garantía.</div>
+  `;
+}
+
+function generarPdfGarantia(g) {
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF();
+  const estado = estadoGarantia(g);
+  const duracion = duracionLegible(g.fecha_compra, g.fecha_vencimiento);
+
+  pdf.setFontSize(16); pdf.setFont(undefined, 'bold'); pdf.setTextColor(20, 20, 20);
+  pdf.text('Electrodomésticos BM', 14, 18);
+  pdf.setFontSize(9); pdf.setFont(undefined, 'normal'); pdf.setTextColor(107, 114, 128);
+  pdf.text('Bolivia', 14, 24);
+
+  pdf.setFontSize(13); pdf.setFont(undefined, 'bold'); pdf.setTextColor(220, 38, 38);
+  pdf.text('CERTIFICADO DE GARANTÍA', 196, 18, { align: 'right' });
+  pdf.setFontSize(11);
+  if (g.numero) pdf.text(`N° ${String(g.numero).padStart(4, '0')}`, 196, 25, { align: 'right' });
+  pdf.setFontSize(9); pdf.setFont(undefined, 'normal'); pdf.setTextColor(107, 114, 128);
+  pdf.text(fecha(g.created_at || g.fecha_compra), 196, 30, { align: 'right' });
+
+  pdf.setDrawColor(20, 20, 20); pdf.line(14, 34, 196, 34);
+
+  pdf.setFontSize(10); pdf.setTextColor(20, 20, 20);
+  pdf.text(`Cliente: ${g.cliente_nombre}`, 14, 43);
+  pdf.text(`CI/NIT: ${g.cliente_ci || '—'}`, 130, 43);
+  pdf.text(`Teléfono: ${g.cliente_telefono || '—'}`, 14, 49);
+  pdf.text(`N° de venta: ${g.venta_numero ? '#' + g.venta_numero : '—'}`, 130, 49);
+
+  let y = 60;
+  pdf.setFillColor(243, 244, 246);
+  pdf.rect(14, y, 182, 22, 'F');
+  pdf.setFont(undefined, 'bold'); pdf.setFontSize(10.5); pdf.setTextColor(20, 20, 20);
+  pdf.text(g.producto_descripcion, 18, y + 8, { maxWidth: 174 });
+  pdf.setFont(undefined, 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(107, 114, 128);
+  pdf.text(`N° de serie/IMEI: ${g.numero_serie || '—'}    Precio: ${g.precio != null ? money(g.precio) : '—'}`, 18, y + 17);
+  y += 30;
+
+  pdf.setFillColor(230, 250, 243);
+  pdf.rect(14, y, 182, 20, 'F');
+  pdf.setFontSize(8.5); pdf.setTextColor(107, 114, 128);
+  pdf.text('Fecha de compra', 18, y + 7);
+  pdf.text('Garantía vence', 85, y + 7);
+  if (duracion) pdf.text('Cobertura', 150, y + 7);
+  pdf.setFont(undefined, 'bold'); pdf.setFontSize(10.5); pdf.setTextColor(20, 20, 20);
+  pdf.text(fecha(g.fecha_compra), 18, y + 15);
+  pdf.text(fecha(g.fecha_vencimiento), 85, y + 15);
+  if (duracion) pdf.text(duracion, 150, y + 15);
+  pdf.setFontSize(9); pdf.setTextColor(estado === 'vigente' ? 5 : 220, estado === 'vigente' ? 150 : 38, estado === 'vigente' ? 105 : 38);
+  pdf.text(estado === 'vigente' ? 'VIGENTE' : 'VENCIDA', 178, y + 15, { align: 'right' });
+  y += 30;
+
+  pdf.setFont(undefined, 'bold'); pdf.setFontSize(10); pdf.setTextColor(20, 20, 20);
+  pdf.text('Condiciones de la garantía', 14, y); y += 6;
+  pdf.setFont(undefined, 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(55, 65, 81);
+  const condiciones = (g.condiciones || CONDICIONES_GARANTIA_DEFAULT).split('\n').filter(l => l.trim());
+  condiciones.forEach(parrafo => {
+    const lineas = pdf.splitTextToSize(parrafo, 182);
+    pdf.text(lineas, 14, y);
+    y += lineas.length * 4.2 + 3;
+  });
+
+  if (g.notas) { pdf.setFont(undefined, 'italic'); pdf.text(`Notas: ${g.notas}`, 14, y, { maxWidth: 182 }); y += 8; }
+
+  y = Math.max(y + 14, 245);
+  if (g.firma_base64) {
+    try { pdf.addImage(g.firma_base64, 'PNG', 25, y - 16, 50, 16); } catch (e) { /* firma inválida, seguimos sin ella */ }
+  }
+  pdf.setDrawColor(150, 150, 150);
+  pdf.line(20, y, 85, y); pdf.line(125, y, 190, y);
+  pdf.setFontSize(8.5); pdf.setTextColor(20, 20, 20);
+  pdf.text('Firma del cliente', 20, y + 6);
+  pdf.text('Registró', 125, y + 6);
+  pdf.setFont(undefined, 'bold');
+  pdf.text((g.registrado_por_nombre || '').toUpperCase(), 125, y + 11);
+
+  pdf.setFont(undefined, 'italic'); pdf.setFontSize(8); pdf.setTextColor(31, 41, 55);
+  pdf.text('Conserve este certificado junto a su comprobante de compra — es necesario para hacer válido cualquier reclamo.', 105, y + 22, { align: 'center', maxWidth: 175 });
+
+  pdf.save(`Garantia_${g.numero ? String(g.numero).padStart(4, '0') + '_' : ''}${(g.cliente_nombre || '').replace(/\s+/g, '_')}.pdf`);
+}
+
+async function compartirImagenGarantiaWhatsapp(g) {
+  const yaAbierto = document.getElementById('docprev-overlay');
+  if (yaAbierto) {
+    await generarYCompartirGarantiaImagen(g);
+    return;
+  }
+  abrirVistaPreviaGarantia(g);
+  setTimeout(() => generarYCompartirGarantiaImagen(g), 250);
+}
+
+async function generarYCompartirGarantiaImagen(g) {
+  const elPapel = document.getElementById('docprev-paper-el');
+  if (!elPapel || typeof html2canvas === 'undefined') return;
+  try {
+    const canvas = await html2canvas(elPapel, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const texto = `*Certificado de garantía ${g.numero ? 'N° ' + String(g.numero).padStart(4, '0') : ''} — Electrodomésticos BM*\nCliente: ${g.cliente_nombre}\nProducto: ${g.producto_descripcion}\nVence: ${fecha(g.fecha_vencimiento)}`;
+    if (blob) {
+      const file = new File([blob], `garantia_${g.numero || g.id}.png`, { type: 'image/png' });
+      await compartirArchivosWhatsapp({ files: [file], texto, titulo: 'Certificado de garantía', numeroWa: (g.cliente_telefono || '').replace(/[^0-9]/g, '') });
+    }
+  } catch (e) {
+    toast('No se pudo generar la imagen del certificado', 'error');
+  }
 }
 
 // ============================================================

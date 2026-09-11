@@ -3,7 +3,7 @@
 // abra al instante y sea instalable. Las llamadas a Supabase (datos en
 // vivo) y los scripts de terceros (CDN) NUNCA se sirven desde caché.
 
-const CACHE_VERSION = 'bm-app-v2';
+const CACHE_VERSION = 'bm-app-v3';
 const APP_SHELL = [
   'index.html',
   'catalogo.html',

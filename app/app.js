@@ -141,6 +141,7 @@ async function iniciarApp() {
   $('#role-chip').classList.toggle('admin', profile.rol === 'admin');
   $('#nav-usuarios').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-inventario').style.display = profile.rol === 'admin' ? '' : 'none';
+  $('#nav-importar-productos').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-caja').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-garantias').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-group-gestion').style.display = profile.rol === 'admin' ? '' : 'none';
@@ -417,6 +418,7 @@ async function verificarNotificacionesVendedor() {
 $$('.nav-item').forEach(btn => btn.addEventListener('click', () => {
   if (btn.dataset.view) switchView(btn.dataset.view);
   if (btn.dataset.calc) abrirCalculadora(btn.dataset.calc);
+  if (btn.dataset.importar) abrirImportadorProductos();
   cerrarMenuMobile();
 }));
 $$('.nav-group-header').forEach(btn => btn.addEventListener('click', () => {
@@ -829,6 +831,58 @@ function recalcularTotal() {
   total = Math.max(0, total * (1 - descPct) * (1 - descAdicPct));
   const elTotal = $('#items-total-val');
   if (elTotal) elTotal.textContent = money(total);
+  mostrarAvisoDescuentoMaximo(sub, total);
+}
+
+// El menor descuento_maximo_pct entre los productos del carrito que
+// tengan un límite definido (null = sin límite en ese producto). Si
+// ningún ítem del carrito tiene un producto del catálogo con límite
+// definido, devuelve null (sin restricción).
+function descuentoMaximoPermitidoCarrito() {
+  const conLimite = itemsForm
+    .filter(it => it.producto_id)
+    .map(it => productosCache.find(p => p.id === it.producto_id))
+    .filter(p => p && p.descuento_maximo_pct != null);
+  if (conLimite.length === 0) return null;
+  return Math.min(...conLimite.map(p => Number(p.descuento_maximo_pct)));
+}
+
+function descuentoEfectivoPct(subtotal, total) {
+  if (subtotal <= 0) return 0;
+  return Math.max(0, (1 - total / subtotal) * 100);
+}
+
+function mostrarAvisoDescuentoMaximo(subtotal, total) {
+  const cont = $('#items-total-val')?.closest('.items-total');
+  if (!cont) return;
+  let aviso = document.getElementById('aviso-descuento-max');
+  const maximo = descuentoMaximoPermitidoCarrito();
+  if (maximo == null) { if (aviso) aviso.remove(); return; }
+  if (!aviso) {
+    aviso = document.createElement('p');
+    aviso.id = 'aviso-descuento-max';
+    aviso.style.cssText = 'font-size:12px;margin-top:6px';
+    cont.insertAdjacentElement('afterend', aviso);
+  }
+  const efectivo = descuentoEfectivoPct(subtotal, total);
+  const excedido = efectivo > maximo + 0.01;
+  aviso.style.color = excedido ? 'var(--accent-2)' : 'var(--text-dim)';
+  aviso.textContent = excedido
+    ? `⚠️ Superaste el descuento máximo permitido para estos productos (${maximo}%) — llevás ${efectivo.toFixed(1)}%.${profile.rol === 'admin' ? ' Como admin podés continuar.' : ' Bajá el descuento o pedile autorización al administrador.'}`
+    : `Descuento máximo permitido para estos productos: ${maximo}% (llevás ${efectivo.toFixed(1)}%).`;
+}
+
+// El admin no tiene tope (es quien autoriza igual todo lo demás). Para
+// vendedores, bloquea el guardado si el descuento efectivo supera el
+// mínimo de los descuento_maximo_pct de los productos del carrito.
+function bloqueadoPorDescuentoMaximo(subtotal, total) {
+  if (profile.rol === 'admin') return false;
+  const maximo = descuentoMaximoPermitidoCarrito();
+  if (maximo == null) return false;
+  const efectivo = descuentoEfectivoPct(subtotal, total);
+  if (efectivo <= maximo + 0.01) return false;
+  toast(`El descuento máximo permitido para estos productos es ${maximo}% — estás dando ${efectivo.toFixed(1)}%. Pedile autorización al administrador.`, 'error');
+  return true;
 }
 
 async function guardarCotizacion() {
@@ -849,6 +903,7 @@ async function guardarCotizacion() {
   const descuento_adicional_pct = Number($('#f-desc-adic-pct')?.value || 0);
   let total = Math.max(0, subtotal - descuento);
   total = Math.max(0, total * (1 - descuento_pct / 100) * (1 - descuento_adicional_pct / 100));
+  if (bloqueadoPorDescuentoMaximo(subtotal, total)) return;
   const telefono = $('#f-telefono').value.trim();
   const facturar_a = $('#f-facturar').value.trim();
   const cliente_nit = $('#f-nit').value.trim();
@@ -1018,6 +1073,7 @@ async function guardarVenta(desdeCotizacion) {
   const descuento_adicional_pct = Number($('#f-desc-adic-pct')?.value || 0);
   let total = Math.max(0, subtotal - descuento);
   total = Math.max(0, total * (1 - descuento_pct / 100) * (1 - descuento_adicional_pct / 100));
+  if (bloqueadoPorDescuentoMaximo(subtotal, total)) return;
   const metodo_pago = $('#f-metodo').value;
   const medio_pago_id = $('#f-medio-pago')?.value || null;
   const telefono = $('#f-telefono').value.trim();
@@ -1224,6 +1280,7 @@ function abrirFormProducto(existing) {
     </div>
     <div class="field" style="margin-top:10px"><label>Precio Mayorista<br><span style="font-weight:400;color:var(--text-faint)">lo que te cobra tu proveedor</span></label><input type="number" id="f-costo" value="${existing ? existing.costo : 0}" min="0" step="0.01" /></div>
     <div class="field" style="margin-top:10px"><label>Precio Venta<br><span style="font-weight:400;color:var(--text-faint)">lo que le cobrás al cliente</span></label><input type="number" id="f-precio" value="${existing ? existing.precio_venta : 0}" min="0" step="0.01" /></div>
+    <div class="field" style="margin-top:10px"><label>Descuento máximo al cliente (%)<br><span style="font-weight:400;color:var(--text-faint)">tope al armar una cotización/venta — vacío = sin límite</span></label><input type="number" id="f-desc-max" value="${existing?.descuento_maximo_pct ?? ''}" min="0" max="100" step="0.01" placeholder="Sin límite" /></div>
     <div class="grid-2" style="margin-top:10px">
       <div class="field"><label>Stock inicial</label><input type="number" id="f-stock" value="${existing ? existing.stock : 0}" min="0" ${existing ? 'disabled' : ''} /></div>
       <div class="field"><label>Stock mínimo (alerta)</label><input type="number" id="f-stockmin" value="${existing ? existing.stock_minimo : 5}" min="0" /></div>
@@ -1271,7 +1328,8 @@ function abrirFormProducto(existing) {
       costo: Number($('#f-costo').value || 0),
       stock_minimo: Number($('#f-stockmin').value || 0),
       imagen_base64,
-      visible_catalogo: $('#f-visible-catalogo').checked
+      visible_catalogo: $('#f-visible-catalogo').checked,
+      descuento_maximo_pct: $('#f-desc-max').value !== '' ? Number($('#f-desc-max').value) : null
     };
     if (existing && nuevoPrecioVenta !== Number(existing.precio_venta)) {
       payload.precio_anterior = Number(existing.precio_venta);
@@ -1325,6 +1383,316 @@ async function ajustarStock(productoId, delta, motivo) {
     motivo,
     usuario_id: profile.id
   });
+}
+
+// ============================================================
+// IMPORTAR PRODUCTOS DESDE EXCEL (precios + fotos incrustadas)
+// Solo admin. Los productos que coincidan por código o por
+// descripción exacta con uno ya cargado se actualizan (precio,
+// costo, descuento máximo y foto); el resto se crea como nuevo.
+// ============================================================
+const COLUMNAS_IMPORT_PRODUCTOS = ['Codigo', 'Descripcion', 'Categoria', 'Precio Venta', 'Precio Mayorista', 'Descuento Maximo %', 'Foto'];
+
+// Espacios de nombres XML de un .xlsx — necesarios para leer las fotos
+// pegadas en las celdas (SheetJS gratis no las extrae; hay que leerlas
+// directamente del XML del archivo, que es un .zip).
+const NS_XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing';
+const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const NS_REL = 'http://schemas.openxmlformats.org/package/2006/relationships';
+
+function normalizarTextoImport(s) {
+  return String(s ?? '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function resolverRutaRelativaXlsx(base, target) {
+  if (target.startsWith('/')) return target.slice(1);
+  const partesBase = base.split('/').filter(Boolean);
+  for (const p of target.split('/')) {
+    if (p === '..') partesBase.pop();
+    else if (p !== '.') partesBase.push(p);
+  }
+  return partesBase.join('/');
+}
+
+function attrNSImport(el, ns, local) {
+  return el.getAttributeNS(ns, local) || el.getAttribute('r:' + local) || el.getAttribute(local);
+}
+
+// Devuelve { filaIndex: 'data:image/...;base64,...' } — filaIndex es
+// 0-indexado, igual que XLSX.utils.sheet_to_json(hoja, {header:1}).
+async function extraerFotosDeExcel(zip) {
+  const parser = new DOMParser();
+  try {
+    const workbookXml = await zip.file('xl/workbook.xml').async('text');
+    const wbDoc = parser.parseFromString(workbookXml, 'application/xml');
+    const primeraHoja = wbDoc.getElementsByTagName('sheet')[0];
+    if (!primeraHoja) return {};
+    const rIdHoja = attrNSImport(primeraHoja, NS_R, 'id');
+
+    const wbRelsXml = await zip.file('xl/_rels/workbook.xml.rels').async('text');
+    const wbRelsDoc = parser.parseFromString(wbRelsXml, 'application/xml');
+    const relHoja = Array.from(wbRelsDoc.getElementsByTagNameNS(NS_REL, 'Relationship')).find(r => r.getAttribute('Id') === rIdHoja);
+    if (!relHoja) return {};
+    const sheetPath = resolverRutaRelativaXlsx('xl/', relHoja.getAttribute('Target'));
+
+    const nombreHoja = sheetPath.split('/').pop();
+    const carpetaHoja = sheetPath.slice(0, sheetPath.length - nombreHoja.length);
+    const sheetRelsFile = zip.file(`${carpetaHoja}_rels/${nombreHoja}.rels`);
+    if (!sheetRelsFile) return {}; // hoja sin fotos pegadas: normal en un import de solo precios
+
+    const sheetRelsDoc = parser.parseFromString(await sheetRelsFile.async('text'), 'application/xml');
+    const relDrawing = Array.from(sheetRelsDoc.getElementsByTagNameNS(NS_REL, 'Relationship')).find(r => (r.getAttribute('Type') || '').endsWith('/drawing'));
+    if (!relDrawing) return {};
+    const drawingPath = resolverRutaRelativaXlsx(carpetaHoja, relDrawing.getAttribute('Target'));
+
+    const drawingFile = zip.file(drawingPath);
+    if (!drawingFile) return {};
+    const drawingDoc = parser.parseFromString(await drawingFile.async('text'), 'application/xml');
+
+    const nombreDrawing = drawingPath.split('/').pop();
+    const carpetaDrawing = drawingPath.slice(0, drawingPath.length - nombreDrawing.length);
+    const drawingRelsFile = zip.file(`${carpetaDrawing}_rels/${nombreDrawing}.rels`);
+    const drawingRelsDoc = drawingRelsFile ? parser.parseFromString(await drawingRelsFile.async('text'), 'application/xml') : null;
+
+    const anchors = [
+      ...drawingDoc.getElementsByTagNameNS(NS_XDR, 'oneCellAnchor'),
+      ...drawingDoc.getElementsByTagNameNS(NS_XDR, 'twoCellAnchor')
+    ];
+
+    const fotosPorFila = {};
+    for (const anchor of anchors) {
+      const fromEl = anchor.getElementsByTagNameNS(NS_XDR, 'from')[0];
+      const rowEl = fromEl && fromEl.getElementsByTagNameNS(NS_XDR, 'row')[0];
+      if (!rowEl) continue;
+      const fila = Number(rowEl.textContent);
+
+      const blip = anchor.getElementsByTagNameNS(NS_A, 'blip')[0];
+      const rId = blip && attrNSImport(blip, NS_R, 'embed');
+      if (!rId || !drawingRelsDoc) continue;
+
+      const relImg = Array.from(drawingRelsDoc.getElementsByTagNameNS(NS_REL, 'Relationship')).find(r => r.getAttribute('Id') === rId);
+      if (!relImg) continue;
+      const imgPath = resolverRutaRelativaXlsx(carpetaDrawing, relImg.getAttribute('Target'));
+      const imgFile = zip.file(imgPath);
+      if (!imgFile) continue;
+
+      const base64 = await imgFile.async('base64');
+      const ext = imgPath.split('.').pop().toLowerCase();
+      const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      fotosPorFila[fila] = `data:${mime};base64,${base64}`;
+    }
+    return fotosPorFila;
+  } catch (e) {
+    console.error('No se pudieron leer las fotos incrustadas del Excel:', e);
+    return {};
+  }
+}
+
+function descargarPlantillaImportacion() {
+  const datos = [
+    COLUMNAS_IMPORT_PRODUCTOS,
+    ['TQ-80L', 'Termotanque Rheem 80L', 'Termotanques', 1250, 900, 10, ''],
+    ['', 'Estufa Longvie 3000 Kcal', 'Estufas', 480, 320, 15, '']
+  ];
+  const hoja = XLSX.utils.aoa_to_sheet(datos);
+  hoja['!cols'] = [{ wch: 12 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 16 }, { wch: 18 }, { wch: 16 }];
+  const libro = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(libro, hoja, 'Productos');
+  XLSX.writeFile(libro, 'Plantilla_productos_BM.xlsx');
+}
+
+function encontrarProductoExistente(codigo, descripcion) {
+  const codigoNorm = normalizarTextoImport(codigo);
+  if (codigoNorm) {
+    const porCodigo = productosCache.find(p =>
+      (p.codigo_interno && normalizarTextoImport(p.codigo_interno) === codigoNorm) ||
+      (p.codigo_fabrica && normalizarTextoImport(p.codigo_fabrica) === codigoNorm)
+    );
+    if (porCodigo) return porCodigo;
+  }
+  const descNorm = normalizarTextoImport(descripcion);
+  return productosCache.find(p => normalizarTextoImport(p.descripcion) === descNorm) || null;
+}
+
+let importProductosPreview = [];
+
+async function abrirImportadorProductos() {
+  await cargarProductos();
+  importProductosPreview = [];
+  openModal(`
+    <div class="sheet-head"><h3>📥 Importar productos desde Excel</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <p style="color:var(--text-dim);font-size:13px;margin-top:-6px">
+      Un solo Excel con Descripción, Categoría, Precio Venta y una foto pegada en la celda de cada fila.
+      Los productos que ya tenés cargados (por código o por descripción exacta) se actualizan; el resto se crea como nuevo.
+    </p>
+    <button class="btn btn-secondary" id="btn-descargar-plantilla" style="margin-top:10px">⬇ Descargar plantilla</button>
+    <div class="field" style="margin-top:14px"><label>Archivo Excel (.xlsx)</label><input type="file" id="f-import-excel" accept=".xlsx" /></div>
+    <div id="import-preview"></div>
+    <div class="form-actions" id="import-acciones" style="display:none">
+      <button class="btn btn-secondary" id="btn-cancelar">Cerrar</button>
+      <button class="btn btn-primary" id="btn-confirmar-import">💾 Confirmar importación</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-descargar-plantilla').addEventListener('click', descargarPlantillaImportacion);
+  $('#btn-confirmar-import').addEventListener('click', confirmarImportacionProductos);
+  $('#f-import-excel').addEventListener('change', async (e) => {
+    const archivo = e.target.files[0];
+    if (!archivo) return;
+    $('#import-preview').innerHTML = `<p style="margin-top:14px;color:var(--text-dim);font-size:13px">Analizando…</p>`;
+    $('#import-acciones').style.display = 'none';
+    try {
+      await analizarArchivoImportacion(archivo);
+    } catch (err) {
+      $('#import-preview').innerHTML = `<p style="margin-top:14px;color:var(--accent-2);font-size:13px">No se pudo leer el archivo: ${escapeHtml(err.message)}</p>`;
+    }
+  });
+}
+
+async function analizarArchivoImportacion(archivo) {
+  const buf = await archivo.arrayBuffer();
+
+  const wb = XLSX.read(buf, { type: 'array' });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
+  if (filas.length < 2) throw new Error('El archivo no tiene filas de datos.');
+
+  const encabezados = filas[0].map(normalizarTextoImport);
+  const idx = {
+    codigo: encabezados.indexOf('codigo'),
+    descripcion: encabezados.indexOf('descripcion'),
+    categoria: encabezados.indexOf('categoria'),
+    precioVenta: encabezados.indexOf('precio venta'),
+    precioMayorista: encabezados.indexOf('precio mayorista'),
+    descuentoMax: encabezados.indexOf('descuento maximo %')
+  };
+  if (idx.descripcion === -1 || idx.precioVenta === -1) {
+    throw new Error('No encontré las columnas "Descripcion" y/o "Precio Venta" — usá la plantilla sin cambiar los encabezados.');
+  }
+
+  const zip = await JSZip.loadAsync(buf);
+  const fotosPorFila = await extraerFotosDeExcel(zip);
+  const categoriaDefault = CATEGORIAS_PRODUCTO[CATEGORIAS_PRODUCTO.length - 1];
+
+  const filasProcesadas = [];
+  for (let i = 1; i < filas.length; i++) {
+    const fila = filas[i];
+    if (fila.every(c => c === '' || c == null)) continue;
+
+    const descripcion = String(fila[idx.descripcion] || '').trim();
+    if (!descripcion) continue;
+
+    const codigo = idx.codigo > -1 ? String(fila[idx.codigo] || '').trim() : '';
+    const precio_venta = idx.precioVenta > -1 ? Number(fila[idx.precioVenta]) : NaN;
+    const costoRaw = idx.precioMayorista > -1 ? fila[idx.precioMayorista] : '';
+    const costo = costoRaw !== '' ? Number(costoRaw) : null;
+    const descMaxRaw = idx.descuentoMax > -1 ? fila[idx.descuentoMax] : '';
+    const descuento_maximo_pct = descMaxRaw !== '' ? Number(descMaxRaw) : null;
+    const categoriaRaw = idx.categoria > -1 ? String(fila[idx.categoria] || '').trim() : '';
+    const catReconocida = CATEGORIAS_PRODUCTO.find(c => normalizarTextoImport(c) === normalizarTextoImport(categoriaRaw));
+
+    const existente = encontrarProductoExistente(codigo, descripcion);
+    const foto = fotosPorFila[i] || null;
+
+    const errores = [];
+    const avisos = [];
+    if (isNaN(precio_venta) || precio_venta < 0) errores.push('Precio Venta inválido o vacío');
+    if (!existente) {
+      if (categoriaRaw && !catReconocida) avisos.push(`Categoría "${categoriaRaw}" no reconocida, se usará "${categoriaDefault}"`);
+      if (!categoriaRaw) avisos.push(`Sin categoría, se usará "${categoriaDefault}"`);
+      if (!foto) avisos.push('Sin foto — se puede agregar después desde Inventario');
+    }
+
+    filasProcesadas.push({
+      fila: i, codigo, descripcion, categoria: catReconocida || categoriaDefault,
+      precio_venta, costo, descuento_maximo_pct, foto, existente, errores, avisos
+    });
+  }
+
+  importProductosPreview = filasProcesadas;
+  renderPreviewImportacion();
+}
+
+function renderPreviewImportacion() {
+  const cont = $('#import-preview');
+  const acciones = $('#import-acciones');
+  if (importProductosPreview.length === 0) {
+    cont.innerHTML = `<p style="margin-top:14px;color:var(--text-dim);font-size:13px">No encontré filas con datos para importar.</p>`;
+    acciones.style.display = 'none';
+    return;
+  }
+
+  const nuevos = importProductosPreview.filter(f => !f.existente && f.errores.length === 0).length;
+  const actualiza = importProductosPreview.filter(f => f.existente && f.errores.length === 0).length;
+  const conError = importProductosPreview.filter(f => f.errores.length > 0).length;
+
+  cont.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <span class="badge badge-ok">${nuevos} nuevo${nuevos !== 1 ? 's' : ''}</span>
+      <span class="badge badge-pendiente">${actualiza} actualiza${actualiza !== 1 ? 'n' : ''}</span>
+      ${conError > 0 ? `<span class="badge badge-rechazada">${conError} con error</span>` : ''}
+    </div>
+    <div class="import-lista" style="margin-top:10px;max-height:360px;overflow-y:auto">
+      ${importProductosPreview.map(f => `
+        <div class="import-fila">
+          ${f.foto ? `<img src="${f.foto}" class="import-foto-mini" />` : (f.existente?.imagen_base64 ? `<img src="${f.existente.imagen_base64}" class="import-foto-mini" style="opacity:.5" />` : `<div class="import-foto-mini import-foto-vacia">—</div>`)}
+          <div class="import-fila-info">
+            <div class="import-fila-titulo">
+              <span>${escapeHtml(f.descripcion)}</span>
+              ${f.errores.length ? '<span class="badge badge-rechazada">Error</span>' : f.existente ? '<span class="badge badge-pendiente">Actualiza</span>' : '<span class="badge badge-ok">Nuevo</span>'}
+            </div>
+            <div class="import-fila-precio">${isNaN(f.precio_venta) ? '—' : money(f.precio_venta)}</div>
+            ${f.avisos.length ? `<div class="import-fila-aviso">${f.avisos.map(escapeHtml).join(' · ')}</div>` : ''}
+            ${f.errores.length ? `<div class="import-fila-error">${f.errores.map(escapeHtml).join(' · ')}</div>` : ''}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  acciones.style.display = (nuevos + actualiza > 0) ? 'flex' : 'none';
+}
+
+async function confirmarImportacionProductos() {
+  const validas = importProductosPreview.filter(f => f.errores.length === 0);
+  if (validas.length === 0) { toast('No hay filas válidas para importar', 'error'); return; }
+
+  const btn = $('#btn-confirmar-import');
+  btn.disabled = true;
+  btn.textContent = 'Importando…';
+
+  let ok = 0, fallidas = 0;
+  for (const f of validas) {
+    const payload = f.existente
+      ? {
+          precio_venta: f.precio_venta,
+          ...(f.costo != null ? { costo: f.costo } : {}),
+          ...(f.descuento_maximo_pct != null ? { descuento_maximo_pct: f.descuento_maximo_pct } : {}),
+          ...(f.foto ? { imagen_base64: f.foto } : {}),
+          ...(f.precio_venta !== Number(f.existente.precio_venta) ? { precio_anterior: Number(f.existente.precio_venta), precio_actualizado_at: new Date().toISOString() } : {})
+        }
+      : {
+          descripcion: f.descripcion,
+          categoria: f.categoria,
+          precio_venta: f.precio_venta,
+          costo: f.costo || 0,
+          descuento_maximo_pct: f.descuento_maximo_pct,
+          imagen_base64: f.foto || null,
+          stock: 0,
+          stock_minimo: 5,
+          visible_catalogo: true
+        };
+    const resp = f.existente
+      ? await sb.from('productos').update(payload).eq('id', f.existente.id)
+      : await sb.from('productos').insert(payload);
+    if (resp.error) fallidas++; else ok++;
+  }
+
+  toast(`Importación terminada: ${ok} ok${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
+  closeModal();
+  await cargarProductos();
+  renderInventario();
 }
 
 // ============================================================

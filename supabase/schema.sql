@@ -725,3 +725,12 @@ alter table public.garantias add column if not exists precio numeric(12,2);
 alter table public.garantias add column if not exists condiciones text not null default '';
 alter table public.garantias add column if not exists firma_base64 text;
 alter table public.garantias add column if not exists registrado_por_nombre text not null default '';
+
+-- ============================================================
+-- ACTUALIZACIÓN: descuento máximo por producto (tope de descuento
+-- que se le puede dar al cliente final en cotizaciones/ventas).
+-- null = sin límite (no cambia el comportamiento de los productos
+-- que ya tenías cargados).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.productos add column if not exists descuento_maximo_pct numeric(5,2);

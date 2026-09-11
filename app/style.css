@@ -407,6 +407,17 @@ tbody tr:hover { background: var(--surface-2); }
 .badge-bajo { background: var(--accent-2-dim); color: var(--accent-2); }
 .badge-ok { background: var(--accent-dim); color: var(--accent); }
 
+/* Vista previa de la importación de productos por Excel */
+.import-foto-mini { width: 34px; height: 34px; object-fit: cover; border-radius: 6px; display: block; flex-shrink: 0; }
+.import-foto-vacia { display: flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text-faint); font-size: 11px; }
+.import-lista { display: flex; flex-direction: column; gap: 8px; }
+.import-fila { display: flex; gap: 10px; align-items: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; }
+.import-fila-info { flex: 1; min-width: 0; }
+.import-fila-titulo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; font-weight: 600; color: var(--text); }
+.import-fila-precio { font-size: 12.5px; color: var(--accent); font-weight: 600; margin-top: 2px; }
+.import-fila-aviso { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+.import-fila-error { font-size: 11px; color: var(--accent-2); margin-top: 2px; }
+
 .row-actions { display: flex; gap: 6px; }
 .icon-btn {
   background: var(--surface-2); border: 1px solid var(--border); color: var(--text-dim);

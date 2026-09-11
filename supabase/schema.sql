@@ -734,3 +734,11 @@ alter table public.garantias add column if not exists registrado_por_nombre text
 -- Ejecutar en el proyecto que ya tenías creado
 -- ============================================================
 alter table public.productos add column if not exists descuento_maximo_pct numeric(5,2);
+
+-- ============================================================
+-- ACTUALIZACIÓN: umbral de margen mínimo aceptable (para el panel
+-- de Rentabilidad en Inventario — marca en rojo los productos por
+-- debajo de este %).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.configuracion add column if not exists margen_minimo_pct numeric(5,2) not null default 20;

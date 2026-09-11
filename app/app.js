@@ -16,6 +16,7 @@ let intervaloAlertaPendientes = null;
 let intervaloNotificaciones = null;
 let intervaloBotPendientes = null;  // BAM re-revisa autorizaciones/cobros pendientes (admin y vendedores)
 let intervaloBotPrecios = null;     // BAM re-revisa cambios de precio (admin y vendedores)
+let intervaloBotGarantias = null;   // BAM re-revisa garantías por vencer (solo admin)
 let vistaActual = 'cotizaciones';
 let canalChatGlobal = null;
 let sesionCajaActual = null;
@@ -156,14 +157,17 @@ async function iniciarApp() {
   mostrarSaludoBienvenida();
   setTimeout(mostrarBotPendientesEntrada, 1200);
   setTimeout(mostrarBotCambiosPrecio, 2600);
+  setTimeout(mostrarBotGarantiasPorVencer, 3800);
 
-  // BAM vuelve a revisar autorizaciones/cobros pendientes y cambios de
-  // precio cada 20 min mientras la app está abierta (antes solo avisaba
-  // una vez, al entrar) — para admin y vendedores por igual.
+  // BAM vuelve a revisar autorizaciones/cobros pendientes, cambios de
+  // precio y garantías por vencer cada 20 min mientras la app está
+  // abierta (antes solo avisaba una vez, al entrar).
   clearInterval(intervaloBotPendientes);
   intervaloBotPendientes = setInterval(mostrarBotPendientesEntrada, 20 * 60 * 1000);
   clearInterval(intervaloBotPrecios);
   intervaloBotPrecios = setInterval(mostrarBotCambiosPrecio, 20 * 60 * 1000);
+  clearInterval(intervaloBotGarantias);
+  intervaloBotGarantias = setInterval(mostrarBotGarantiasPorVencer, 20 * 60 * 1000);
 
   if (profile.rol !== 'admin') {
     mostrarPopupPromosVendedor();
@@ -302,6 +306,28 @@ async function mostrarBotCambiosPrecio() {
   const extra = nuevos.length > 5 ? `<br>y ${nuevos.length - 5} más...` : '';
 
   mostrarBotBurbuja('🤖 BAM te avisa:', `Cambiaron precios:<br>${lineas}${extra}`);
+}
+
+// El bot avisa al admin sobre garantías que vencen dentro de 15 días,
+// una sola vez por garantía (según su fecha de vencimiento actual).
+async function mostrarBotGarantiasPorVencer() {
+  if (profile.rol !== 'admin') return;
+  const { data } = await sb.from('garantias').select('id, cliente_nombre, producto_descripcion, fecha_vencimiento');
+  if (!data || data.length === 0) return;
+
+  const vistas = notifsVistas();
+  const porVencer = data
+    .filter(g => estaPorVencer(g, 15) && !vistas.includes(`garantia-vence-${g.id}-${g.fecha_vencimiento}`))
+    .sort((a, b) => a.fecha_vencimiento.localeCompare(b.fecha_vencimiento));
+  if (porVencer.length === 0) return;
+
+  porVencer.forEach(g => marcarNotifVista(`garantia-vence-${g.id}-${g.fecha_vencimiento}`));
+
+  const lineas = porVencer.slice(0, 5).map(g => `${g.cliente_nombre} — ${g.producto_descripcion} (vence ${fecha(g.fecha_vencimiento)})`).join('<br>');
+  const extra = porVencer.length > 5 ? `<br>y ${porVencer.length - 5} más...` : '';
+  mostrarBotBurbuja('🛡️ BAM te avisa:', `${porVencer.length} garantía${porVencer.length > 1 ? 's' : ''} vence${porVencer.length > 1 ? 'n' : ''} pronto:<br>${lineas}${extra}`, {
+    botones: [{ label: 'Ir a Garantías →', onClick: () => switchView('garantias') }]
+  });
 }
 
 // Restaurar sesión si ya había una activa (recarga de página)
@@ -1143,18 +1169,21 @@ async function renderInventario() {
     <div class="tabs">
       <button class="tab-btn ${tabInventario === 'catalogo' ? 'active' : ''}" id="tab-catalogo">Catálogo</button>
       <button class="tab-btn ${tabInventario === 'movimientos' ? 'active' : ''}" id="tab-movimientos">Movimientos</button>
+      ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>` : ''}
     </div>
     <div id="inv-content"></div>
   `;
   if (profile.rol === 'admin') {
     $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
     $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
+    $('#tab-rentabilidad').addEventListener('click', () => { tabInventario = 'rentabilidad'; renderInventario(); });
   }
   $('#tab-catalogo').addEventListener('click', () => { tabInventario = 'catalogo'; renderInventario(); });
   $('#tab-movimientos').addEventListener('click', () => { tabInventario = 'movimientos'; renderInventario(); });
 
   if (tabInventario === 'catalogo') renderCatalogoProductos();
-  else renderMovimientosInventario();
+  else if (tabInventario === 'movimientos') renderMovimientosInventario();
+  else if (tabInventario === 'rentabilidad' && profile.rol === 'admin') renderRentabilidad();
 }
 
 function celdaMargenHtml(p) {
@@ -1276,6 +1305,72 @@ async function renderMovimientosInventario() {
       `).join('')}
     </tbody>
   </table></div>`;
+}
+
+// ------------------------------------------------------------
+// RENTABILIDAD: dashboard de márgenes (solo admin) — promedio,
+// ranking y alerta de productos por debajo del margen mínimo
+// aceptable (configurable).
+// ------------------------------------------------------------
+async function renderRentabilidad() {
+  const cont = $('#inv-content');
+  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+
+  const { data: config } = await sb.from('configuracion').select('margen_minimo_pct').eq('id', 1).single();
+  const margenMinimo = Number(config?.margen_minimo_pct ?? 20);
+
+  const conCosto = productosCache
+    .map(p => ({ p, margen: margenPct(p.costo, p.precio_venta) }))
+    .filter(x => x.margen != null);
+  const sinCosto = productosCache.length - conCosto.length;
+
+  const promedio = conCosto.length ? conCosto.reduce((s, x) => s + x.margen, 0) / conCosto.length : null;
+  const bajoMinimo = conCosto.filter(x => x.margen < margenMinimo);
+  const ordenados = [...conCosto].sort((a, b) => a.margen - b.margen);
+
+  cont.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Margen promedio</div><div class="value">${promedio != null ? promedio.toFixed(1) + '%' : '—'}</div></div>
+      <div class="stat-chip ${bajoMinimo.length > 0 ? 'danger' : 'accent'}"><div class="label">Bajo el mínimo (${margenMinimo}%)</div><div class="value">${bajoMinimo.length}</div></div>
+      <div class="stat-chip warn"><div class="label">Sin costo cargado</div><div class="value">${sinCosto}</div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Margen mínimo aceptable</div>
+      <p style="color:var(--text-dim);font-size:13px;margin-top:-6px;margin-bottom:10px">Los productos por debajo se marcan en rojo en la lista de abajo.</p>
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+        <div class="field" style="max-width:140px"><label>Mínimo (%)</label><input type="number" id="f-margen-minimo" value="${margenMinimo}" min="0" step="0.5" /></div>
+        <button class="btn btn-primary" id="btn-guardar-margen-minimo">💾 Guardar</button>
+      </div>
+    </div>
+
+    ${ordenados.length === 0 ? `<div class="empty-state">Ningún producto tiene Precio Mayorista cargado todavía — sin costo no se puede calcular el margen.</div>` : `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Producto</th><th>Categoría</th><th>Mayorista</th><th>Venta</th><th>Margen</th></tr></thead>
+          <tbody>
+            ${ordenados.map(({ p, margen }) => `
+              <tr>
+                <td>${escapeHtml(p.descripcion)}</td>
+                <td>${escapeHtml(p.categoria || '—')}</td>
+                <td>${money(p.costo)}</td>
+                <td>${money(p.precio_venta)}</td>
+                <td><span class="badge ${margen < margenMinimo ? 'badge-rechazada' : 'badge-ok'}">${margen.toFixed(1)}%</span></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `}
+  `;
+
+  $('#btn-guardar-margen-minimo').addEventListener('click', async () => {
+    const nuevo = Number($('#f-margen-minimo').value || 0);
+    const { error } = await sb.from('configuracion').update({ margen_minimo_pct: nuevo }).eq('id', 1);
+    if (error) { toast('Error al guardar: ' + error.message, 'error'); return; }
+    toast('Margen mínimo actualizado');
+    renderRentabilidad();
+  });
 }
 
 function abrirFormProducto(existing) {
@@ -3055,6 +3150,15 @@ function estadoGarantia(g) {
   return venc >= hoy ? 'vigente' : 'vencida';
 }
 
+// Vigente y vence dentro de los próximos `dias` días (por defecto 30) —
+// para el panel de control y el aviso de BAM.
+function estaPorVencer(g, dias = 30) {
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const limite = new Date(hoy.getTime() + dias * 24 * 60 * 60 * 1000);
+  const venc = new Date(g.fecha_vencimiento + 'T00:00:00');
+  return venc >= hoy && venc <= limite;
+}
+
 // Duración legible entre dos fechas ISO (yyyy-mm-dd), en meses o días según
 // corresponda — para mostrar "Cobertura: 6 meses" en el certificado.
 function duracionLegible(fechaInicioISO, fechaFinISO) {
@@ -3082,6 +3186,7 @@ async function renderGarantias() {
       <div><h2>Garantías</h2><p class="sub">Registrá la cobertura y generá el certificado firmado para el cliente</p></div>
       <button class="btn btn-primary" id="btn-nueva-garantia">+ Registrar garantía</button>
     </div>
+    <div id="garantias-stats"></div>
     <div class="field" style="margin-bottom:14px">
       <input id="gar-buscar" placeholder="🔍 Buscar por cliente o producto…" value="${escapeHtml(busquedaGarantias)}" />
     </div>
@@ -3091,7 +3196,23 @@ async function renderGarantias() {
   $('#gar-buscar').addEventListener('input', (e) => { busquedaGarantias = e.target.value; renderTablaGarantias(); });
 
   await cargarGarantias();
+  renderStatsGarantias();
   renderTablaGarantias();
+}
+
+function renderStatsGarantias() {
+  const cont = $('#garantias-stats');
+  if (!cont) return;
+  const vigentes = garantiasCache.filter(g => estadoGarantia(g) === 'vigente').length;
+  const vencidas = garantiasCache.filter(g => estadoGarantia(g) === 'vencida').length;
+  const porVencer = garantiasCache.filter(g => estaPorVencer(g, 30)).length;
+  cont.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Vigentes</div><div class="value">${vigentes}</div></div>
+      <div class="stat-chip warn"><div class="label">Por vencer en 30 días</div><div class="value">${porVencer}</div></div>
+      <div class="stat-chip danger"><div class="label">Vencidas</div><div class="value">${vencidas}</div></div>
+    </div>
+  `;
 }
 
 function renderTablaGarantias() {

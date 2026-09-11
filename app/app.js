@@ -3706,6 +3706,56 @@ function sonarNotificacion() {
   if (navigator.vibrate) navigator.vibrate(200);
 }
 
+// ------------------------------------------------------------
+// MODO DE NOTIFICACIONES DEL CHAT (sonido/vibración + notificación
+// del sistema operativo) — un solo interruptor para chat general y
+// chat privado, guardado por dispositivo. Activadas por defecto,
+// igual que el comportamiento que ya tenía la app.
+// ------------------------------------------------------------
+function notificacionesChatActivas() {
+  return localStorage.getItem('bm_chat_notif_activas') !== 'false';
+}
+
+async function activarNotificacionesChat() {
+  localStorage.setItem('bm_chat_notif_activas', 'true');
+  if ('Notification' in window && Notification.permission === 'default') {
+    try { await Notification.requestPermission(); } catch (e) { /* el usuario puede cerrar el permiso sin elegir */ }
+  }
+  actualizarBotonNotifChat();
+  toast('Notificaciones del chat activadas');
+}
+
+function desactivarNotificacionesChat() {
+  localStorage.setItem('bm_chat_notif_activas', 'false');
+  actualizarBotonNotifChat();
+  toast('Notificaciones del chat desactivadas');
+}
+
+function actualizarBotonNotifChat() {
+  const btn = $('#btn-toggle-notif-chat');
+  if (!btn) return;
+  const activas = notificacionesChatActivas();
+  btn.textContent = activas ? '🔔 Notificaciones activadas' : '🔕 Notificaciones desactivadas';
+  btn.classList.toggle('notif-chat-on', activas);
+  btn.classList.toggle('notif-chat-off', !activas);
+}
+
+// Notificación del sistema operativo (además del sonido) cuando llega
+// un mensaje y la pestaña/app no está a la vista — solo si el usuario
+// activó las notificaciones y ya le dio permiso al navegador.
+function notificarMensajeSistema(m, hilo) {
+  if (!notificacionesChatActivas()) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!document.hidden) return;
+  const donde = hilo === 'general' ? 'Chat general' : 'Mensaje privado';
+  try {
+    new Notification(`${m.nombre_remitente || 'Alguien'} — ${donde}`, {
+      body: m.texto ? (m.texto.length > 100 ? m.texto.slice(0, 100) + '…' : m.texto) : '📷 Envió una foto',
+      icon: 'icons/icon-192.png'
+    });
+  } catch (e) { /* algunos navegadores/Android bloquean esto sin service worker activo */ }
+}
+
 async function cargarVendedores() {
   const { data } = await sb.from('profiles').select('*').eq('rol', 'vendedor').order('nombre');
   vendedoresCache = data || [];
@@ -3759,7 +3809,8 @@ async function inicializarNotificacionesChat() {
         }
         mostrarBotAvisoMensaje(m, hilo);
       }
-      sonarNotificacion();
+      if (notificacionesChatActivas()) sonarNotificacion();
+      notificarMensajeSistema(m, hilo);
     })
     .subscribe();
 }
@@ -3793,6 +3844,7 @@ async function renderChat() {
   el.innerHTML = `
     <div class="section-head">
       <div><h2>Chat</h2><p class="sub">${soyAdmin ? 'Chat general del equipo y conversaciones individuales' : 'Chat general y conversación privada con administración'}</p></div>
+      <button class="btn btn-secondary" id="btn-toggle-notif-chat"></button>
     </div>
     <div class="tabs" id="chat-tabs">
       <button class="tab-btn ${chatModo === 'general' ? 'active' : ''}" data-modo="general">General</button>
@@ -3806,6 +3858,12 @@ async function renderChat() {
     if (chatModo === 'general') chatHiloVendedorId = null;
     renderChatCuerpo();
   }));
+
+  actualizarBotonNotifChat();
+  $('#btn-toggle-notif-chat').addEventListener('click', async () => {
+    if (notificacionesChatActivas()) desactivarNotificacionesChat();
+    else await activarNotificacionesChat();
+  });
 
   await renderChatCuerpo();
 }

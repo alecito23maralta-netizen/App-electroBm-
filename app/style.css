@@ -208,6 +208,8 @@ a { color: var(--info); }
 .btn-primary:hover { background: #12f0ae; }
 .btn-secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
 .btn-secondary:hover { border-color: var(--text-faint); }
+.notif-chat-on { color: var(--accent); border-color: #00e5a044; }
+.notif-chat-off { color: var(--text-faint); }
 .btn-danger { background: var(--danger-dim); color: var(--danger); border: 1px solid #ff4d6d44; }
 .btn-block { width: 100%; }
 .btn-sm { padding: 8px 12px; font-size: 13px; }

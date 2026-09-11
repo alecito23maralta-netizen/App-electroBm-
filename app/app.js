@@ -1132,7 +1132,12 @@ async function renderInventario() {
   el.innerHTML = `
     <div class="section-head">
       <div><h2>Inventario</h2><p class="sub">Catálogo, stock y movimientos</p></div>
-      ${profile.rol === 'admin' ? `<button class="btn btn-primary" id="btn-nuevo-producto">+ Agregar producto</button>` : ''}
+      ${profile.rol === 'admin' ? `
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary" id="btn-ir-importar">📥 Importar / Actualizar Excel</button>
+          <button class="btn btn-primary" id="btn-nuevo-producto">+ Agregar producto</button>
+        </div>
+      ` : ''}
     </div>
     ${bajos.length > 0 ? `<div class="low-stock-banner"><span class="dot"></span>${bajos.length} producto${bajos.length > 1 ? 's' : ''} con stock bajo — revisá el catálogo</div>` : ''}
     <div class="tabs">
@@ -1141,12 +1146,22 @@ async function renderInventario() {
     </div>
     <div id="inv-content"></div>
   `;
-  if (profile.rol === 'admin') $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
+  if (profile.rol === 'admin') {
+    $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
+    $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
+  }
   $('#tab-catalogo').addEventListener('click', () => { tabInventario = 'catalogo'; renderInventario(); });
   $('#tab-movimientos').addEventListener('click', () => { tabInventario = 'movimientos'; renderInventario(); });
 
   if (tabInventario === 'catalogo') renderCatalogoProductos();
   else renderMovimientosInventario();
+}
+
+function celdaMargenHtml(p) {
+  const margen = margenPct(p.costo, p.precio_venta);
+  if (margen == null) return '—';
+  const ganancia = Number(p.precio_venta) - Number(p.costo);
+  return `${money(ganancia)}<br><span style="color:var(--text-faint);font-size:11px">${margen.toFixed(1)}% sobre costo</span>`;
 }
 
 function filaProductoHtml(p) {
@@ -1156,6 +1171,7 @@ function filaProductoHtml(p) {
       <td>${escapeHtml(p.subcategoria || '—')}</td>
       <td>${money(p.costo)}</td>
       <td>${money(p.precio_venta)}${badgeCambioPrecioHtml(p)}</td>
+      <td>${celdaMargenHtml(p)}</td>
       <td><span class="badge ${p.stock <= p.stock_minimo ? 'badge-bajo' : 'badge-ok'}">${p.stock} u.</span></td>
       <td><div class="row-actions">
         <button class="icon-btn" data-act="entrada" data-id="${p.id}" title="Registrar entrada">＋</button>
@@ -1199,7 +1215,7 @@ function renderCatalogoProductos() {
     cont.innerHTML = buscadorHtml + (items.length === 0
       ? `<div class="empty-state">Sin resultados para "${escapeHtml(busquedaInventario)}".</div>`
       : `<div class="table-wrap"><table>
-          <thead><tr><th>Descripción</th><th>Subcat.</th><th>Precio Mayorista<br><span style="font-weight:400;text-transform:none">(tu proveedor)</span></th><th>Precio Venta<br><span style="font-weight:400;text-transform:none">(al cliente)</span></th><th>Stock</th><th>Acciones</th></tr></thead>
+          <thead><tr><th>Descripción</th><th>Subcat.</th><th>Precio Mayorista<br><span style="font-weight:400;text-transform:none">(tu proveedor)</span></th><th>Precio Venta<br><span style="font-weight:400;text-transform:none">(al cliente)</span></th><th>Margen</th><th>Stock</th><th>Acciones</th></tr></thead>
           <tbody>${items.map(filaProductoHtml).join('')}</tbody>
         </table></div>`);
     wireFilaAcciones(cont, items);
@@ -1227,6 +1243,7 @@ function renderCatalogoProductos() {
               <th>Subcat.</th>
               <th>Precio Mayorista<br><span style="font-weight:400;text-transform:none">(tu proveedor)</span></th>
               <th>Precio Venta<br><span style="font-weight:400;text-transform:none">(al cliente)</span></th>
+              <th>Margen</th>
               <th>Stock</th>
               <th>Acciones</th>
             </tr></thead>
@@ -1391,7 +1408,15 @@ async function ajustarStock(productoId, delta, motivo) {
 // descripción exacta con uno ya cargado se actualizan (precio,
 // costo, descuento máximo y foto); el resto se crea como nuevo.
 // ============================================================
-const COLUMNAS_IMPORT_PRODUCTOS = ['Codigo', 'Descripcion', 'Categoria', 'Precio Venta', 'Precio Mayorista', 'Descuento Maximo %', 'Foto'];
+const COLUMNAS_IMPORT_PRODUCTOS = ['Codigo', 'Descripcion', 'Categoria', 'Precio Mayorista', 'Precio Venta', 'Margen %', 'Descuento Maximo %', 'Foto'];
+
+// Margen de ganancia sobre el costo (lo que le agregás a lo que pagaste),
+// en %. null si no hay costo cargado (no se puede calcular).
+function margenPct(costo, precioVenta) {
+  const c = Number(costo), v = Number(precioVenta);
+  if (!c || c <= 0) return null;
+  return ((v - c) / c) * 100;
+}
 
 // Espacios de nombres XML de un .xlsx — necesarios para leer las fotos
 // pegadas en las celdas (SheetJS gratis no las extrae; hay que leerlas
@@ -1489,17 +1514,97 @@ async function extraerFotosDeExcel(zip) {
   }
 }
 
+// Genera un .xlsx a partir de filas (array de arrays, primera fila =
+// encabezado) y opcionalmente pega una foto por fila (fotosPorFila:
+// { filaIndex: dataURL }, mismo índice 0-based que usan SheetJS y el
+// extractor de más arriba). SheetJS gratis no permite insertar imágenes
+// en celdas, así que se arma el workbook con SheetJS y después se le
+// inyecta a mano la parte de "drawing" (imagen incrustada) directamente
+// en el .xlsx (que es un .zip) con JSZip — el mismo mecanismo que usa
+// extraerFotosDeExcel(), pero al revés. Validado con un archivo real
+// abierto tanto por este mismo lector como por una librería externa
+// (openpyxl) antes de integrarlo acá.
+async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila) {
+  const hoja = XLSX.utils.aoa_to_sheet(filas);
+  hoja['!cols'] = COLUMNAS_IMPORT_PRODUCTOS.map((_, i) => i === 1 ? { wch: 34 } : { wch: 15 });
+  const libro = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(libro, hoja, 'Productos');
+  const bufferBase = XLSX.write(libro, { type: 'array', bookType: 'xlsx' });
+
+  const zip = await JSZip.loadAsync(bufferBase);
+  const entradasFotos = Object.entries(fotosPorFila || {}).filter(([, url]) => !!url);
+
+  if (entradasFotos.length > 0) {
+    const colFotoIndex = COLUMNAS_IMPORT_PRODUCTOS.indexOf('Foto');
+    const anchorsXml = [];
+    const relsDrawingXml = [];
+    let n = 1;
+    for (const [fila, dataUrl] of entradasFotos) {
+      const match = /^data:image\/(png|jpe?g);base64,(.*)$/.exec(dataUrl);
+      if (!match) continue;
+      const ext = match[1] === 'jpg' ? 'jpeg' : match[1];
+      const nombreImg = `image${n}.${ext}`;
+      zip.file(`xl/media/${nombreImg}`, match[2], { base64: true });
+      const rId = `rId${n}`;
+      relsDrawingXml.push(`<Relationship Id="${rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${nombreImg}"/>`);
+      anchorsXml.push(`<xdr:oneCellAnchor><xdr:from><xdr:col>${colFotoIndex}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${fila}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="571500" cy="571500"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${n}" name="Foto ${n}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${rId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`);
+      n++;
+    }
+
+    zip.file('xl/drawings/drawing1.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="${NS_XDR}" xmlns:a="${NS_A}" xmlns:r="${NS_R}">${anchorsXml.join('')}</xdr:wsDr>`);
+    zip.file('xl/drawings/_rels/drawing1.xml.rels',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_REL}">${relsDrawingXml.join('')}</Relationships>`);
+    zip.file('xl/worksheets/_rels/sheet1.xml.rels',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_REL}"><Relationship Id="rIdDrawing1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`);
+
+    let sheetXml = await zip.file('xl/worksheets/sheet1.xml').async('text');
+    sheetXml = sheetXml.replace('</worksheet>', '<drawing r:id="rIdDrawing1"/></worksheet>');
+    zip.file('xl/worksheets/sheet1.xml', sheetXml);
+
+    let contentTypesXml = await zip.file('[Content_Types].xml').async('text');
+    if (!contentTypesXml.includes('/xl/drawings/drawing1.xml')) {
+      contentTypesXml = contentTypesXml.replace('</Types>', '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>');
+      zip.file('[Content_Types].xml', contentTypesXml);
+    }
+  }
+
+  const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  descargarArchivo(new File([blob], nombreArchivo, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+}
+
 function descargarPlantillaImportacion() {
   const datos = [
     COLUMNAS_IMPORT_PRODUCTOS,
-    ['TQ-80L', 'Termotanque Rheem 80L', 'Termotanques', 1250, 900, 10, ''],
-    ['', 'Estufa Longvie 3000 Kcal', 'Estufas', 480, 320, 15, '']
+    ['TQ-80L', 'Termotanque Rheem 80L', 'Termotanques', 900, 1250, margenPct(900, 1250).toFixed(1), 10, ''],
+    ['', 'Estufa Longvie 3000 Kcal', 'Estufas', 320, 480, margenPct(320, 480).toFixed(1), 15, '']
   ];
-  const hoja = XLSX.utils.aoa_to_sheet(datos);
-  hoja['!cols'] = [{ wch: 12 }, { wch: 34 }, { wch: 16 }, { wch: 14 }, { wch: 16 }, { wch: 18 }, { wch: 16 }];
-  const libro = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(libro, hoja, 'Productos');
-  XLSX.writeFile(libro, 'Plantilla_productos_BM.xlsx');
+  generarExcelConFotos('Plantilla_productos_BM.xlsx', datos, {});
+}
+
+// Enlaza Inventario con la importación: exporta TODO lo que ya tenés
+// cargado (con sus fotos) a un Excel — para la próxima actualización de
+// precios, alcanza con abrir este archivo, tocar lo que cambió y volver
+// a subirlo, en vez de empezar de cero cada vez.
+async function descargarInventarioActualExcel() {
+  const filas = [COLUMNAS_IMPORT_PRODUCTOS];
+  const fotosPorFila = {};
+  productosCache.forEach((p, i) => {
+    const fila = i + 1;
+    const margen = margenPct(p.costo, p.precio_venta);
+    filas.push([
+      p.codigo_interno || p.codigo_fabrica || '',
+      p.descripcion,
+      p.categoria,
+      Number(p.costo) || 0,
+      Number(p.precio_venta) || 0,
+      margen != null ? margen.toFixed(1) : '',
+      p.descuento_maximo_pct ?? '',
+      ''
+    ]);
+    if (p.imagen_base64) fotosPorFila[fila] = p.imagen_base64;
+  });
+  await generarExcelConFotos(`Inventario_BM_${new Date().toISOString().slice(0, 10)}.xlsx`, filas, fotosPorFila);
 }
 
 function encontrarProductoExistente(codigo, descripcion) {
@@ -1523,10 +1628,14 @@ async function abrirImportadorProductos() {
   openModal(`
     <div class="sheet-head"><h3>📥 Importar productos desde Excel</h3><button class="sheet-close" id="sheet-close">✕</button></div>
     <p style="color:var(--text-dim);font-size:13px;margin-top:-6px">
-      Un solo Excel con Descripción, Categoría, Precio Venta y una foto pegada en la celda de cada fila.
+      Un solo Excel con Descripción, Categoría, Precio Mayorista, Precio Venta y una foto pegada en la celda de cada fila.
       Los productos que ya tenés cargados (por código o por descripción exacta) se actualizan; el resto se crea como nuevo.
     </p>
-    <button class="btn btn-secondary" id="btn-descargar-plantilla" style="margin-top:10px">⬇ Descargar plantilla</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      ${productosCache.length > 0 ? `<button class="btn btn-secondary" id="btn-exportar-inventario">📤 Exportar inventario actual</button>` : ''}
+      <button class="btn btn-secondary" id="btn-descargar-plantilla">⬇ Plantilla vacía</button>
+    </div>
+    ${productosCache.length > 0 ? `<p style="color:var(--text-faint);font-size:11.5px;margin-top:6px">Para actualizar precios: exportá el inventario actual, editá lo que cambió y volvé a subir ese mismo archivo acá abajo.</p>` : ''}
     <div class="field" style="margin-top:14px"><label>Archivo Excel (.xlsx)</label><input type="file" id="f-import-excel" accept=".xlsx" /></div>
     <div id="import-preview"></div>
     <div class="form-actions" id="import-acciones" style="display:none">
@@ -1537,6 +1646,12 @@ async function abrirImportadorProductos() {
   $('#sheet-close').addEventListener('click', closeModal);
   $('#btn-cancelar').addEventListener('click', closeModal);
   $('#btn-descargar-plantilla').addEventListener('click', descargarPlantillaImportacion);
+  $('#btn-exportar-inventario')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = 'Generando…';
+    try { await descargarInventarioActualExcel(); }
+    finally { btn.disabled = false; btn.textContent = '📤 Exportar inventario actual'; }
+  });
   $('#btn-confirmar-import').addEventListener('click', confirmarImportacionProductos);
   $('#f-import-excel').addEventListener('change', async (e) => {
     const archivo = e.target.files[0];

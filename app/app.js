@@ -14,6 +14,8 @@ let mediosPagoCache = [];
 let promocionesCache = [];
 let intervaloAlertaPendientes = null;
 let intervaloNotificaciones = null;
+let intervaloBotPendientes = null;  // BAM re-revisa autorizaciones/cobros pendientes (admin y vendedores)
+let intervaloBotPrecios = null;     // BAM re-revisa cambios de precio (admin y vendedores)
 let vistaActual = 'cotizaciones';
 let canalChatGlobal = null;
 let sesionCajaActual = null;
@@ -154,6 +156,14 @@ async function iniciarApp() {
   setTimeout(mostrarBotPendientesEntrada, 1200);
   setTimeout(mostrarBotCambiosPrecio, 2600);
 
+  // BAM vuelve a revisar autorizaciones/cobros pendientes y cambios de
+  // precio cada 20 min mientras la app está abierta (antes solo avisaba
+  // una vez, al entrar) — para admin y vendedores por igual.
+  clearInterval(intervaloBotPendientes);
+  intervaloBotPendientes = setInterval(mostrarBotPendientesEntrada, 20 * 60 * 1000);
+  clearInterval(intervaloBotPrecios);
+  intervaloBotPrecios = setInterval(mostrarBotCambiosPrecio, 20 * 60 * 1000);
+
   if (profile.rol !== 'admin') {
     mostrarPopupPromosVendedor();
     verificarPendientesVendedor();
@@ -168,53 +178,63 @@ async function iniciarApp() {
 }
 
 const PERRITO_SVG = `
-  <svg viewBox="0 0 120 130" xmlns="http://www.w3.org/2000/svg">
-    <rect x="8" y="70" width="15" height="34" rx="7.5" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="97" y="70" width="15" height="34" rx="7.5" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="40" y="112" width="17" height="17" rx="6" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="63" y="112" width="17" height="17" rx="6" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <ellipse cx="48.5" cy="129" rx="10" ry="4" fill="#2f6fa8"/>
-    <ellipse cx="71.5" cy="129" rx="10" ry="4" fill="#2f6fa8"/>
-    <rect x="52" y="56" width="16" height="10" fill="#5fa8d3"/>
-    <rect x="24" y="64" width="72" height="38" rx="14" fill="#bfe4f5" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="43" y="76" width="34" height="17" rx="4" fill="#1c2b4a"/>
-    <rect x="55" y="80.5" width="10" height="10" rx="2" fill="#ffd23f" transform="rotate(45 60 85.5)"/>
-    <rect x="34" y="98" width="52" height="16" rx="8" fill="#ffd23f"/>
-    <text x="60" y="109.5" text-anchor="middle" font-size="10.5" font-weight="800" fill="#1c2b4a" font-family="Arial, sans-serif">BM</text>
-    <circle cx="33" cy="14" r="7" fill="#a8dcf0" stroke="#2f6fa8" stroke-width="2.5"/>
-    <circle cx="87" cy="14" r="7" fill="#a8dcf0" stroke="#2f6fa8" stroke-width="2.5"/>
-    <rect x="28" y="8" width="64" height="50" rx="15" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3.5"/>
-    <rect x="37" y="17" width="46" height="31" rx="9" fill="#1c2b4a"/>
-    <circle cx="50" cy="32.5" r="6.4" fill="#ffd23f"/>
-    <circle cx="70" cy="32.5" r="6.4" fill="#ffd23f"/>
-    <circle cx="52" cy="30.5" r="1.8" fill="#fff8d8"/>
-    <circle cx="72" cy="30.5" r="1.8" fill="#fff8d8"/>
+  <svg viewBox="0 0 140 150" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="70" cy="142" rx="34" ry="6" fill="#000" opacity="0.18"/>
+    <line x1="70" y1="9" x2="70" y2="24" stroke="#00b384" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="70" cy="7" r="6.5" fill="#00e5a0"/>
+    <rect x="26" y="78" width="14" height="34" rx="7" fill="#00b384"/>
+    <rect x="34" y="66" width="72" height="60" rx="24" fill="#00e5a0"/>
+    <circle cx="70" cy="98" r="13" fill="#05130f"/>
+    <text x="70" y="102.3" text-anchor="middle" font-size="11" font-weight="800" fill="#00e5a0" font-family="Arial, sans-serif">BM</text>
+    <rect x="46" y="122" width="14" height="16" rx="7" fill="#00b384"/>
+    <rect x="80" y="122" width="14" height="16" rx="7" fill="#00b384"/>
+    <rect x="30" y="22" width="80" height="54" rx="26" fill="#0d0f14" stroke="#00e5a0" stroke-width="3"/>
+    <circle cx="54" cy="49" r="9" fill="#00e5a0"/>
+    <circle cx="86" cy="49" r="9" fill="#00e5a0"/>
+    <circle cx="57" cy="46" r="2.6" fill="#eafff6"/>
+    <circle cx="89" cy="46" r="2.6" fill="#eafff6"/>
+    <path d="M56 62 Q70 70 84 62" stroke="#00e5a0" stroke-width="3.4" fill="none" stroke-linecap="round"/>
+    <rect x="97" y="53" width="14" height="32" rx="7" fill="#00b384" transform="rotate(-30 104 69)"/>
+    <circle cx="115" cy="45" r="9" fill="#00b384"/>
+    <rect x="106" y="12" width="30" height="21" rx="9" fill="#fff"/>
+    <polygon points="112,31 121,31 112,40" fill="#fff"/>
+    <circle cx="115" cy="22.5" r="2" fill="#00b384"/>
+    <circle cx="121" cy="22.5" r="2" fill="#00b384"/>
+    <circle cx="127" cy="22.5" r="2" fill="#00b384"/>
   </svg>
 `;
 
-let botMensajesEnPantalla = 0;
+// Contenedor fijo donde se apilan las burbujas de BAM (una encima de otra,
+// de abajo hacia arriba). Con flexbox no hace falta calcular offsets en
+// px a mano — cada burbuja ocupa el alto que necesite.
+function contenedorBurbujasBot() {
+  let cont = document.getElementById('bot-burbujas-cont');
+  if (!cont) {
+    cont = document.createElement('div');
+    cont.id = 'bot-burbujas-cont';
+    cont.className = 'bot-burbujas-cont';
+    document.body.appendChild(cont);
+  }
+  return cont;
+}
 
-// Burbuja genérica del "bot perrito": mensaje + botones opcionales.
-// tipo: 'saludo' (arriba de todo) | 'aviso' (se apila debajo, para pendientes)
-function mostrarBotBurbuja(tituloHtml, textoHtml, { tipo = 'aviso', botones = [], duracionMs = 15 * 60 * 1000 } = {}) {
-  const offset = tipo === 'saludo' ? 16 : 16 + botMensajesEnPantalla * 92;
+// Burbuja genérica de BAM: mensaje + botones opcionales.
+function mostrarBotBurbuja(tituloHtml, textoHtml, { botones = [], duracionMs = 15 * 60 * 1000 } = {}) {
   const div = document.createElement('div');
   div.className = 'saludo-bienvenida bot-burbuja';
-  div.style.bottom = offset + 'px';
   div.innerHTML = `
+    <button class="saludo-cerrar" title="Cerrar">✕</button>
     <div class="saludo-personaje">${PERRITO_SVG}</div>
     <div class="saludo-texto">
       <strong>${tituloHtml}</strong>
       <span>${textoHtml}</span>
       ${botones.length ? `<div class="bot-botones">${botones.map((b, i) => `<button class="bot-btn" data-bot-idx="${i}">${b.label}</button>`).join('')}</div>` : ''}
     </div>
-    <button class="saludo-cerrar" title="Cerrar">✕</button>
   `;
-  document.body.appendChild(div);
-  botMensajesEnPantalla++;
+  contenedorBurbujasBot().appendChild(div);
   const quitar = () => {
     div.classList.add('saludo-salir');
-    setTimeout(() => { div.remove(); botMensajesEnPantalla = Math.max(0, botMensajesEnPantalla - 1); }, 300);
+    setTimeout(() => div.remove(), 300);
   };
   div.querySelector('.saludo-cerrar').addEventListener('click', quitar);
   botones.forEach((b, i) => {
@@ -232,7 +252,7 @@ function mostrarSaludoBienvenida() {
   else { saludo = 'Buenas noches'; emoji = '🌙'; }
 
   const nombre = (profile.nombre || profile.usuario || '').split(' ')[0];
-  mostrarBotBurbuja(`${saludo}, ${escapeHtml(nombre)}!`, `${emoji} Me llamo BAM 🤖, tu asistente de Electrodomésticos BM`, { tipo: 'saludo' });
+  mostrarBotBurbuja(`${saludo}, ${escapeHtml(nombre)}!`, `${emoji} Me llamo BAM 🤖, tu asistente de Electrodomésticos BM`);
 }
 
 // El bot avisa pendientes al entrar: cotizaciones sin autorizar y ventas sin
@@ -3132,10 +3152,34 @@ async function inicializarNotificacionesChat() {
         if (vistaActual === 'chat' && chatModo === 'individual' && profile.rol === 'admin' && !chatHiloVendedorId) {
           renderListaVendedoresChat();
         }
+        mostrarBotAvisoMensaje(m, hilo);
       }
       sonarNotificacion();
     })
     .subscribe();
+}
+
+// BAM avisa con una burbuja cuando llega un mensaje nuevo y no estás
+// viendo ese hilo (general o individual) — chat oficial (equipo) e interno
+// (vendedor ↔ administración) por igual.
+function mostrarBotAvisoMensaje(m, hilo) {
+  const remitente = escapeHtml(m.nombre_remitente || 'Alguien');
+  const donde = hilo === 'general'
+    ? 'en el chat general'
+    : (profile.rol === 'admin'
+      ? `con ${escapeHtml(vendedoresCache.find(v => v.id === hilo)?.nombre || 'un vendedor')}`
+      : 'con administración');
+  const preview = m.texto
+    ? escapeHtml(m.texto.length > 90 ? m.texto.slice(0, 90) + '…' : m.texto)
+    : '📷 Envió una foto';
+
+  mostrarBotBurbuja(`💬 ${remitente} — ${donde}`, preview, {
+    botones: [{ label: 'Ir al chat →', onClick: () => {
+      chatModo = hilo === 'general' ? 'general' : 'individual';
+      if (hilo !== 'general' && profile.rol === 'admin') chatHiloVendedorId = hilo;
+      switchView('chat');
+    } }]
+  });
 }
 
 async function renderChat() {

@@ -745,6 +745,21 @@ button.card:hover { border-color: var(--accent); background: var(--surface-2); }
   .saludo-bienvenida { width: auto; }
 }
 
+/* Panel interno: varias burbujas de BAM pueden coexistir (saludo, avisos
+   de pendientes/precios, mensajes de chat) — se apilan solas con flexbox,
+   sin calcular offsets en px a mano. */
+.bot-burbujas-cont {
+  position: fixed; bottom: 16px; right: 16px; z-index: 300;
+  display: flex; flex-direction: column-reverse; align-items: flex-end; gap: 12px;
+  max-width: calc(100vw - 32px);
+}
+.bot-burbujas-cont .saludo-bienvenida {
+  position: relative; bottom: auto; right: auto; left: auto; top: auto;
+}
+@media (max-width: 480px) {
+  .bot-burbujas-cont { left: 16px; right: 16px; align-items: stretch; }
+}
+
 /* Autocompletado propio de productos en ítems de cotización/venta */
 .it-sugerencias {
   position: absolute; top: 100%; left: 0; right: 0; z-index: 60;

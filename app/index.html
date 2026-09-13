@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=9" />
+<link rel="stylesheet" href="style.css?v=10" />
 </head>
 <body>
 
@@ -103,6 +103,7 @@
     <main class="view" id="view-ventas" hidden></main>
     <main class="view" id="view-catalogo" hidden></main>
     <main class="view" id="view-promos" hidden></main>
+    <main class="view" id="view-vendedores" hidden></main>
     <main class="view" id="view-chat" hidden></main>
     <main class="view" id="view-comprobantes" hidden></main>
     <main class="view" id="view-inventario" hidden></main>
@@ -122,6 +123,7 @@
           <button class="nav-item" data-view="ventas"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.5 3h2l2.6 12.6a2 2 0 0 0 2 1.6h8.8a2 2 0 0 0 2-1.6L23 7H6"/></svg></span>Ventas</button>
           <button class="nav-item" data-view="catalogo"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg></span>Catálogo</button>
           <button class="nav-item" data-view="promos"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8Z"/><path d="M16.5 8a2.5 2.5 0 0 0 0-5C13 3 12 8 12 8Z"/></svg></span>Promos</button>
+          <button class="nav-item" data-view="vendedores" id="nav-vendedores"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>Vendedores</button>
         </div>
       </div>
 
@@ -171,13 +173,13 @@
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <!-- Puente nativo Capacitor: solo se activa dentro de la app instalada (APK). En el navegador no hace nada. -->
-  <script src="vendor/capacitor/capacitor-core.js?v=9"></script>
-  <script src="vendor/capacitor/synapse.js?v=9"></script>
-  <script src="vendor/capacitor/bridge-alias.js?v=9"></script>
-  <script src="vendor/capacitor/filesystem-plugin.js?v=9"></script>
-  <script src="vendor/capacitor/share-plugin.js?v=9"></script>
-  <script src="config.js?v=9"></script>
-  <script src="app.js?v=9"></script>
+  <script src="vendor/capacitor/capacitor-core.js?v=10"></script>
+  <script src="vendor/capacitor/synapse.js?v=10"></script>
+  <script src="vendor/capacitor/bridge-alias.js?v=10"></script>
+  <script src="vendor/capacitor/filesystem-plugin.js?v=10"></script>
+  <script src="vendor/capacitor/share-plugin.js?v=10"></script>
+  <script src="config.js?v=10"></script>
+  <script src="app.js?v=10"></script>
 
   <script>
     if ('serviceWorker' in navigator) {

@@ -145,6 +145,7 @@ async function iniciarApp() {
   $('#nav-importar-productos').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-caja').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-garantias').style.display = profile.rol === 'admin' ? '' : 'none';
+  $('#nav-vendedores').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-group-gestion').style.display = profile.rol === 'admin' ? '' : 'none';
   $('.nav-group[data-group="ventas"]')?.classList.add('open');
   if (profile.rol === 'admin') $('#nav-group-gestion')?.classList.add('open');
@@ -461,7 +462,7 @@ function cerrarMenuMobile() {
 }
 
 async function switchView(view) {
-  if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias') && profile.rol !== 'admin') view = 'cotizaciones';
+  if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores') && profile.rol !== 'admin') view = 'cotizaciones';
   vistaActual = view;
   $$('.view').forEach(v => v.hidden = true);
   $(`#view-${view}`).hidden = false;
@@ -475,6 +476,7 @@ async function switchView(view) {
   if (view === 'caja') await renderCaja();
   if (view === 'usuarios') await renderUsuarios();
   if (view === 'garantias') await renderGarantias();
+  if (view === 'vendedores') await renderVendedoresReporte();
   if (view === 'chat') await renderChat();
   if (view === 'comprobantes') await renderComprobantes();
 }
@@ -1945,6 +1947,7 @@ async function renderCaja() {
         <button class="tab-btn ${cajaVistaAdmin === 'mia' ? 'active' : ''}" id="tab-mi-caja">Mi caja</button>
         <button class="tab-btn ${cajaVistaAdmin === 'autorizar' ? 'active' : ''}" id="tab-autorizar">Autorizar</button>
         <button class="tab-btn ${cajaVistaAdmin === 'todas' ? 'active' : ''}" id="tab-todas-cajas">Todas las cajas</button>
+        <button class="tab-btn ${cajaVistaAdmin === 'cobranza' ? 'active' : ''}" id="tab-cobranza">📊 Cobranza</button>
         <button class="tab-btn ${cajaVistaAdmin === 'libro' ? 'active' : ''}" id="tab-libro-diario">Libro diario</button>
         <button class="tab-btn ${cajaVistaAdmin === 'medios' ? 'active' : ''}" id="tab-medios-pago">Medios de pago</button>
         <button class="tab-btn ${cajaVistaAdmin === 'promos' ? 'active' : ''}" id="tab-promos">Promociones</button>
@@ -1956,6 +1959,7 @@ async function renderCaja() {
     $('#tab-mi-caja').addEventListener('click', () => { cajaVistaAdmin = 'mia'; renderCaja(); });
     $('#tab-autorizar').addEventListener('click', () => { cajaVistaAdmin = 'autorizar'; renderCaja(); });
     $('#tab-todas-cajas').addEventListener('click', () => { cajaVistaAdmin = 'todas'; renderCaja(); });
+    $('#tab-cobranza').addEventListener('click', () => { cajaVistaAdmin = 'cobranza'; renderCaja(); });
     $('#tab-libro-diario').addEventListener('click', () => { cajaVistaAdmin = 'libro'; renderCaja(); });
     $('#tab-medios-pago').addEventListener('click', () => { cajaVistaAdmin = 'medios'; renderCaja(); });
     $('#tab-promos').addEventListener('click', () => { cajaVistaAdmin = 'promos'; renderCaja(); });
@@ -1964,6 +1968,7 @@ async function renderCaja() {
 
   if (profile.rol === 'admin' && cajaVistaAdmin === 'todas') return renderTodasLasCajas();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'autorizar') return renderAutorizaciones();
+  if (profile.rol === 'admin' && cajaVistaAdmin === 'cobranza') return renderCobranza();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'libro') return renderLibroDiario();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'medios') return renderMediosPago();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'promos') return renderPromociones();
@@ -2163,6 +2168,137 @@ async function renderTodasLasCajas() {
       `).join('')}
     </tbody>
   </table></div>`;
+}
+
+// ------------------------------------------------------------
+// COBRANZA: dashboard de ventas/a cobrar/vencido por período
+// (día / semana / mes / año) — solo ventas y cobranzas, sin
+// mezclar con caja_movimientos (ingresos/egresos varios).
+// ------------------------------------------------------------
+let cobranzaPeriodo = 'mes';
+
+function rangoPeriodoCobranza(tipo) {
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  let desde, hasta;
+  if (tipo === 'dia') {
+    desde = new Date(hoy);
+    hasta = new Date(hoy); hasta.setDate(hasta.getDate() + 1);
+  } else if (tipo === 'semana') {
+    const diaSemana = (hoy.getDay() + 6) % 7; // 0 = lunes
+    desde = new Date(hoy); desde.setDate(desde.getDate() - diaSemana);
+    hasta = new Date(desde); hasta.setDate(hasta.getDate() + 7);
+  } else if (tipo === 'anio') {
+    desde = new Date(hoy.getFullYear(), 0, 1);
+    hasta = new Date(hoy.getFullYear() + 1, 0, 1);
+  } else { // mes
+    desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    hasta = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 1);
+  }
+  return { desde, hasta };
+}
+
+function etiquetaPeriodoCobranza(tipo) {
+  return { dia: 'hoy', semana: 'esta semana', mes: 'este mes', anio: 'este año' }[tipo] || 'el período';
+}
+
+// Donut hecho con SVG puro (sin librería): cada <circle> es un segmento,
+// dibujado con stroke-dasharray en base 100 = % del total. r=15.9155 da
+// una circunferencia ≈100, así el % se puede usar directo como longitud.
+function donutSvg(segmentos) {
+  const total = segmentos.reduce((s, x) => s + x.valor, 0);
+  let acumulado = 0;
+  const circles = segmentos.filter(s => s.valor > 0).map(s => {
+    const pct = total > 0 ? (s.valor / total * 100) : 0;
+    const dashoffset = 25 - acumulado; // arranca a las 12 y gira en sentido horario
+    acumulado += pct;
+    return `<circle cx="18" cy="18" r="15.9155" fill="none" stroke="${s.color}" stroke-width="4" stroke-dasharray="${pct} ${100 - pct}" stroke-dashoffset="${dashoffset}"></circle>`;
+  }).join('');
+  return `<svg viewBox="0 0 36 36" class="donut-svg"><circle cx="18" cy="18" r="15.9155" fill="none" stroke="var(--surface-2)" stroke-width="4"></circle>${circles}</svg>`;
+}
+
+async function renderCobranza() {
+  const cont = $('#caja-content');
+  cont.innerHTML = `
+    <div class="tabs" style="margin-bottom:16px">
+      <button class="tab-btn ${cobranzaPeriodo === 'dia' ? 'active' : ''}" data-periodo="dia">Día</button>
+      <button class="tab-btn ${cobranzaPeriodo === 'semana' ? 'active' : ''}" data-periodo="semana">Semana</button>
+      <button class="tab-btn ${cobranzaPeriodo === 'mes' ? 'active' : ''}" data-periodo="mes">Mes</button>
+      <button class="tab-btn ${cobranzaPeriodo === 'anio' ? 'active' : ''}" data-periodo="anio">Año</button>
+    </div>
+    <div id="cobranza-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  cont.querySelectorAll('[data-periodo]').forEach(btn => btn.addEventListener('click', () => {
+    cobranzaPeriodo = btn.dataset.periodo;
+    renderCobranza();
+  }));
+  await cargarYRenderCobranza();
+}
+
+async function cargarYRenderCobranza() {
+  const cont = $('#cobranza-content');
+  const { desde, hasta } = rangoPeriodoCobranza(cobranzaPeriodo);
+  const { data } = await sb.from('ventas')
+    .select('total, cobrado, cuota1_dias, cuota2_dias, created_at')
+    .gte('created_at', desde.toISOString()).lt('created_at', hasta.toISOString());
+
+  const lista = data || [];
+  if (lista.length === 0) {
+    cont.innerHTML = `<div class="empty-state">No hay ventas registradas en ${etiquetaPeriodoCobranza(cobranzaPeriodo)}.</div>`;
+    return;
+  }
+
+  const hoy = new Date();
+  let ventasTotal = 0, pagada = 0, vencida = 0, vigente = 0;
+  lista.forEach(v => {
+    const total = Number(v.total);
+    ventasTotal += total;
+    if (v.cobrado) { pagada += total; return; }
+    // Vencida = ya pasó el plazo de pago (cuota2 si es crédito, cuota1/0
+    // días si es contado — contado no cobrado el mismo día ya es vencido).
+    const dias = v.cuota2_dias || v.cuota1_dias || 0;
+    const limite = new Date(v.created_at);
+    limite.setDate(limite.getDate() + dias);
+    if (limite < hoy) vencida += total; else vigente += total;
+  });
+  const aCobrar = vencida + vigente;
+  const pctVencido = ventasTotal > 0 ? (vencida / ventasTotal * 100) : 0;
+  const ticketPromedio = ventasTotal / lista.length;
+
+  cont.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Ventas</div><div class="value">${money(ventasTotal)}</div></div>
+      <div class="stat-chip warn"><div class="label">A cobrar</div><div class="value">${money(aCobrar)}</div></div>
+      <div class="stat-chip danger"><div class="label">Vencido</div><div class="value">${money(vencida)}</div></div>
+      <div class="stat-chip ${pctVencido > 0 ? 'danger' : 'accent'}"><div class="label">% Vencido</div><div class="value">${pctVencido.toFixed(0)}%</div></div>
+    </div>
+    <p style="color:var(--text-dim);font-size:12.5px;margin:-8px 0 16px">Ticket promedio: <strong style="color:var(--text)">${money(ticketPromedio)}</strong> · ${lista.length} venta${lista.length !== 1 ? 's' : ''} en ${etiquetaPeriodoCobranza(cobranzaPeriodo)}</p>
+
+    <div class="dash-2col">
+      <div class="card">
+        <div class="card-title">Embudo de ventas</div>
+        <div class="vend-bars">
+          <div class="vend-bar-row"><div class="vend-bar-nombre">Facturado</div><div class="vend-bar-track"><div class="vend-bar-fill" style="width:100%"></div></div><div class="vend-bar-valor">${money(ventasTotal)}</div></div>
+          <div class="vend-bar-row"><div class="vend-bar-nombre">A cobrar</div><div class="vend-bar-track"><div class="vend-bar-fill" style="width:${ventasTotal > 0 ? aCobrar / ventasTotal * 100 : 0}%;background:linear-gradient(90deg,#ffb020,#ff8a00)"></div></div><div class="vend-bar-valor">${money(aCobrar)}</div></div>
+          <div class="vend-bar-row"><div class="vend-bar-nombre">Vencido</div><div class="vend-bar-track"><div class="vend-bar-fill" style="width:${ventasTotal > 0 ? vencida / ventasTotal * 100 : 0}%;background:linear-gradient(90deg,#e5484d,#c2373b)"></div></div><div class="vend-bar-valor">${money(vencida)}</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Estado de ventas</div>
+        <div class="donut-wrap">
+          ${donutSvg([
+            { valor: pagada, color: '#00e5a0' },
+            { valor: vigente, color: '#ffb020' },
+            { valor: vencida, color: '#e5484d' }
+          ])}
+          <div class="donut-legend">
+            <div><span class="donut-dot" style="background:#00e5a0"></span>Pagada — ${ventasTotal > 0 ? (pagada / ventasTotal * 100).toFixed(0) : 0}%</div>
+            <div><span class="donut-dot" style="background:#ffb020"></span>Vigente — ${ventasTotal > 0 ? (vigente / ventasTotal * 100).toFixed(0) : 0}%</div>
+            <div><span class="donut-dot" style="background:#e5484d"></span>Vencida — ${ventasTotal > 0 ? (vencida / ventasTotal * 100).toFixed(0) : 0}%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 // ------------------------------------------------------------
@@ -3028,6 +3164,115 @@ async function compartirPromocionWhatsapp(p) {
   } else {
     window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
   }
+}
+
+// ============================================================
+// VENDEDORES: registro mensual de ventas por vendedor + ranking
+// (solo admin)
+// ============================================================
+let mesVendedoresReporte = new Date().toISOString().slice(0, 7); // "yyyy-mm"
+
+function nombreMes(yyyyMm) {
+  const [anio, mes] = yyyyMm.split('-').map(Number);
+  const d = new Date(anio, mes - 1, 1);
+  const texto = d.toLocaleDateString('es-BO', { month: 'long', year: 'numeric' });
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
+async function renderVendedoresReporte() {
+  const el = $('#view-vendedores');
+  el.innerHTML = `
+    <div class="section-head">
+      <div><h2>Vendedores</h2><p class="sub">Registro de ventas del mes y ranking por vendedor</p></div>
+    </div>
+    <div class="field" style="max-width:220px;margin-bottom:16px">
+      <label>Mes</label>
+      <input type="month" id="f-mes-vendedores" value="${mesVendedoresReporte}" />
+    </div>
+    <div id="vendedores-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  $('#f-mes-vendedores').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    mesVendedoresReporte = e.target.value;
+    cargarYRenderVendedoresReporte();
+  });
+  await cargarYRenderVendedoresReporte();
+}
+
+async function cargarYRenderVendedoresReporte() {
+  const cont = $('#vendedores-content');
+  const [anio, mes] = mesVendedoresReporte.split('-').map(Number);
+  const desde = new Date(anio, mes - 1, 1);
+  const hasta = new Date(anio, mes, 1);
+
+  const [{ data: ventasMes }, { data: perfiles }] = await Promise.all([
+    sb.from('ventas').select('total, vendedor_id').gte('created_at', desde.toISOString()).lt('created_at', hasta.toISOString()),
+    sb.from('profiles').select('id, nombre, usuario')
+  ]);
+
+  const nombrePorId = {};
+  (perfiles || []).forEach(p => { nombrePorId[p.id] = p.nombre || p.usuario; });
+
+  const porVendedor = {};
+  (ventasMes || []).forEach(v => {
+    const id = v.vendedor_id || 'sin-asignar';
+    if (!porVendedor[id]) porVendedor[id] = { cantidad: 0, total: 0 };
+    porVendedor[id].cantidad++;
+    porVendedor[id].total += Number(v.total);
+  });
+
+  const filas = Object.entries(porVendedor).map(([id, datos]) => ({
+    id,
+    nombre: id === 'sin-asignar' ? 'Sin vendedor asignado' : (nombrePorId[id] || 'Ex-usuario'),
+    ...datos,
+    promedio: datos.total / datos.cantidad
+  })).sort((a, b) => b.total - a.total);
+
+  if (filas.length === 0) {
+    cont.innerHTML = `<div class="empty-state">No hay ventas registradas en ${nombreMes(mesVendedoresReporte)}.</div>`;
+    return;
+  }
+
+  const totalGeneral = filas.reduce((s, f) => s + f.total, 0);
+  const cantidadGeneral = filas.reduce((s, f) => s + f.cantidad, 0);
+  const max = filas[0].total;
+
+  cont.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Total vendido — ${nombreMes(mesVendedoresReporte)}</div><div class="value">${money(totalGeneral)}</div></div>
+      <div class="stat-chip warn"><div class="label">Cantidad de ventas</div><div class="value">${cantidadGeneral}</div></div>
+      <div class="stat-chip"><div class="label">Top del mes</div><div class="value" style="font-size:15px">${escapeHtml(filas[0].nombre)}</div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Ranking por vendedor</div>
+      <div class="vend-bars">
+        ${filas.map(f => `
+          <div class="vend-bar-row">
+            <div class="vend-bar-nombre" title="${escapeHtml(f.nombre)}">${escapeHtml(f.nombre)}</div>
+            <div class="vend-bar-track"><div class="vend-bar-fill" style="width:${max > 0 ? (f.total / max * 100) : 0}%"></div></div>
+            <div class="vend-bar-valor">${money(f.total)}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Vendedor</th><th>N° de ventas</th><th>Total vendido</th><th>Ticket promedio</th></tr></thead>
+        <tbody>
+          ${filas.map(f => `
+            <tr>
+              <td>${escapeHtml(f.nombre)}</td>
+              <td>${f.cantidad}</td>
+              <td>${money(f.total)}</td>
+              <td>${money(f.promedio)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 async function renderPromos() {

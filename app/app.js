@@ -471,6 +471,10 @@ function cerrarMenuMobile() {
 // ------------------------------------------------------------
 if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.Plugins.App) {
   const CapApp = window.Capacitor.Plugins.App;
+  // Botón visible para salir de la app (no de la cuenta): tan directo como
+  // cerrar sesión, un solo toque. Solo tiene sentido dentro del APK.
+  $('#exit-app-btn').hidden = false;
+  $('#exit-app-btn').addEventListener('click', () => CapApp.exitApp());
   CapApp.addListener('backButton', () => {
     const docprev = document.getElementById('docprev-overlay');
     if (docprev) { docprev.remove(); return; }

@@ -711,3 +711,34 @@ create policy "mensajes_insert" on public.mensajes
     usuario_id = auth.uid()
     and (conversacion_con is null or conversacion_con = auth.uid() or public.is_admin())
   );
+
+-- ============================================================
+-- ACTUALIZACIÓN: Certificado de garantía — número correlativo,
+-- datos del producto/compra para el impreso, condiciones de
+-- cobertura y firma del cliente (igual que en comprobantes).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.garantias add column if not exists numero integer;
+alter table public.garantias add column if not exists cliente_ci text not null default '';
+alter table public.garantias add column if not exists numero_serie text not null default '';
+alter table public.garantias add column if not exists precio numeric(12,2);
+alter table public.garantias add column if not exists condiciones text not null default '';
+alter table public.garantias add column if not exists firma_base64 text;
+alter table public.garantias add column if not exists registrado_por_nombre text not null default '';
+
+-- ============================================================
+-- ACTUALIZACIÓN: descuento máximo por producto (tope de descuento
+-- que se le puede dar al cliente final en cotizaciones/ventas).
+-- null = sin límite (no cambia el comportamiento de los productos
+-- que ya tenías cargados).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.productos add column if not exists descuento_maximo_pct numeric(5,2);
+
+-- ============================================================
+-- ACTUALIZACIÓN: umbral de margen mínimo aceptable (para el panel
+-- de Rentabilidad en Inventario — marca en rojo los productos por
+-- debajo de este %).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.configuracion add column if not exists margen_minimo_pct numeric(5,2) not null default 20;

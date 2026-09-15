@@ -14,6 +14,9 @@ let mediosPagoCache = [];
 let promocionesCache = [];
 let intervaloAlertaPendientes = null;
 let intervaloNotificaciones = null;
+let intervaloBotPendientes = null;  // BAM re-revisa autorizaciones/cobros pendientes (admin y vendedores)
+let intervaloBotPrecios = null;     // BAM re-revisa cambios de precio (admin y vendedores)
+let intervaloBotGarantias = null;   // BAM re-revisa garantías por vencer (solo admin)
 let vistaActual = 'cotizaciones';
 let canalChatGlobal = null;
 let sesionCajaActual = null;
@@ -139,8 +142,10 @@ async function iniciarApp() {
   $('#role-chip').classList.toggle('admin', profile.rol === 'admin');
   $('#nav-usuarios').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-inventario').style.display = profile.rol === 'admin' ? '' : 'none';
+  $('#nav-importar-productos').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-caja').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-garantias').style.display = profile.rol === 'admin' ? '' : 'none';
+  $('#nav-vendedores').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-group-gestion').style.display = profile.rol === 'admin' ? '' : 'none';
   $('.nav-group[data-group="ventas"]')?.classList.add('open');
   if (profile.rol === 'admin') $('#nav-group-gestion')?.classList.add('open');
@@ -153,6 +158,17 @@ async function iniciarApp() {
   mostrarSaludoBienvenida();
   setTimeout(mostrarBotPendientesEntrada, 1200);
   setTimeout(mostrarBotCambiosPrecio, 2600);
+  setTimeout(mostrarBotGarantiasPorVencer, 3800);
+
+  // BAM vuelve a revisar autorizaciones/cobros pendientes, cambios de
+  // precio y garantías por vencer cada 20 min mientras la app está
+  // abierta (antes solo avisaba una vez, al entrar).
+  clearInterval(intervaloBotPendientes);
+  intervaloBotPendientes = setInterval(mostrarBotPendientesEntrada, 20 * 60 * 1000);
+  clearInterval(intervaloBotPrecios);
+  intervaloBotPrecios = setInterval(mostrarBotCambiosPrecio, 20 * 60 * 1000);
+  clearInterval(intervaloBotGarantias);
+  intervaloBotGarantias = setInterval(mostrarBotGarantiasPorVencer, 20 * 60 * 1000);
 
   if (profile.rol !== 'admin') {
     mostrarPopupPromosVendedor();
@@ -168,53 +184,63 @@ async function iniciarApp() {
 }
 
 const PERRITO_SVG = `
-  <svg viewBox="0 0 120 130" xmlns="http://www.w3.org/2000/svg">
-    <rect x="8" y="70" width="15" height="34" rx="7.5" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="97" y="70" width="15" height="34" rx="7.5" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="40" y="112" width="17" height="17" rx="6" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="63" y="112" width="17" height="17" rx="6" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <ellipse cx="48.5" cy="129" rx="10" ry="4" fill="#2f6fa8"/>
-    <ellipse cx="71.5" cy="129" rx="10" ry="4" fill="#2f6fa8"/>
-    <rect x="52" y="56" width="16" height="10" fill="#5fa8d3"/>
-    <rect x="24" y="64" width="72" height="38" rx="14" fill="#bfe4f5" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="43" y="76" width="34" height="17" rx="4" fill="#1c2b4a"/>
-    <rect x="55" y="80.5" width="10" height="10" rx="2" fill="#ffd23f" transform="rotate(45 60 85.5)"/>
-    <rect x="34" y="98" width="52" height="16" rx="8" fill="#ffd23f"/>
-    <text x="60" y="109.5" text-anchor="middle" font-size="10.5" font-weight="800" fill="#1c2b4a" font-family="Arial, sans-serif">BM</text>
-    <circle cx="33" cy="14" r="7" fill="#a8dcf0" stroke="#2f6fa8" stroke-width="2.5"/>
-    <circle cx="87" cy="14" r="7" fill="#a8dcf0" stroke="#2f6fa8" stroke-width="2.5"/>
-    <rect x="28" y="8" width="64" height="50" rx="15" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3.5"/>
-    <rect x="37" y="17" width="46" height="31" rx="9" fill="#1c2b4a"/>
-    <circle cx="50" cy="32.5" r="6.4" fill="#ffd23f"/>
-    <circle cx="70" cy="32.5" r="6.4" fill="#ffd23f"/>
-    <circle cx="52" cy="30.5" r="1.8" fill="#fff8d8"/>
-    <circle cx="72" cy="30.5" r="1.8" fill="#fff8d8"/>
+  <svg viewBox="0 0 140 150" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="70" cy="142" rx="34" ry="6" fill="#000" opacity="0.18"/>
+    <line x1="70" y1="9" x2="70" y2="24" stroke="#00b384" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="70" cy="7" r="6.5" fill="#00e5a0"/>
+    <rect x="26" y="78" width="14" height="34" rx="7" fill="#00b384"/>
+    <rect x="34" y="66" width="72" height="60" rx="24" fill="#00e5a0"/>
+    <circle cx="70" cy="98" r="13" fill="#05130f"/>
+    <text x="70" y="102.3" text-anchor="middle" font-size="11" font-weight="800" fill="#00e5a0" font-family="Arial, sans-serif">BM</text>
+    <rect x="46" y="122" width="14" height="16" rx="7" fill="#00b384"/>
+    <rect x="80" y="122" width="14" height="16" rx="7" fill="#00b384"/>
+    <rect x="30" y="22" width="80" height="54" rx="26" fill="#0d0f14" stroke="#00e5a0" stroke-width="3"/>
+    <circle cx="54" cy="49" r="9" fill="#00e5a0"/>
+    <circle cx="86" cy="49" r="9" fill="#00e5a0"/>
+    <circle cx="57" cy="46" r="2.6" fill="#eafff6"/>
+    <circle cx="89" cy="46" r="2.6" fill="#eafff6"/>
+    <path d="M56 62 Q70 70 84 62" stroke="#00e5a0" stroke-width="3.4" fill="none" stroke-linecap="round"/>
+    <rect x="97" y="53" width="14" height="32" rx="7" fill="#00b384" transform="rotate(-30 104 69)"/>
+    <circle cx="115" cy="45" r="9" fill="#00b384"/>
+    <rect x="106" y="12" width="30" height="21" rx="9" fill="#fff"/>
+    <polygon points="112,31 121,31 112,40" fill="#fff"/>
+    <circle cx="115" cy="22.5" r="2" fill="#00b384"/>
+    <circle cx="121" cy="22.5" r="2" fill="#00b384"/>
+    <circle cx="127" cy="22.5" r="2" fill="#00b384"/>
   </svg>
 `;
 
-let botMensajesEnPantalla = 0;
+// Contenedor fijo donde se apilan las burbujas de BAM (una encima de otra,
+// de abajo hacia arriba). Con flexbox no hace falta calcular offsets en
+// px a mano — cada burbuja ocupa el alto que necesite.
+function contenedorBurbujasBot() {
+  let cont = document.getElementById('bot-burbujas-cont');
+  if (!cont) {
+    cont = document.createElement('div');
+    cont.id = 'bot-burbujas-cont';
+    cont.className = 'bot-burbujas-cont';
+    document.body.appendChild(cont);
+  }
+  return cont;
+}
 
-// Burbuja genérica del "bot perrito": mensaje + botones opcionales.
-// tipo: 'saludo' (arriba de todo) | 'aviso' (se apila debajo, para pendientes)
-function mostrarBotBurbuja(tituloHtml, textoHtml, { tipo = 'aviso', botones = [], duracionMs = 15 * 60 * 1000 } = {}) {
-  const offset = tipo === 'saludo' ? 16 : 16 + botMensajesEnPantalla * 92;
+// Burbuja genérica de BAM: mensaje + botones opcionales.
+function mostrarBotBurbuja(tituloHtml, textoHtml, { botones = [], duracionMs = 15 * 60 * 1000 } = {}) {
   const div = document.createElement('div');
   div.className = 'saludo-bienvenida bot-burbuja';
-  div.style.bottom = offset + 'px';
   div.innerHTML = `
+    <button class="saludo-cerrar" title="Cerrar">✕</button>
     <div class="saludo-personaje">${PERRITO_SVG}</div>
     <div class="saludo-texto">
       <strong>${tituloHtml}</strong>
       <span>${textoHtml}</span>
       ${botones.length ? `<div class="bot-botones">${botones.map((b, i) => `<button class="bot-btn" data-bot-idx="${i}">${b.label}</button>`).join('')}</div>` : ''}
     </div>
-    <button class="saludo-cerrar" title="Cerrar">✕</button>
   `;
-  document.body.appendChild(div);
-  botMensajesEnPantalla++;
+  contenedorBurbujasBot().appendChild(div);
   const quitar = () => {
     div.classList.add('saludo-salir');
-    setTimeout(() => { div.remove(); botMensajesEnPantalla = Math.max(0, botMensajesEnPantalla - 1); }, 300);
+    setTimeout(() => div.remove(), 300);
   };
   div.querySelector('.saludo-cerrar').addEventListener('click', quitar);
   botones.forEach((b, i) => {
@@ -232,7 +258,7 @@ function mostrarSaludoBienvenida() {
   else { saludo = 'Buenas noches'; emoji = '🌙'; }
 
   const nombre = (profile.nombre || profile.usuario || '').split(' ')[0];
-  mostrarBotBurbuja(`${saludo}, ${escapeHtml(nombre)}!`, `${emoji} Me llamo BAM 🤖, tu asistente de Electrodomésticos BM`, { tipo: 'saludo' });
+  mostrarBotBurbuja(`${saludo}, ${escapeHtml(nombre)}!`, `${emoji} Me llamo BAM 🤖, tu asistente de Electrodomésticos BM`);
 }
 
 // El bot avisa pendientes al entrar: cotizaciones sin autorizar y ventas sin
@@ -281,6 +307,28 @@ async function mostrarBotCambiosPrecio() {
   const extra = nuevos.length > 5 ? `<br>y ${nuevos.length - 5} más...` : '';
 
   mostrarBotBurbuja('🤖 BAM te avisa:', `Cambiaron precios:<br>${lineas}${extra}`);
+}
+
+// El bot avisa al admin sobre garantías que vencen dentro de 15 días,
+// una sola vez por garantía (según su fecha de vencimiento actual).
+async function mostrarBotGarantiasPorVencer() {
+  if (profile.rol !== 'admin') return;
+  const { data } = await sb.from('garantias').select('id, cliente_nombre, producto_descripcion, fecha_vencimiento');
+  if (!data || data.length === 0) return;
+
+  const vistas = notifsVistas();
+  const porVencer = data
+    .filter(g => estaPorVencer(g, 15) && !vistas.includes(`garantia-vence-${g.id}-${g.fecha_vencimiento}`))
+    .sort((a, b) => a.fecha_vencimiento.localeCompare(b.fecha_vencimiento));
+  if (porVencer.length === 0) return;
+
+  porVencer.forEach(g => marcarNotifVista(`garantia-vence-${g.id}-${g.fecha_vencimiento}`));
+
+  const lineas = porVencer.slice(0, 5).map(g => `${g.cliente_nombre} — ${g.producto_descripcion} (vence ${fecha(g.fecha_vencimiento)})`).join('<br>');
+  const extra = porVencer.length > 5 ? `<br>y ${porVencer.length - 5} más...` : '';
+  mostrarBotBurbuja('🛡️ BAM te avisa:', `${porVencer.length} garantía${porVencer.length > 1 ? 's' : ''} vence${porVencer.length > 1 ? 'n' : ''} pronto:<br>${lineas}${extra}`, {
+    botones: [{ label: 'Ir a Garantías →', onClick: () => switchView('garantias') }]
+  });
 }
 
 // Restaurar sesión si ya había una activa (recarga de página)
@@ -395,7 +443,9 @@ async function verificarNotificacionesVendedor() {
 // NAVEGACIÓN
 // ------------------------------------------------------------
 $$('.nav-item').forEach(btn => btn.addEventListener('click', () => {
-  switchView(btn.dataset.view);
+  if (btn.dataset.view) switchView(btn.dataset.view);
+  if (btn.dataset.calc) abrirCalculadora(btn.dataset.calc);
+  if (btn.dataset.importar) abrirImportadorProductos();
   cerrarMenuMobile();
 }));
 $$('.nav-group-header').forEach(btn => btn.addEventListener('click', () => {
@@ -411,8 +461,28 @@ function cerrarMenuMobile() {
   $('#nav-backdrop')?.classList.remove('show');
 }
 
+// ------------------------------------------------------------
+// BOTÓN/GESTO "ATRÁS" DE ANDROID
+// Sin este listener, Android no sabe que hay una vista previa, un menú
+// o un formulario abiertos: el back físico puede no reaccionar o cerrar
+// la app de golpe en cualquier pantalla. Se resuelve en capas (lo que
+// esté "más encima" se cierra primero) y, si no hay nada que cerrar,
+// termina en una salida simple y directa — tan clara como cerrar sesión.
+// ------------------------------------------------------------
+if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.Plugins.App) {
+  const CapApp = window.Capacitor.Plugins.App;
+  CapApp.addListener('backButton', () => {
+    const docprev = document.getElementById('docprev-overlay');
+    if (docprev) { docprev.remove(); return; }
+    if ($('#bottom-nav')?.classList.contains('open')) { cerrarMenuMobile(); return; }
+    if ($('#modal-overlay')?.classList.contains('show')) { closeModal(); return; }
+    if (profile && vistaActual !== 'cotizaciones') { switchView('cotizaciones'); return; }
+    CapApp.exitApp();
+  });
+}
+
 async function switchView(view) {
-  if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias') && profile.rol !== 'admin') view = 'cotizaciones';
+  if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores') && profile.rol !== 'admin') view = 'cotizaciones';
   vistaActual = view;
   $$('.view').forEach(v => v.hidden = true);
   $(`#view-${view}`).hidden = false;
@@ -426,6 +496,7 @@ async function switchView(view) {
   if (view === 'caja') await renderCaja();
   if (view === 'usuarios') await renderUsuarios();
   if (view === 'garantias') await renderGarantias();
+  if (view === 'vendedores') await renderVendedoresReporte();
   if (view === 'chat') await renderChat();
   if (view === 'comprobantes') await renderComprobantes();
 }
@@ -808,6 +879,58 @@ function recalcularTotal() {
   total = Math.max(0, total * (1 - descPct) * (1 - descAdicPct));
   const elTotal = $('#items-total-val');
   if (elTotal) elTotal.textContent = money(total);
+  mostrarAvisoDescuentoMaximo(sub, total);
+}
+
+// El menor descuento_maximo_pct entre los productos del carrito que
+// tengan un límite definido (null = sin límite en ese producto). Si
+// ningún ítem del carrito tiene un producto del catálogo con límite
+// definido, devuelve null (sin restricción).
+function descuentoMaximoPermitidoCarrito() {
+  const conLimite = itemsForm
+    .filter(it => it.producto_id)
+    .map(it => productosCache.find(p => p.id === it.producto_id))
+    .filter(p => p && p.descuento_maximo_pct != null);
+  if (conLimite.length === 0) return null;
+  return Math.min(...conLimite.map(p => Number(p.descuento_maximo_pct)));
+}
+
+function descuentoEfectivoPct(subtotal, total) {
+  if (subtotal <= 0) return 0;
+  return Math.max(0, (1 - total / subtotal) * 100);
+}
+
+function mostrarAvisoDescuentoMaximo(subtotal, total) {
+  const cont = $('#items-total-val')?.closest('.items-total');
+  if (!cont) return;
+  let aviso = document.getElementById('aviso-descuento-max');
+  const maximo = descuentoMaximoPermitidoCarrito();
+  if (maximo == null) { if (aviso) aviso.remove(); return; }
+  if (!aviso) {
+    aviso = document.createElement('p');
+    aviso.id = 'aviso-descuento-max';
+    aviso.style.cssText = 'font-size:12px;margin-top:6px';
+    cont.insertAdjacentElement('afterend', aviso);
+  }
+  const efectivo = descuentoEfectivoPct(subtotal, total);
+  const excedido = efectivo > maximo + 0.01;
+  aviso.style.color = excedido ? 'var(--accent-2)' : 'var(--text-dim)';
+  aviso.textContent = excedido
+    ? `⚠️ Superaste el descuento máximo permitido para estos productos (${maximo}%) — llevás ${efectivo.toFixed(1)}%.${profile.rol === 'admin' ? ' Como admin podés continuar.' : ' Bajá el descuento o pedile autorización al administrador.'}`
+    : `Descuento máximo permitido para estos productos: ${maximo}% (llevás ${efectivo.toFixed(1)}%).`;
+}
+
+// El admin no tiene tope (es quien autoriza igual todo lo demás). Para
+// vendedores, bloquea el guardado si el descuento efectivo supera el
+// mínimo de los descuento_maximo_pct de los productos del carrito.
+function bloqueadoPorDescuentoMaximo(subtotal, total) {
+  if (profile.rol === 'admin') return false;
+  const maximo = descuentoMaximoPermitidoCarrito();
+  if (maximo == null) return false;
+  const efectivo = descuentoEfectivoPct(subtotal, total);
+  if (efectivo <= maximo + 0.01) return false;
+  toast(`El descuento máximo permitido para estos productos es ${maximo}% — estás dando ${efectivo.toFixed(1)}%. Pedile autorización al administrador.`, 'error');
+  return true;
 }
 
 async function guardarCotizacion() {
@@ -828,6 +951,7 @@ async function guardarCotizacion() {
   const descuento_adicional_pct = Number($('#f-desc-adic-pct')?.value || 0);
   let total = Math.max(0, subtotal - descuento);
   total = Math.max(0, total * (1 - descuento_pct / 100) * (1 - descuento_adicional_pct / 100));
+  if (bloqueadoPorDescuentoMaximo(subtotal, total)) return;
   const telefono = $('#f-telefono').value.trim();
   const facturar_a = $('#f-facturar').value.trim();
   const cliente_nit = $('#f-nit').value.trim();
@@ -997,6 +1121,7 @@ async function guardarVenta(desdeCotizacion) {
   const descuento_adicional_pct = Number($('#f-desc-adic-pct')?.value || 0);
   let total = Math.max(0, subtotal - descuento);
   total = Math.max(0, total * (1 - descuento_pct / 100) * (1 - descuento_adicional_pct / 100));
+  if (bloqueadoPorDescuentoMaximo(subtotal, total)) return;
   const metodo_pago = $('#f-metodo').value;
   const medio_pago_id = $('#f-medio-pago')?.value || null;
   const telefono = $('#f-telefono').value.trim();
@@ -1055,21 +1180,39 @@ async function renderInventario() {
   el.innerHTML = `
     <div class="section-head">
       <div><h2>Inventario</h2><p class="sub">Catálogo, stock y movimientos</p></div>
-      ${profile.rol === 'admin' ? `<button class="btn btn-primary" id="btn-nuevo-producto">+ Agregar producto</button>` : ''}
+      ${profile.rol === 'admin' ? `
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary" id="btn-ir-importar">📥 Importar / Actualizar Excel</button>
+          <button class="btn btn-primary" id="btn-nuevo-producto">+ Agregar producto</button>
+        </div>
+      ` : ''}
     </div>
     ${bajos.length > 0 ? `<div class="low-stock-banner"><span class="dot"></span>${bajos.length} producto${bajos.length > 1 ? 's' : ''} con stock bajo — revisá el catálogo</div>` : ''}
     <div class="tabs">
       <button class="tab-btn ${tabInventario === 'catalogo' ? 'active' : ''}" id="tab-catalogo">Catálogo</button>
       <button class="tab-btn ${tabInventario === 'movimientos' ? 'active' : ''}" id="tab-movimientos">Movimientos</button>
+      ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>` : ''}
     </div>
     <div id="inv-content"></div>
   `;
-  if (profile.rol === 'admin') $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
+  if (profile.rol === 'admin') {
+    $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
+    $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
+    $('#tab-rentabilidad').addEventListener('click', () => { tabInventario = 'rentabilidad'; renderInventario(); });
+  }
   $('#tab-catalogo').addEventListener('click', () => { tabInventario = 'catalogo'; renderInventario(); });
   $('#tab-movimientos').addEventListener('click', () => { tabInventario = 'movimientos'; renderInventario(); });
 
   if (tabInventario === 'catalogo') renderCatalogoProductos();
-  else renderMovimientosInventario();
+  else if (tabInventario === 'movimientos') renderMovimientosInventario();
+  else if (tabInventario === 'rentabilidad' && profile.rol === 'admin') renderRentabilidad();
+}
+
+function celdaMargenHtml(p) {
+  const margen = margenPct(p.costo, p.precio_venta);
+  if (margen == null) return '—';
+  const ganancia = Number(p.precio_venta) - Number(p.costo);
+  return `${money(ganancia)}<br><span style="color:var(--text-faint);font-size:11px">${margen.toFixed(1)}% sobre costo</span>`;
 }
 
 function filaProductoHtml(p) {
@@ -1079,6 +1222,7 @@ function filaProductoHtml(p) {
       <td>${escapeHtml(p.subcategoria || '—')}</td>
       <td>${money(p.costo)}</td>
       <td>${money(p.precio_venta)}${badgeCambioPrecioHtml(p)}</td>
+      <td>${celdaMargenHtml(p)}</td>
       <td><span class="badge ${p.stock <= p.stock_minimo ? 'badge-bajo' : 'badge-ok'}">${p.stock} u.</span></td>
       <td><div class="row-actions">
         <button class="icon-btn" data-act="entrada" data-id="${p.id}" title="Registrar entrada">＋</button>
@@ -1122,7 +1266,7 @@ function renderCatalogoProductos() {
     cont.innerHTML = buscadorHtml + (items.length === 0
       ? `<div class="empty-state">Sin resultados para "${escapeHtml(busquedaInventario)}".</div>`
       : `<div class="table-wrap"><table>
-          <thead><tr><th>Descripción</th><th>Subcat.</th><th>Precio Mayorista<br><span style="font-weight:400;text-transform:none">(tu proveedor)</span></th><th>Precio Venta<br><span style="font-weight:400;text-transform:none">(al cliente)</span></th><th>Stock</th><th>Acciones</th></tr></thead>
+          <thead><tr><th>Descripción</th><th>Subcat.</th><th>Precio Mayorista<br><span style="font-weight:400;text-transform:none">(tu proveedor)</span></th><th>Precio Venta<br><span style="font-weight:400;text-transform:none">(al cliente)</span></th><th>Margen</th><th>Stock</th><th>Acciones</th></tr></thead>
           <tbody>${items.map(filaProductoHtml).join('')}</tbody>
         </table></div>`);
     wireFilaAcciones(cont, items);
@@ -1150,6 +1294,7 @@ function renderCatalogoProductos() {
               <th>Subcat.</th>
               <th>Precio Mayorista<br><span style="font-weight:400;text-transform:none">(tu proveedor)</span></th>
               <th>Precio Venta<br><span style="font-weight:400;text-transform:none">(al cliente)</span></th>
+              <th>Margen</th>
               <th>Stock</th>
               <th>Acciones</th>
             </tr></thead>
@@ -1184,6 +1329,72 @@ async function renderMovimientosInventario() {
   </table></div>`;
 }
 
+// ------------------------------------------------------------
+// RENTABILIDAD: dashboard de márgenes (solo admin) — promedio,
+// ranking y alerta de productos por debajo del margen mínimo
+// aceptable (configurable).
+// ------------------------------------------------------------
+async function renderRentabilidad() {
+  const cont = $('#inv-content');
+  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+
+  const { data: config } = await sb.from('configuracion').select('margen_minimo_pct').eq('id', 1).single();
+  const margenMinimo = Number(config?.margen_minimo_pct ?? 20);
+
+  const conCosto = productosCache
+    .map(p => ({ p, margen: margenPct(p.costo, p.precio_venta) }))
+    .filter(x => x.margen != null);
+  const sinCosto = productosCache.length - conCosto.length;
+
+  const promedio = conCosto.length ? conCosto.reduce((s, x) => s + x.margen, 0) / conCosto.length : null;
+  const bajoMinimo = conCosto.filter(x => x.margen < margenMinimo);
+  const ordenados = [...conCosto].sort((a, b) => a.margen - b.margen);
+
+  cont.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Margen promedio</div><div class="value">${promedio != null ? promedio.toFixed(1) + '%' : '—'}</div></div>
+      <div class="stat-chip ${bajoMinimo.length > 0 ? 'danger' : 'accent'}"><div class="label">Bajo el mínimo (${margenMinimo}%)</div><div class="value">${bajoMinimo.length}</div></div>
+      <div class="stat-chip warn"><div class="label">Sin costo cargado</div><div class="value">${sinCosto}</div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Margen mínimo aceptable</div>
+      <p style="color:var(--text-dim);font-size:13px;margin-top:-6px;margin-bottom:10px">Los productos por debajo se marcan en rojo en la lista de abajo.</p>
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+        <div class="field" style="max-width:140px"><label>Mínimo (%)</label><input type="number" id="f-margen-minimo" value="${margenMinimo}" min="0" step="0.5" /></div>
+        <button class="btn btn-primary" id="btn-guardar-margen-minimo">💾 Guardar</button>
+      </div>
+    </div>
+
+    ${ordenados.length === 0 ? `<div class="empty-state">Ningún producto tiene Precio Mayorista cargado todavía — sin costo no se puede calcular el margen.</div>` : `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Producto</th><th>Categoría</th><th>Mayorista</th><th>Venta</th><th>Margen</th></tr></thead>
+          <tbody>
+            ${ordenados.map(({ p, margen }) => `
+              <tr>
+                <td>${escapeHtml(p.descripcion)}</td>
+                <td>${escapeHtml(p.categoria || '—')}</td>
+                <td>${money(p.costo)}</td>
+                <td>${money(p.precio_venta)}</td>
+                <td><span class="badge ${margen < margenMinimo ? 'badge-rechazada' : 'badge-ok'}">${margen.toFixed(1)}%</span></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `}
+  `;
+
+  $('#btn-guardar-margen-minimo').addEventListener('click', async () => {
+    const nuevo = Number($('#f-margen-minimo').value || 0);
+    const { error } = await sb.from('configuracion').update({ margen_minimo_pct: nuevo }).eq('id', 1);
+    if (error) { toast('Error al guardar: ' + error.message, 'error'); return; }
+    toast('Margen mínimo actualizado');
+    renderRentabilidad();
+  });
+}
+
 function abrirFormProducto(existing) {
   const catInicial = existing?.categoria || CATEGORIAS_PRODUCTO[0];
   openModal(`
@@ -1203,6 +1414,7 @@ function abrirFormProducto(existing) {
     </div>
     <div class="field" style="margin-top:10px"><label>Precio Mayorista<br><span style="font-weight:400;color:var(--text-faint)">lo que te cobra tu proveedor</span></label><input type="number" id="f-costo" value="${existing ? existing.costo : 0}" min="0" step="0.01" /></div>
     <div class="field" style="margin-top:10px"><label>Precio Venta<br><span style="font-weight:400;color:var(--text-faint)">lo que le cobrás al cliente</span></label><input type="number" id="f-precio" value="${existing ? existing.precio_venta : 0}" min="0" step="0.01" /></div>
+    <div class="field" style="margin-top:10px"><label>Descuento máximo al cliente (%)<br><span style="font-weight:400;color:var(--text-faint)">tope al armar una cotización/venta — vacío = sin límite</span></label><input type="number" id="f-desc-max" value="${existing?.descuento_maximo_pct ?? ''}" min="0" max="100" step="0.01" placeholder="Sin límite" /></div>
     <div class="grid-2" style="margin-top:10px">
       <div class="field"><label>Stock inicial</label><input type="number" id="f-stock" value="${existing ? existing.stock : 0}" min="0" ${existing ? 'disabled' : ''} /></div>
       <div class="field"><label>Stock mínimo (alerta)</label><input type="number" id="f-stockmin" value="${existing ? existing.stock_minimo : 5}" min="0" /></div>
@@ -1250,7 +1462,8 @@ function abrirFormProducto(existing) {
       costo: Number($('#f-costo').value || 0),
       stock_minimo: Number($('#f-stockmin').value || 0),
       imagen_base64,
-      visible_catalogo: $('#f-visible-catalogo').checked
+      visible_catalogo: $('#f-visible-catalogo').checked,
+      descuento_maximo_pct: $('#f-desc-max').value !== '' ? Number($('#f-desc-max').value) : null
     };
     if (existing && nuevoPrecioVenta !== Number(existing.precio_venta)) {
       payload.precio_anterior = Number(existing.precio_venta);
@@ -1307,6 +1520,414 @@ async function ajustarStock(productoId, delta, motivo) {
 }
 
 // ============================================================
+// IMPORTAR PRODUCTOS DESDE EXCEL (precios + fotos incrustadas)
+// Solo admin. Los productos que coincidan por código o por
+// descripción exacta con uno ya cargado se actualizan (precio,
+// costo, descuento máximo y foto); el resto se crea como nuevo.
+// ============================================================
+const COLUMNAS_IMPORT_PRODUCTOS = ['Codigo', 'Descripcion', 'Categoria', 'Precio Mayorista', 'Precio Venta', 'Margen %', 'Descuento Maximo %', 'Foto'];
+
+// Margen de ganancia sobre el costo (lo que le agregás a lo que pagaste),
+// en %. null si no hay costo cargado (no se puede calcular).
+function margenPct(costo, precioVenta) {
+  const c = Number(costo), v = Number(precioVenta);
+  if (!c || c <= 0) return null;
+  return ((v - c) / c) * 100;
+}
+
+// Espacios de nombres XML de un .xlsx — necesarios para leer las fotos
+// pegadas en las celdas (SheetJS gratis no las extrae; hay que leerlas
+// directamente del XML del archivo, que es un .zip).
+const NS_XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing';
+const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const NS_REL = 'http://schemas.openxmlformats.org/package/2006/relationships';
+
+function normalizarTextoImport(s) {
+  return String(s ?? '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function resolverRutaRelativaXlsx(base, target) {
+  if (target.startsWith('/')) return target.slice(1);
+  const partesBase = base.split('/').filter(Boolean);
+  for (const p of target.split('/')) {
+    if (p === '..') partesBase.pop();
+    else if (p !== '.') partesBase.push(p);
+  }
+  return partesBase.join('/');
+}
+
+function attrNSImport(el, ns, local) {
+  return el.getAttributeNS(ns, local) || el.getAttribute('r:' + local) || el.getAttribute(local);
+}
+
+// Devuelve { filaIndex: 'data:image/...;base64,...' } — filaIndex es
+// 0-indexado, igual que XLSX.utils.sheet_to_json(hoja, {header:1}).
+async function extraerFotosDeExcel(zip) {
+  const parser = new DOMParser();
+  try {
+    const workbookXml = await zip.file('xl/workbook.xml').async('text');
+    const wbDoc = parser.parseFromString(workbookXml, 'application/xml');
+    const primeraHoja = wbDoc.getElementsByTagName('sheet')[0];
+    if (!primeraHoja) return {};
+    const rIdHoja = attrNSImport(primeraHoja, NS_R, 'id');
+
+    const wbRelsXml = await zip.file('xl/_rels/workbook.xml.rels').async('text');
+    const wbRelsDoc = parser.parseFromString(wbRelsXml, 'application/xml');
+    const relHoja = Array.from(wbRelsDoc.getElementsByTagNameNS(NS_REL, 'Relationship')).find(r => r.getAttribute('Id') === rIdHoja);
+    if (!relHoja) return {};
+    const sheetPath = resolverRutaRelativaXlsx('xl/', relHoja.getAttribute('Target'));
+
+    const nombreHoja = sheetPath.split('/').pop();
+    const carpetaHoja = sheetPath.slice(0, sheetPath.length - nombreHoja.length);
+    const sheetRelsFile = zip.file(`${carpetaHoja}_rels/${nombreHoja}.rels`);
+    if (!sheetRelsFile) return {}; // hoja sin fotos pegadas: normal en un import de solo precios
+
+    const sheetRelsDoc = parser.parseFromString(await sheetRelsFile.async('text'), 'application/xml');
+    const relDrawing = Array.from(sheetRelsDoc.getElementsByTagNameNS(NS_REL, 'Relationship')).find(r => (r.getAttribute('Type') || '').endsWith('/drawing'));
+    if (!relDrawing) return {};
+    const drawingPath = resolverRutaRelativaXlsx(carpetaHoja, relDrawing.getAttribute('Target'));
+
+    const drawingFile = zip.file(drawingPath);
+    if (!drawingFile) return {};
+    const drawingDoc = parser.parseFromString(await drawingFile.async('text'), 'application/xml');
+
+    const nombreDrawing = drawingPath.split('/').pop();
+    const carpetaDrawing = drawingPath.slice(0, drawingPath.length - nombreDrawing.length);
+    const drawingRelsFile = zip.file(`${carpetaDrawing}_rels/${nombreDrawing}.rels`);
+    const drawingRelsDoc = drawingRelsFile ? parser.parseFromString(await drawingRelsFile.async('text'), 'application/xml') : null;
+
+    const anchors = [
+      ...drawingDoc.getElementsByTagNameNS(NS_XDR, 'oneCellAnchor'),
+      ...drawingDoc.getElementsByTagNameNS(NS_XDR, 'twoCellAnchor')
+    ];
+
+    const fotosPorFila = {};
+    for (const anchor of anchors) {
+      const fromEl = anchor.getElementsByTagNameNS(NS_XDR, 'from')[0];
+      const rowEl = fromEl && fromEl.getElementsByTagNameNS(NS_XDR, 'row')[0];
+      if (!rowEl) continue;
+      const fila = Number(rowEl.textContent);
+
+      const blip = anchor.getElementsByTagNameNS(NS_A, 'blip')[0];
+      const rId = blip && attrNSImport(blip, NS_R, 'embed');
+      if (!rId || !drawingRelsDoc) continue;
+
+      const relImg = Array.from(drawingRelsDoc.getElementsByTagNameNS(NS_REL, 'Relationship')).find(r => r.getAttribute('Id') === rId);
+      if (!relImg) continue;
+      const imgPath = resolverRutaRelativaXlsx(carpetaDrawing, relImg.getAttribute('Target'));
+      const imgFile = zip.file(imgPath);
+      if (!imgFile) continue;
+
+      const base64 = await imgFile.async('base64');
+      const ext = imgPath.split('.').pop().toLowerCase();
+      const mime = ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      fotosPorFila[fila] = `data:${mime};base64,${base64}`;
+    }
+    return fotosPorFila;
+  } catch (e) {
+    console.error('No se pudieron leer las fotos incrustadas del Excel:', e);
+    return {};
+  }
+}
+
+// Genera un .xlsx a partir de filas (array de arrays, primera fila =
+// encabezado) y opcionalmente pega una foto por fila (fotosPorFila:
+// { filaIndex: dataURL }, mismo índice 0-based que usan SheetJS y el
+// extractor de más arriba). SheetJS gratis no permite insertar imágenes
+// en celdas, así que se arma el workbook con SheetJS y después se le
+// inyecta a mano la parte de "drawing" (imagen incrustada) directamente
+// en el .xlsx (que es un .zip) con JSZip — el mismo mecanismo que usa
+// extraerFotosDeExcel(), pero al revés. Validado con un archivo real
+// abierto tanto por este mismo lector como por una librería externa
+// (openpyxl) antes de integrarlo acá.
+async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila) {
+  const hoja = XLSX.utils.aoa_to_sheet(filas);
+  hoja['!cols'] = COLUMNAS_IMPORT_PRODUCTOS.map((_, i) => i === 1 ? { wch: 34 } : { wch: 15 });
+  const libro = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(libro, hoja, 'Productos');
+  const bufferBase = XLSX.write(libro, { type: 'array', bookType: 'xlsx' });
+
+  const zip = await JSZip.loadAsync(bufferBase);
+  const entradasFotos = Object.entries(fotosPorFila || {}).filter(([, url]) => !!url);
+
+  if (entradasFotos.length > 0) {
+    const colFotoIndex = COLUMNAS_IMPORT_PRODUCTOS.indexOf('Foto');
+    const anchorsXml = [];
+    const relsDrawingXml = [];
+    let n = 1;
+    for (const [fila, dataUrl] of entradasFotos) {
+      const match = /^data:image\/(png|jpe?g);base64,(.*)$/.exec(dataUrl);
+      if (!match) continue;
+      const ext = match[1] === 'jpg' ? 'jpeg' : match[1];
+      const nombreImg = `image${n}.${ext}`;
+      zip.file(`xl/media/${nombreImg}`, match[2], { base64: true });
+      const rId = `rId${n}`;
+      relsDrawingXml.push(`<Relationship Id="${rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${nombreImg}"/>`);
+      anchorsXml.push(`<xdr:oneCellAnchor><xdr:from><xdr:col>${colFotoIndex}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${fila}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="571500" cy="571500"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${n}" name="Foto ${n}"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="${rId}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`);
+      n++;
+    }
+
+    zip.file('xl/drawings/drawing1.xml',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="${NS_XDR}" xmlns:a="${NS_A}" xmlns:r="${NS_R}">${anchorsXml.join('')}</xdr:wsDr>`);
+    zip.file('xl/drawings/_rels/drawing1.xml.rels',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_REL}">${relsDrawingXml.join('')}</Relationships>`);
+    zip.file('xl/worksheets/_rels/sheet1.xml.rels',
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${NS_REL}"><Relationship Id="rIdDrawing1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`);
+
+    let sheetXml = await zip.file('xl/worksheets/sheet1.xml').async('text');
+    sheetXml = sheetXml.replace('</worksheet>', '<drawing r:id="rIdDrawing1"/></worksheet>');
+    zip.file('xl/worksheets/sheet1.xml', sheetXml);
+
+    let contentTypesXml = await zip.file('[Content_Types].xml').async('text');
+    if (!contentTypesXml.includes('/xl/drawings/drawing1.xml')) {
+      contentTypesXml = contentTypesXml.replace('</Types>', '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>');
+      zip.file('[Content_Types].xml', contentTypesXml);
+    }
+  }
+
+  const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  descargarArchivo(new File([blob], nombreArchivo, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+}
+
+function descargarPlantillaImportacion() {
+  const datos = [
+    COLUMNAS_IMPORT_PRODUCTOS,
+    ['TQ-80L', 'Termotanque Rheem 80L', 'Termotanques', 900, 1250, margenPct(900, 1250).toFixed(1), 10, ''],
+    ['', 'Estufa Longvie 3000 Kcal', 'Estufas', 320, 480, margenPct(320, 480).toFixed(1), 15, '']
+  ];
+  generarExcelConFotos('Plantilla_productos_BM.xlsx', datos, {});
+}
+
+// Enlaza Inventario con la importación: exporta TODO lo que ya tenés
+// cargado (con sus fotos) a un Excel — para la próxima actualización de
+// precios, alcanza con abrir este archivo, tocar lo que cambió y volver
+// a subirlo, en vez de empezar de cero cada vez.
+async function descargarInventarioActualExcel() {
+  const filas = [COLUMNAS_IMPORT_PRODUCTOS];
+  const fotosPorFila = {};
+  productosCache.forEach((p, i) => {
+    const fila = i + 1;
+    const margen = margenPct(p.costo, p.precio_venta);
+    filas.push([
+      p.codigo_interno || p.codigo_fabrica || '',
+      p.descripcion,
+      p.categoria,
+      Number(p.costo) || 0,
+      Number(p.precio_venta) || 0,
+      margen != null ? margen.toFixed(1) : '',
+      p.descuento_maximo_pct ?? '',
+      ''
+    ]);
+    if (p.imagen_base64) fotosPorFila[fila] = p.imagen_base64;
+  });
+  await generarExcelConFotos(`Inventario_BM_${new Date().toISOString().slice(0, 10)}.xlsx`, filas, fotosPorFila);
+}
+
+function encontrarProductoExistente(codigo, descripcion) {
+  const codigoNorm = normalizarTextoImport(codigo);
+  if (codigoNorm) {
+    const porCodigo = productosCache.find(p =>
+      (p.codigo_interno && normalizarTextoImport(p.codigo_interno) === codigoNorm) ||
+      (p.codigo_fabrica && normalizarTextoImport(p.codigo_fabrica) === codigoNorm)
+    );
+    if (porCodigo) return porCodigo;
+  }
+  const descNorm = normalizarTextoImport(descripcion);
+  return productosCache.find(p => normalizarTextoImport(p.descripcion) === descNorm) || null;
+}
+
+let importProductosPreview = [];
+
+async function abrirImportadorProductos() {
+  await cargarProductos();
+  importProductosPreview = [];
+  openModal(`
+    <div class="sheet-head"><h3>📥 Importar productos desde Excel</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <p style="color:var(--text-dim);font-size:13px;margin-top:-6px">
+      Un solo Excel con Descripción, Categoría, Precio Mayorista, Precio Venta y una foto pegada en la celda de cada fila.
+      Los productos que ya tenés cargados (por código o por descripción exacta) se actualizan; el resto se crea como nuevo.
+    </p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      ${productosCache.length > 0 ? `<button class="btn btn-secondary" id="btn-exportar-inventario">📤 Exportar inventario actual</button>` : ''}
+      <button class="btn btn-secondary" id="btn-descargar-plantilla">⬇ Plantilla vacía</button>
+    </div>
+    ${productosCache.length > 0 ? `<p style="color:var(--text-faint);font-size:11.5px;margin-top:6px">Para actualizar precios: exportá el inventario actual, editá lo que cambió y volvé a subir ese mismo archivo acá abajo.</p>` : ''}
+    <div class="field" style="margin-top:14px"><label>Archivo Excel (.xlsx)</label><input type="file" id="f-import-excel" accept=".xlsx" /></div>
+    <div id="import-preview"></div>
+    <div class="form-actions" id="import-acciones" style="display:none">
+      <button class="btn btn-secondary" id="btn-cancelar">Cerrar</button>
+      <button class="btn btn-primary" id="btn-confirmar-import">💾 Confirmar importación</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-descargar-plantilla').addEventListener('click', descargarPlantillaImportacion);
+  $('#btn-exportar-inventario')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true; btn.textContent = 'Generando…';
+    try { await descargarInventarioActualExcel(); }
+    finally { btn.disabled = false; btn.textContent = '📤 Exportar inventario actual'; }
+  });
+  $('#btn-confirmar-import').addEventListener('click', confirmarImportacionProductos);
+  $('#f-import-excel').addEventListener('change', async (e) => {
+    const archivo = e.target.files[0];
+    if (!archivo) return;
+    $('#import-preview').innerHTML = `<p style="margin-top:14px;color:var(--text-dim);font-size:13px">Analizando…</p>`;
+    $('#import-acciones').style.display = 'none';
+    try {
+      await analizarArchivoImportacion(archivo);
+    } catch (err) {
+      $('#import-preview').innerHTML = `<p style="margin-top:14px;color:var(--accent-2);font-size:13px">No se pudo leer el archivo: ${escapeHtml(err.message)}</p>`;
+    }
+  });
+}
+
+async function analizarArchivoImportacion(archivo) {
+  const buf = await archivo.arrayBuffer();
+
+  const wb = XLSX.read(buf, { type: 'array' });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
+  if (filas.length < 2) throw new Error('El archivo no tiene filas de datos.');
+
+  const encabezados = filas[0].map(normalizarTextoImport);
+  const idx = {
+    codigo: encabezados.indexOf('codigo'),
+    descripcion: encabezados.indexOf('descripcion'),
+    categoria: encabezados.indexOf('categoria'),
+    precioVenta: encabezados.indexOf('precio venta'),
+    precioMayorista: encabezados.indexOf('precio mayorista'),
+    descuentoMax: encabezados.indexOf('descuento maximo %')
+  };
+  if (idx.descripcion === -1 || idx.precioVenta === -1) {
+    throw new Error('No encontré las columnas "Descripcion" y/o "Precio Venta" — usá la plantilla sin cambiar los encabezados.');
+  }
+
+  const zip = await JSZip.loadAsync(buf);
+  const fotosPorFila = await extraerFotosDeExcel(zip);
+  const categoriaDefault = CATEGORIAS_PRODUCTO[CATEGORIAS_PRODUCTO.length - 1];
+
+  const filasProcesadas = [];
+  for (let i = 1; i < filas.length; i++) {
+    const fila = filas[i];
+    if (fila.every(c => c === '' || c == null)) continue;
+
+    const descripcion = String(fila[idx.descripcion] || '').trim();
+    if (!descripcion) continue;
+
+    const codigo = idx.codigo > -1 ? String(fila[idx.codigo] || '').trim() : '';
+    const precio_venta = idx.precioVenta > -1 ? Number(fila[idx.precioVenta]) : NaN;
+    const costoRaw = idx.precioMayorista > -1 ? fila[idx.precioMayorista] : '';
+    const costo = costoRaw !== '' ? Number(costoRaw) : null;
+    const descMaxRaw = idx.descuentoMax > -1 ? fila[idx.descuentoMax] : '';
+    const descuento_maximo_pct = descMaxRaw !== '' ? Number(descMaxRaw) : null;
+    const categoriaRaw = idx.categoria > -1 ? String(fila[idx.categoria] || '').trim() : '';
+    const catReconocida = CATEGORIAS_PRODUCTO.find(c => normalizarTextoImport(c) === normalizarTextoImport(categoriaRaw));
+
+    const existente = encontrarProductoExistente(codigo, descripcion);
+    const foto = fotosPorFila[i] || null;
+
+    const errores = [];
+    const avisos = [];
+    if (isNaN(precio_venta) || precio_venta < 0) errores.push('Precio Venta inválido o vacío');
+    if (!existente) {
+      if (categoriaRaw && !catReconocida) avisos.push(`Categoría "${categoriaRaw}" no reconocida, se usará "${categoriaDefault}"`);
+      if (!categoriaRaw) avisos.push(`Sin categoría, se usará "${categoriaDefault}"`);
+      if (!foto) avisos.push('Sin foto — se puede agregar después desde Inventario');
+    }
+
+    filasProcesadas.push({
+      fila: i, codigo, descripcion, categoria: catReconocida || categoriaDefault,
+      precio_venta, costo, descuento_maximo_pct, foto, existente, errores, avisos
+    });
+  }
+
+  importProductosPreview = filasProcesadas;
+  renderPreviewImportacion();
+}
+
+function renderPreviewImportacion() {
+  const cont = $('#import-preview');
+  const acciones = $('#import-acciones');
+  if (importProductosPreview.length === 0) {
+    cont.innerHTML = `<p style="margin-top:14px;color:var(--text-dim);font-size:13px">No encontré filas con datos para importar.</p>`;
+    acciones.style.display = 'none';
+    return;
+  }
+
+  const nuevos = importProductosPreview.filter(f => !f.existente && f.errores.length === 0).length;
+  const actualiza = importProductosPreview.filter(f => f.existente && f.errores.length === 0).length;
+  const conError = importProductosPreview.filter(f => f.errores.length > 0).length;
+
+  cont.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <span class="badge badge-ok">${nuevos} nuevo${nuevos !== 1 ? 's' : ''}</span>
+      <span class="badge badge-pendiente">${actualiza} actualiza${actualiza !== 1 ? 'n' : ''}</span>
+      ${conError > 0 ? `<span class="badge badge-rechazada">${conError} con error</span>` : ''}
+    </div>
+    <div class="import-lista" style="margin-top:10px;max-height:360px;overflow-y:auto">
+      ${importProductosPreview.map(f => `
+        <div class="import-fila">
+          ${f.foto ? `<img src="${f.foto}" class="import-foto-mini" />` : (f.existente?.imagen_base64 ? `<img src="${f.existente.imagen_base64}" class="import-foto-mini" style="opacity:.5" />` : `<div class="import-foto-mini import-foto-vacia">—</div>`)}
+          <div class="import-fila-info">
+            <div class="import-fila-titulo">
+              <span>${escapeHtml(f.descripcion)}</span>
+              ${f.errores.length ? '<span class="badge badge-rechazada">Error</span>' : f.existente ? '<span class="badge badge-pendiente">Actualiza</span>' : '<span class="badge badge-ok">Nuevo</span>'}
+            </div>
+            <div class="import-fila-precio">${isNaN(f.precio_venta) ? '—' : money(f.precio_venta)}</div>
+            ${f.avisos.length ? `<div class="import-fila-aviso">${f.avisos.map(escapeHtml).join(' · ')}</div>` : ''}
+            ${f.errores.length ? `<div class="import-fila-error">${f.errores.map(escapeHtml).join(' · ')}</div>` : ''}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  acciones.style.display = (nuevos + actualiza > 0) ? 'flex' : 'none';
+}
+
+async function confirmarImportacionProductos() {
+  const validas = importProductosPreview.filter(f => f.errores.length === 0);
+  if (validas.length === 0) { toast('No hay filas válidas para importar', 'error'); return; }
+
+  const btn = $('#btn-confirmar-import');
+  btn.disabled = true;
+  btn.textContent = 'Importando…';
+
+  let ok = 0, fallidas = 0;
+  for (const f of validas) {
+    const payload = f.existente
+      ? {
+          precio_venta: f.precio_venta,
+          ...(f.costo != null ? { costo: f.costo } : {}),
+          ...(f.descuento_maximo_pct != null ? { descuento_maximo_pct: f.descuento_maximo_pct } : {}),
+          ...(f.foto ? { imagen_base64: f.foto } : {}),
+          ...(f.precio_venta !== Number(f.existente.precio_venta) ? { precio_anterior: Number(f.existente.precio_venta), precio_actualizado_at: new Date().toISOString() } : {})
+        }
+      : {
+          descripcion: f.descripcion,
+          categoria: f.categoria,
+          precio_venta: f.precio_venta,
+          costo: f.costo || 0,
+          descuento_maximo_pct: f.descuento_maximo_pct,
+          imagen_base64: f.foto || null,
+          stock: 0,
+          stock_minimo: 5,
+          visible_catalogo: true
+        };
+    const resp = f.existente
+      ? await sb.from('productos').update(payload).eq('id', f.existente.id)
+      : await sb.from('productos').insert(payload);
+    if (resp.error) fallidas++; else ok++;
+  }
+
+  toast(`Importación terminada: ${ok} ok${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
+  closeModal();
+  await cargarProductos();
+  renderInventario();
+}
+
+// ============================================================
 // MÓDULO: CAJA
 // ============================================================
 async function mostrarBannerPendientesAdmin() {
@@ -1346,6 +1967,7 @@ async function renderCaja() {
         <button class="tab-btn ${cajaVistaAdmin === 'mia' ? 'active' : ''}" id="tab-mi-caja">Mi caja</button>
         <button class="tab-btn ${cajaVistaAdmin === 'autorizar' ? 'active' : ''}" id="tab-autorizar">Autorizar</button>
         <button class="tab-btn ${cajaVistaAdmin === 'todas' ? 'active' : ''}" id="tab-todas-cajas">Todas las cajas</button>
+        <button class="tab-btn ${cajaVistaAdmin === 'cobranza' ? 'active' : ''}" id="tab-cobranza">📊 Cobranza</button>
         <button class="tab-btn ${cajaVistaAdmin === 'libro' ? 'active' : ''}" id="tab-libro-diario">Libro diario</button>
         <button class="tab-btn ${cajaVistaAdmin === 'medios' ? 'active' : ''}" id="tab-medios-pago">Medios de pago</button>
         <button class="tab-btn ${cajaVistaAdmin === 'promos' ? 'active' : ''}" id="tab-promos">Promociones</button>
@@ -1357,6 +1979,7 @@ async function renderCaja() {
     $('#tab-mi-caja').addEventListener('click', () => { cajaVistaAdmin = 'mia'; renderCaja(); });
     $('#tab-autorizar').addEventListener('click', () => { cajaVistaAdmin = 'autorizar'; renderCaja(); });
     $('#tab-todas-cajas').addEventListener('click', () => { cajaVistaAdmin = 'todas'; renderCaja(); });
+    $('#tab-cobranza').addEventListener('click', () => { cajaVistaAdmin = 'cobranza'; renderCaja(); });
     $('#tab-libro-diario').addEventListener('click', () => { cajaVistaAdmin = 'libro'; renderCaja(); });
     $('#tab-medios-pago').addEventListener('click', () => { cajaVistaAdmin = 'medios'; renderCaja(); });
     $('#tab-promos').addEventListener('click', () => { cajaVistaAdmin = 'promos'; renderCaja(); });
@@ -1365,6 +1988,7 @@ async function renderCaja() {
 
   if (profile.rol === 'admin' && cajaVistaAdmin === 'todas') return renderTodasLasCajas();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'autorizar') return renderAutorizaciones();
+  if (profile.rol === 'admin' && cajaVistaAdmin === 'cobranza') return renderCobranza();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'libro') return renderLibroDiario();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'medios') return renderMediosPago();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'promos') return renderPromociones();
@@ -1564,6 +2188,137 @@ async function renderTodasLasCajas() {
       `).join('')}
     </tbody>
   </table></div>`;
+}
+
+// ------------------------------------------------------------
+// COBRANZA: dashboard de ventas/a cobrar/vencido por período
+// (día / semana / mes / año) — solo ventas y cobranzas, sin
+// mezclar con caja_movimientos (ingresos/egresos varios).
+// ------------------------------------------------------------
+let cobranzaPeriodo = 'mes';
+
+function rangoPeriodoCobranza(tipo) {
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  let desde, hasta;
+  if (tipo === 'dia') {
+    desde = new Date(hoy);
+    hasta = new Date(hoy); hasta.setDate(hasta.getDate() + 1);
+  } else if (tipo === 'semana') {
+    const diaSemana = (hoy.getDay() + 6) % 7; // 0 = lunes
+    desde = new Date(hoy); desde.setDate(desde.getDate() - diaSemana);
+    hasta = new Date(desde); hasta.setDate(hasta.getDate() + 7);
+  } else if (tipo === 'anio') {
+    desde = new Date(hoy.getFullYear(), 0, 1);
+    hasta = new Date(hoy.getFullYear() + 1, 0, 1);
+  } else { // mes
+    desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    hasta = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 1);
+  }
+  return { desde, hasta };
+}
+
+function etiquetaPeriodoCobranza(tipo) {
+  return { dia: 'hoy', semana: 'esta semana', mes: 'este mes', anio: 'este año' }[tipo] || 'el período';
+}
+
+// Donut hecho con SVG puro (sin librería): cada <circle> es un segmento,
+// dibujado con stroke-dasharray en base 100 = % del total. r=15.9155 da
+// una circunferencia ≈100, así el % se puede usar directo como longitud.
+function donutSvg(segmentos) {
+  const total = segmentos.reduce((s, x) => s + x.valor, 0);
+  let acumulado = 0;
+  const circles = segmentos.filter(s => s.valor > 0).map(s => {
+    const pct = total > 0 ? (s.valor / total * 100) : 0;
+    const dashoffset = 25 - acumulado; // arranca a las 12 y gira en sentido horario
+    acumulado += pct;
+    return `<circle cx="18" cy="18" r="15.9155" fill="none" stroke="${s.color}" stroke-width="4" stroke-dasharray="${pct} ${100 - pct}" stroke-dashoffset="${dashoffset}"></circle>`;
+  }).join('');
+  return `<svg viewBox="0 0 36 36" class="donut-svg"><circle cx="18" cy="18" r="15.9155" fill="none" stroke="var(--surface-2)" stroke-width="4"></circle>${circles}</svg>`;
+}
+
+async function renderCobranza() {
+  const cont = $('#caja-content');
+  cont.innerHTML = `
+    <div class="tabs" style="margin-bottom:16px">
+      <button class="tab-btn ${cobranzaPeriodo === 'dia' ? 'active' : ''}" data-periodo="dia">Día</button>
+      <button class="tab-btn ${cobranzaPeriodo === 'semana' ? 'active' : ''}" data-periodo="semana">Semana</button>
+      <button class="tab-btn ${cobranzaPeriodo === 'mes' ? 'active' : ''}" data-periodo="mes">Mes</button>
+      <button class="tab-btn ${cobranzaPeriodo === 'anio' ? 'active' : ''}" data-periodo="anio">Año</button>
+    </div>
+    <div id="cobranza-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  cont.querySelectorAll('[data-periodo]').forEach(btn => btn.addEventListener('click', () => {
+    cobranzaPeriodo = btn.dataset.periodo;
+    renderCobranza();
+  }));
+  await cargarYRenderCobranza();
+}
+
+async function cargarYRenderCobranza() {
+  const cont = $('#cobranza-content');
+  const { desde, hasta } = rangoPeriodoCobranza(cobranzaPeriodo);
+  const { data } = await sb.from('ventas')
+    .select('total, cobrado, cuota1_dias, cuota2_dias, created_at')
+    .gte('created_at', desde.toISOString()).lt('created_at', hasta.toISOString());
+
+  const lista = data || [];
+  if (lista.length === 0) {
+    cont.innerHTML = `<div class="empty-state">No hay ventas registradas en ${etiquetaPeriodoCobranza(cobranzaPeriodo)}.</div>`;
+    return;
+  }
+
+  const hoy = new Date();
+  let ventasTotal = 0, pagada = 0, vencida = 0, vigente = 0;
+  lista.forEach(v => {
+    const total = Number(v.total);
+    ventasTotal += total;
+    if (v.cobrado) { pagada += total; return; }
+    // Vencida = ya pasó el plazo de pago (cuota2 si es crédito, cuota1/0
+    // días si es contado — contado no cobrado el mismo día ya es vencido).
+    const dias = v.cuota2_dias || v.cuota1_dias || 0;
+    const limite = new Date(v.created_at);
+    limite.setDate(limite.getDate() + dias);
+    if (limite < hoy) vencida += total; else vigente += total;
+  });
+  const aCobrar = vencida + vigente;
+  const pctVencido = ventasTotal > 0 ? (vencida / ventasTotal * 100) : 0;
+  const ticketPromedio = ventasTotal / lista.length;
+
+  cont.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Ventas</div><div class="value">${money(ventasTotal)}</div></div>
+      <div class="stat-chip warn"><div class="label">A cobrar</div><div class="value">${money(aCobrar)}</div></div>
+      <div class="stat-chip danger"><div class="label">Vencido</div><div class="value">${money(vencida)}</div></div>
+      <div class="stat-chip ${pctVencido > 0 ? 'danger' : 'accent'}"><div class="label">% Vencido</div><div class="value">${pctVencido.toFixed(0)}%</div></div>
+    </div>
+    <p style="color:var(--text-dim);font-size:12.5px;margin:-8px 0 16px">Ticket promedio: <strong style="color:var(--text)">${money(ticketPromedio)}</strong> · ${lista.length} venta${lista.length !== 1 ? 's' : ''} en ${etiquetaPeriodoCobranza(cobranzaPeriodo)}</p>
+
+    <div class="dash-2col">
+      <div class="card">
+        <div class="card-title">Embudo de ventas</div>
+        <div class="vend-bars">
+          <div class="vend-bar-row"><div class="vend-bar-nombre">Facturado</div><div class="vend-bar-track"><div class="vend-bar-fill" style="width:100%"></div></div><div class="vend-bar-valor">${money(ventasTotal)}</div></div>
+          <div class="vend-bar-row"><div class="vend-bar-nombre">A cobrar</div><div class="vend-bar-track"><div class="vend-bar-fill" style="width:${ventasTotal > 0 ? aCobrar / ventasTotal * 100 : 0}%;background:linear-gradient(90deg,#ffb020,#ff8a00)"></div></div><div class="vend-bar-valor">${money(aCobrar)}</div></div>
+          <div class="vend-bar-row"><div class="vend-bar-nombre">Vencido</div><div class="vend-bar-track"><div class="vend-bar-fill" style="width:${ventasTotal > 0 ? vencida / ventasTotal * 100 : 0}%;background:linear-gradient(90deg,#e5484d,#c2373b)"></div></div><div class="vend-bar-valor">${money(vencida)}</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Estado de ventas</div>
+        <div class="donut-wrap">
+          ${donutSvg([
+            { valor: pagada, color: '#00e5a0' },
+            { valor: vigente, color: '#ffb020' },
+            { valor: vencida, color: '#e5484d' }
+          ])}
+          <div class="donut-legend">
+            <div><span class="donut-dot" style="background:#00e5a0"></span>Pagada — ${ventasTotal > 0 ? (pagada / ventasTotal * 100).toFixed(0) : 0}%</div>
+            <div><span class="donut-dot" style="background:#ffb020"></span>Vigente — ${ventasTotal > 0 ? (vigente / ventasTotal * 100).toFixed(0) : 0}%</div>
+            <div><span class="donut-dot" style="background:#e5484d"></span>Vencida — ${ventasTotal > 0 ? (vencida / ventasTotal * 100).toFixed(0) : 0}%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 // ------------------------------------------------------------
@@ -2431,6 +3186,115 @@ async function compartirPromocionWhatsapp(p) {
   }
 }
 
+// ============================================================
+// VENDEDORES: registro mensual de ventas por vendedor + ranking
+// (solo admin)
+// ============================================================
+let mesVendedoresReporte = new Date().toISOString().slice(0, 7); // "yyyy-mm"
+
+function nombreMes(yyyyMm) {
+  const [anio, mes] = yyyyMm.split('-').map(Number);
+  const d = new Date(anio, mes - 1, 1);
+  const texto = d.toLocaleDateString('es-BO', { month: 'long', year: 'numeric' });
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
+async function renderVendedoresReporte() {
+  const el = $('#view-vendedores');
+  el.innerHTML = `
+    <div class="section-head">
+      <div><h2>Vendedores</h2><p class="sub">Registro de ventas del mes y ranking por vendedor</p></div>
+    </div>
+    <div class="field" style="max-width:220px;margin-bottom:16px">
+      <label>Mes</label>
+      <input type="month" id="f-mes-vendedores" value="${mesVendedoresReporte}" />
+    </div>
+    <div id="vendedores-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  $('#f-mes-vendedores').addEventListener('change', (e) => {
+    if (!e.target.value) return;
+    mesVendedoresReporte = e.target.value;
+    cargarYRenderVendedoresReporte();
+  });
+  await cargarYRenderVendedoresReporte();
+}
+
+async function cargarYRenderVendedoresReporte() {
+  const cont = $('#vendedores-content');
+  const [anio, mes] = mesVendedoresReporte.split('-').map(Number);
+  const desde = new Date(anio, mes - 1, 1);
+  const hasta = new Date(anio, mes, 1);
+
+  const [{ data: ventasMes }, { data: perfiles }] = await Promise.all([
+    sb.from('ventas').select('total, vendedor_id').gte('created_at', desde.toISOString()).lt('created_at', hasta.toISOString()),
+    sb.from('profiles').select('id, nombre, usuario')
+  ]);
+
+  const nombrePorId = {};
+  (perfiles || []).forEach(p => { nombrePorId[p.id] = p.nombre || p.usuario; });
+
+  const porVendedor = {};
+  (ventasMes || []).forEach(v => {
+    const id = v.vendedor_id || 'sin-asignar';
+    if (!porVendedor[id]) porVendedor[id] = { cantidad: 0, total: 0 };
+    porVendedor[id].cantidad++;
+    porVendedor[id].total += Number(v.total);
+  });
+
+  const filas = Object.entries(porVendedor).map(([id, datos]) => ({
+    id,
+    nombre: id === 'sin-asignar' ? 'Sin vendedor asignado' : (nombrePorId[id] || 'Ex-usuario'),
+    ...datos,
+    promedio: datos.total / datos.cantidad
+  })).sort((a, b) => b.total - a.total);
+
+  if (filas.length === 0) {
+    cont.innerHTML = `<div class="empty-state">No hay ventas registradas en ${nombreMes(mesVendedoresReporte)}.</div>`;
+    return;
+  }
+
+  const totalGeneral = filas.reduce((s, f) => s + f.total, 0);
+  const cantidadGeneral = filas.reduce((s, f) => s + f.cantidad, 0);
+  const max = filas[0].total;
+
+  cont.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Total vendido — ${nombreMes(mesVendedoresReporte)}</div><div class="value">${money(totalGeneral)}</div></div>
+      <div class="stat-chip warn"><div class="label">Cantidad de ventas</div><div class="value">${cantidadGeneral}</div></div>
+      <div class="stat-chip"><div class="label">Top del mes</div><div class="value" style="font-size:15px">${escapeHtml(filas[0].nombre)}</div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Ranking por vendedor</div>
+      <div class="vend-bars">
+        ${filas.map(f => `
+          <div class="vend-bar-row">
+            <div class="vend-bar-nombre" title="${escapeHtml(f.nombre)}">${escapeHtml(f.nombre)}</div>
+            <div class="vend-bar-track"><div class="vend-bar-fill" style="width:${max > 0 ? (f.total / max * 100) : 0}%"></div></div>
+            <div class="vend-bar-valor">${money(f.total)}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Vendedor</th><th>N° de ventas</th><th>Total vendido</th><th>Ticket promedio</th></tr></thead>
+        <tbody>
+          ${filas.map(f => `
+            <tr>
+              <td>${escapeHtml(f.nombre)}</td>
+              <td>${f.cantidad}</td>
+              <td>${money(f.total)}</td>
+              <td>${money(f.promedio)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 async function renderPromos() {
   await cargarPromociones();
   const el = $('#view-promos');
@@ -2539,10 +3403,39 @@ function abrirFormPromocion(existing) {
 // ============================================================
 let busquedaGarantias = '';
 
+const CONDICIONES_GARANTIA_DEFAULT = `Esta garantía cubre defectos de fabricación del producto arriba descrito durante el período indicado, contado desde la fecha de compra. Incluye la reparación o el cambio de piezas defectuosas sin costo para el cliente.
+
+No cubre: daños por mal uso, golpes o caídas, humedad o líquidos, variaciones de voltaje, desgaste normal de piezas (focos, filtros, empaques, etc.) ni reparaciones realizadas por personal ajeno a Electrodomésticos BM.
+
+Para hacer válida la garantía, el cliente debe presentar este certificado junto con su comprobante de compra.`;
+
 function estadoGarantia(g) {
   const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
   const venc = new Date(g.fecha_vencimiento + 'T00:00:00');
   return venc >= hoy ? 'vigente' : 'vencida';
+}
+
+// Vigente y vence dentro de los próximos `dias` días (por defecto 30) —
+// para el panel de control y el aviso de BAM.
+function estaPorVencer(g, dias = 30) {
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  const limite = new Date(hoy.getTime() + dias * 24 * 60 * 60 * 1000);
+  const venc = new Date(g.fecha_vencimiento + 'T00:00:00');
+  return venc >= hoy && venc <= limite;
+}
+
+// Duración legible entre dos fechas ISO (yyyy-mm-dd), en meses o días según
+// corresponda — para mostrar "Cobertura: 6 meses" en el certificado.
+function duracionLegible(fechaInicioISO, fechaFinISO) {
+  if (!fechaInicioISO || !fechaFinISO) return '';
+  const ini = new Date(fechaInicioISO + 'T00:00:00');
+  const fin = new Date(fechaFinISO + 'T00:00:00');
+  if (isNaN(ini) || isNaN(fin) || fin <= ini) return '';
+  let meses = (fin.getFullYear() - ini.getFullYear()) * 12 + (fin.getMonth() - ini.getMonth());
+  if (fin.getDate() < ini.getDate()) meses -= 1;
+  if (meses >= 1) return `${meses} ${meses === 1 ? 'mes' : 'meses'}`;
+  const dias = Math.round((fin - ini) / 86400000);
+  return `${dias} ${dias === 1 ? 'día' : 'días'}`;
 }
 
 async function cargarGarantias() {
@@ -2555,9 +3448,10 @@ async function renderGarantias() {
   const el = $('#view-garantias');
   el.innerHTML = `
     <div class="section-head">
-      <div><h2>Garantías</h2><p class="sub">Registrá hasta qué fecha queda cubierta cada venta</p></div>
+      <div><h2>Garantías</h2><p class="sub">Registrá la cobertura y generá el certificado firmado para el cliente</p></div>
       <button class="btn btn-primary" id="btn-nueva-garantia">+ Registrar garantía</button>
     </div>
+    <div id="garantias-stats"></div>
     <div class="field" style="margin-bottom:14px">
       <input id="gar-buscar" placeholder="🔍 Buscar por cliente o producto…" value="${escapeHtml(busquedaGarantias)}" />
     </div>
@@ -2567,7 +3461,23 @@ async function renderGarantias() {
   $('#gar-buscar').addEventListener('input', (e) => { busquedaGarantias = e.target.value; renderTablaGarantias(); });
 
   await cargarGarantias();
+  renderStatsGarantias();
   renderTablaGarantias();
+}
+
+function renderStatsGarantias() {
+  const cont = $('#garantias-stats');
+  if (!cont) return;
+  const vigentes = garantiasCache.filter(g => estadoGarantia(g) === 'vigente').length;
+  const vencidas = garantiasCache.filter(g => estadoGarantia(g) === 'vencida').length;
+  const porVencer = garantiasCache.filter(g => estaPorVencer(g, 30)).length;
+  cont.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Vigentes</div><div class="value">${vigentes}</div></div>
+      <div class="stat-chip warn"><div class="label">Por vencer en 30 días</div><div class="value">${porVencer}</div></div>
+      <div class="stat-chip danger"><div class="label">Vencidas</div><div class="value">${vencidas}</div></div>
+    </div>
+  `;
 }
 
 function renderTablaGarantias() {
@@ -2584,18 +3494,22 @@ function renderTablaGarantias() {
   }
 
   cont.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Cliente</th><th>Producto</th><th>Venta</th><th>Vence</th><th>Estado</th><th>Acciones</th></tr></thead>
+    <thead><tr><th>N°</th><th>Cliente</th><th>Producto</th><th>Venta</th><th>Vence</th><th>Estado</th><th>Acciones</th></tr></thead>
     <tbody>
       ${lista.map(g => {
         const estado = estadoGarantia(g);
         return `
         <tr>
+          <td>${g.numero ? '#' + String(g.numero).padStart(4, '0') : '—'}</td>
           <td>${escapeHtml(g.cliente_nombre)}${g.cliente_telefono ? `<div style="color:var(--text-dim);font-size:11px;margin-top:1px">${escapeHtml(g.cliente_telefono)}</div>` : ''}</td>
           <td>${escapeHtml(g.producto_descripcion)}</td>
           <td>${g.venta_numero ? '#' + g.venta_numero : '—'}</td>
           <td>${fecha(g.fecha_vencimiento)}</td>
           <td><span class="badge ${estado === 'vigente' ? 'badge-ok' : 'badge-rechazada'}">${estado === 'vigente' ? 'Vigente' : 'Vencida'}</span></td>
           <td><div class="row-actions">
+            <button class="icon-btn" data-act="previa" data-id="${g.id}" title="Ver certificado">👁</button>
+            <button class="icon-btn" data-act="pdf" data-id="${g.id}" title="Descargar PDF">⬇</button>
+            <button class="icon-btn" data-act="wa" data-id="${g.id}" title="WhatsApp">📷</button>
             <button class="icon-btn" data-act="eliminar" data-id="${g.id}" title="Eliminar">🗑</button>
           </div></td>
         </tr>
@@ -2603,14 +3517,21 @@ function renderTablaGarantias() {
     </tbody>
   </table></div>`;
 
-  cont.querySelectorAll('[data-act="eliminar"]').forEach(btn => {
+  cont.querySelectorAll('[data-act]').forEach(btn => {
+    const g = garantiasCache.find(x => x.id === btn.dataset.id);
     btn.addEventListener('click', async () => {
-      if (!confirm('¿Eliminar esta garantía?')) return;
-      const { error } = await sb.from('garantias').delete().eq('id', btn.dataset.id);
-      if (error) { toast('Error: ' + error.message, 'error'); return; }
-      toast('Garantía eliminada');
-      await cargarGarantias();
-      renderTablaGarantias();
+      const act = btn.dataset.act;
+      if (act === 'previa') abrirVistaPreviaGarantia(g);
+      if (act === 'pdf') generarPdfGarantia(g);
+      if (act === 'wa') compartirImagenGarantiaWhatsapp(g);
+      if (act === 'eliminar') {
+        if (!confirm('¿Eliminar esta garantía?')) return;
+        const { error } = await sb.from('garantias').delete().eq('id', g.id);
+        if (error) { toast('Error: ' + error.message, 'error'); return; }
+        toast('Garantía eliminada');
+        await cargarGarantias();
+        renderTablaGarantias();
+      }
     });
   });
 }
@@ -2633,7 +3554,13 @@ async function abrirFormGarantia() {
 
     <div class="grid-2" style="margin-top:10px">
       <div class="field"><label>Cliente *</label><input id="g-cliente" required /></div>
-      <div class="field"><label>Teléfono</label><input id="g-telefono" /></div>
+      <div class="field"><label>CI / NIT</label><input id="g-ci" placeholder="Cédula de identidad" /></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Teléfono</label><input id="g-telefono" /></div>
+
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>N° de serie / IMEI</label><input id="g-serie" placeholder="Si el producto lo tiene" /></div>
+      <div class="field"><label>Precio (Bs)</label><input type="number" id="g-precio" min="0" step="0.01" /></div>
     </div>
 
     <div class="grid-2" style="margin-top:10px">
@@ -2641,11 +3568,24 @@ async function abrirFormGarantia() {
       <div class="field"><label>Garantía vence el *</label><input type="date" id="g-fecha-vencimiento" required /></div>
     </div>
 
-    <div class="field" style="margin-top:10px"><label>Notas (opcional)</label><input id="g-notas" placeholder="Ej: 6 meses por defectos de fábrica" /></div>
+    <div class="field" style="margin-top:10px"><label>Notas internas (opcional)</label><input id="g-notas" placeholder="Ej: 6 meses por defectos de fábrica" /></div>
+
+    <div class="field" style="margin-top:10px"><label>Condiciones de la garantía (se imprimen en el certificado)</label>
+      <textarea id="g-condiciones" rows="6">${escapeHtml(CONDICIONES_GARANTIA_DEFAULT)}</textarea>
+    </div>
+
+    <div class="field" style="margin-top:12px">
+      <label>Firma del cliente (opcional acá — también se puede firmar después, desde 👁 Ver certificado)</label>
+      <div class="firma-box">
+        <canvas id="firma-canvas" class="firma-canvas"></canvas>
+        <button type="button" class="firma-borrar" id="btn-borrar-firma" title="Borrar firma">🗑</button>
+      </div>
+      <p style="font-size:11px;color:var(--text-faint);margin-top:4px">Dibujá la firma con el dedo o el mouse — el cliente firma como respaldo de que recibió y aceptó los términos de esta garantía.</p>
+    </div>
 
     <div class="form-actions">
       <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
-      <button class="btn btn-primary" id="btn-guardar">💾 Guardar garantía</button>
+      <button class="btn btn-primary" id="btn-guardar">💾 Guardar y generar certificado</button>
     </div>
   `);
 
@@ -2653,6 +3593,54 @@ async function abrirFormGarantia() {
 
   $('#sheet-close').addEventListener('click', closeModal);
   $('#btn-cancelar').addEventListener('click', closeModal);
+
+  const firmaCanvas = $('#firma-canvas');
+  const firmaCtx = firmaCanvas.getContext('2d');
+  function ajustarTamanoCanvas() {
+    const rect = firmaCanvas.getBoundingClientRect();
+    firmaCanvas.width = rect.width * 2;
+    firmaCanvas.height = rect.height * 2;
+    firmaCtx.scale(2, 2);
+    firmaCtx.strokeStyle = '#14161c';
+    firmaCtx.lineWidth = 2;
+    firmaCtx.lineCap = 'round';
+    firmaCtx.lineJoin = 'round';
+  }
+  setTimeout(ajustarTamanoCanvas, 0);
+
+  let dibujando = false, huboTrazo = false;
+  function posDesdeEvento(e) {
+    const rect = firmaCanvas.getBoundingClientRect();
+    const punto = e.touches ? e.touches[0] : e;
+    return { x: punto.clientX - rect.left, y: punto.clientY - rect.top };
+  }
+  function empezarTrazo(e) {
+    e.preventDefault();
+    dibujando = true; huboTrazo = true;
+    const { x, y } = posDesdeEvento(e);
+    firmaCtx.beginPath();
+    firmaCtx.moveTo(x, y);
+  }
+  function seguirTrazo(e) {
+    if (!dibujando) return;
+    e.preventDefault();
+    const { x, y } = posDesdeEvento(e);
+    firmaCtx.lineTo(x, y);
+    firmaCtx.stroke();
+  }
+  function terminarTrazo() { dibujando = false; }
+
+  firmaCanvas.addEventListener('mousedown', empezarTrazo);
+  firmaCanvas.addEventListener('mousemove', seguirTrazo);
+  window.addEventListener('mouseup', terminarTrazo);
+  firmaCanvas.addEventListener('touchstart', empezarTrazo, { passive: false });
+  firmaCanvas.addEventListener('touchmove', seguirTrazo, { passive: false });
+  firmaCanvas.addEventListener('touchend', terminarTrazo);
+
+  $('#btn-borrar-firma').addEventListener('click', () => {
+    firmaCtx.clearRect(0, 0, firmaCanvas.width, firmaCanvas.height);
+    huboTrazo = false;
+  });
 
   $('#g-venta-busqueda').addEventListener('change', (e) => {
     const m = e.target.value.match(/^#(\d+)/);
@@ -2674,6 +3662,13 @@ async function abrirFormGarantia() {
     $('#g-cliente').value = ventaSeleccionada.cliente_nombre || '';
     $('#g-telefono').value = ventaSeleccionada.cliente_telefono || '';
     $('#g-fecha-compra').value = (ventaSeleccionada.created_at || '').slice(0, 10);
+    if (items.length === 1) selProducto.dispatchEvent(new Event('change'));
+  });
+
+  $('#g-producto').addEventListener('change', (e) => {
+    const items = ventaSeleccionada && Array.isArray(ventaSeleccionada.items) ? ventaSeleccionada.items : [];
+    const it = items[e.target.value];
+    $('#g-precio').value = it ? it.subtotal ?? it.precio_unitario ?? '' : '';
   });
 
   $('#btn-guardar').addEventListener('click', async () => {
@@ -2687,26 +3682,238 @@ async function abrirFormGarantia() {
     if (!producto_descripcion) { toast('Elegí una venta y un producto', 'error'); return; }
     if (!fecha_vencimiento) { toast('Falta la fecha de vencimiento de la garantía', 'error'); return; }
 
+    const numeroSiguiente = garantiasCache.length > 0 ? Math.max(...garantiasCache.map(g => g.numero || 0)) + 1 : 1;
+
     const payload = {
+      numero: numeroSiguiente,
       venta_id: ventaSeleccionada?.id || null,
       venta_numero: ventaSeleccionada?.numero || null,
       cliente_nombre,
+      cliente_ci: $('#g-ci').value.trim(),
       cliente_telefono: $('#g-telefono').value.trim(),
       producto_descripcion,
+      numero_serie: $('#g-serie').value.trim(),
+      precio: $('#g-precio').value ? Number($('#g-precio').value) : null,
       fecha_compra: $('#g-fecha-compra').value || new Date().toISOString().slice(0, 10),
       fecha_vencimiento,
       notas: $('#g-notas').value.trim(),
-      registrado_por: profile.id
+      condiciones: $('#g-condiciones').value.trim(),
+      firma_base64: huboTrazo ? firmaCanvas.toDataURL('image/png') : null,
+      registrado_por: profile.id,
+      registrado_por_nombre: profile.nombre || profile.usuario
     };
 
-    const { error } = await sb.from('garantias').insert(payload);
+    const { data: nueva, error } = await sb.from('garantias').insert(payload).select().single();
     if (error) { toast('Error al guardar: ' + error.message, 'error'); return; }
 
     toast('Garantía registrada ✓');
     closeModal();
     await cargarGarantias();
     renderTablaGarantias();
+    abrirVistaPreviaGarantia(nueva);
   });
+}
+
+// ------------------------------------------------------------
+// CERTIFICADO DE GARANTÍA — vista previa, PDF y envío por WhatsApp
+// ------------------------------------------------------------
+function abrirVistaPreviaGarantia(g) {
+  const numeroFmt = g.numero ? `N° ${String(g.numero).padStart(4, '0')}` : '';
+  document.body.insertAdjacentHTML('beforeend', `
+    <div class="docprev-overlay" id="docprev-overlay">
+      <div class="docprev-topbar">
+        <div class="docprev-topbar-head">
+          <span>Vista previa — Certificado de garantía ${numeroFmt}</span>
+          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
+        </div>
+        <div class="docprev-actions">
+          <button class="docprev-btn docprev-btn-pdf" id="docprev-pdf">⬇ Descargar PDF</button>
+          <button class="docprev-btn docprev-btn-wa" id="docprev-wa">📷 WhatsApp</button>
+        </div>
+      </div>
+      <div class="docprev-scroll">
+        <div class="docprev-paper" id="docprev-paper-el">
+          ${certificadoGarantiaHtml(g)}
+        </div>
+      </div>
+    </div>
+  `);
+  document.getElementById('docprev-close').addEventListener('click', () => document.getElementById('docprev-overlay').remove());
+  document.getElementById('docprev-pdf').addEventListener('click', () => generarPdfGarantia(g));
+  document.getElementById('docprev-wa').addEventListener('click', () => compartirImagenGarantiaWhatsapp(g));
+}
+
+function certificadoGarantiaHtml(g) {
+  const estado = estadoGarantia(g);
+  const duracion = duracionLegible(g.fecha_compra, g.fecha_vencimiento);
+  return `
+    <div class="docprev-header">
+      <div class="docprev-brand">
+        <div class="docprev-logo">BM</div>
+        <div>
+          <div class="docprev-brand-name">ELECTRODOMÉSTICOS BM</div>
+          <div class="docprev-brand-sub">Bolivia</div>
+        </div>
+      </div>
+      <div class="docprev-doc-info">
+        <div class="docprev-doc-title">CERTIFICADO DE GARANTÍA</div>
+        ${g.numero ? `<div class="docprev-doc-num">N° ${String(g.numero).padStart(4, '0')}</div>` : ''}
+        <div class="docprev-doc-date">${fecha(g.created_at || g.fecha_compra)}</div>
+      </div>
+    </div>
+    <div class="docprev-divider"></div>
+
+    <div class="docprev-fields">
+      <div><span class="docprev-flabel">Cliente:</span> ${escapeHtml(g.cliente_nombre)}</div>
+      <div><span class="docprev-flabel">CI / NIT:</span> ${escapeHtml(g.cliente_ci || '—')}</div>
+      <div><span class="docprev-flabel">Teléfono:</span> ${escapeHtml(g.cliente_telefono || '—')}</div>
+      <div><span class="docprev-flabel">N° de venta:</span> ${g.venta_numero ? '#' + g.venta_numero : '—'}</div>
+    </div>
+
+    <div class="gar-producto-box">
+      <div class="gar-producto-titulo">${escapeHtml(g.producto_descripcion)}</div>
+      <div class="docprev-fields" style="margin-bottom:0">
+        <div><span class="docprev-flabel">N° de serie / IMEI:</span> ${escapeHtml(g.numero_serie || '—')}</div>
+        <div><span class="docprev-flabel">Precio:</span> ${g.precio != null ? money(g.precio) : '—'}</div>
+      </div>
+    </div>
+
+    <div class="gar-vigencia-box">
+      <div class="gar-vigencia-col">
+        <div class="gar-vigencia-label">Fecha de compra</div>
+        <div class="gar-vigencia-val">${fecha(g.fecha_compra)}</div>
+      </div>
+      <div class="gar-vigencia-flecha">→</div>
+      <div class="gar-vigencia-col">
+        <div class="gar-vigencia-label">Garantía vence</div>
+        <div class="gar-vigencia-val">${fecha(g.fecha_vencimiento)}</div>
+      </div>
+      <div class="gar-vigencia-col" style="text-align:right">
+        ${duracion ? `<div class="gar-vigencia-label">Cobertura</div><div class="gar-vigencia-val">${duracion}</div>` : ''}
+        <span class="badge ${estado === 'vigente' ? 'badge-ok' : 'badge-rechazada'}" style="margin-top:4px;display:inline-block">${estado === 'vigente' ? 'Vigente' : 'Vencida'}</span>
+      </div>
+    </div>
+
+    <div class="gar-condiciones-titulo">Condiciones de la garantía</div>
+    <div class="gar-condiciones-box">${escapeHtml(g.condiciones || CONDICIONES_GARANTIA_DEFAULT).replace(/\n/g, '<br>')}</div>
+
+    ${g.notas ? `<div class="docprev-fields" style="margin-top:10px"><div><span class="docprev-flabel">Notas:</span> ${escapeHtml(g.notas)}</div></div>` : ''}
+
+    <div class="comp-firma-row">
+      <div class="comp-firma">
+        ${g.firma_base64 ? `<img src="${g.firma_base64}" class="comp-firma-img" />` : ''}
+        <div class="comp-firma-linea"></div>Firma del cliente${g.cliente_ci ? `<br>CI: ${escapeHtml(g.cliente_ci)}` : ''}
+      </div>
+      <div class="comp-firma"><div class="comp-firma-linea"></div>Registró<br><strong>${escapeHtml((g.registrado_por_nombre || '').toUpperCase())}</strong></div>
+    </div>
+
+    <div class="docprev-gracias">Conserve este certificado junto a su comprobante de compra — es necesario para hacer válido cualquier reclamo de garantía.</div>
+  `;
+}
+
+function generarPdfGarantia(g) {
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF();
+  const estado = estadoGarantia(g);
+  const duracion = duracionLegible(g.fecha_compra, g.fecha_vencimiento);
+
+  pdf.setFontSize(16); pdf.setFont(undefined, 'bold'); pdf.setTextColor(20, 20, 20);
+  pdf.text('Electrodomésticos BM', 14, 18);
+  pdf.setFontSize(9); pdf.setFont(undefined, 'normal'); pdf.setTextColor(107, 114, 128);
+  pdf.text('Bolivia', 14, 24);
+
+  pdf.setFontSize(13); pdf.setFont(undefined, 'bold'); pdf.setTextColor(220, 38, 38);
+  pdf.text('CERTIFICADO DE GARANTÍA', 196, 18, { align: 'right' });
+  pdf.setFontSize(11);
+  if (g.numero) pdf.text(`N° ${String(g.numero).padStart(4, '0')}`, 196, 25, { align: 'right' });
+  pdf.setFontSize(9); pdf.setFont(undefined, 'normal'); pdf.setTextColor(107, 114, 128);
+  pdf.text(fecha(g.created_at || g.fecha_compra), 196, 30, { align: 'right' });
+
+  pdf.setDrawColor(20, 20, 20); pdf.line(14, 34, 196, 34);
+
+  pdf.setFontSize(10); pdf.setTextColor(20, 20, 20);
+  pdf.text(`Cliente: ${g.cliente_nombre}`, 14, 43);
+  pdf.text(`CI/NIT: ${g.cliente_ci || '—'}`, 130, 43);
+  pdf.text(`Teléfono: ${g.cliente_telefono || '—'}`, 14, 49);
+  pdf.text(`N° de venta: ${g.venta_numero ? '#' + g.venta_numero : '—'}`, 130, 49);
+
+  let y = 60;
+  pdf.setFillColor(243, 244, 246);
+  pdf.rect(14, y, 182, 22, 'F');
+  pdf.setFont(undefined, 'bold'); pdf.setFontSize(10.5); pdf.setTextColor(20, 20, 20);
+  pdf.text(g.producto_descripcion, 18, y + 8, { maxWidth: 174 });
+  pdf.setFont(undefined, 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(107, 114, 128);
+  pdf.text(`N° de serie/IMEI: ${g.numero_serie || '—'}    Precio: ${g.precio != null ? money(g.precio) : '—'}`, 18, y + 17);
+  y += 30;
+
+  pdf.setFillColor(230, 250, 243);
+  pdf.rect(14, y, 182, 20, 'F');
+  pdf.setFontSize(8.5); pdf.setTextColor(107, 114, 128);
+  pdf.text('Fecha de compra', 18, y + 7);
+  pdf.text('Garantía vence', 85, y + 7);
+  if (duracion) pdf.text('Cobertura', 150, y + 7);
+  pdf.setFont(undefined, 'bold'); pdf.setFontSize(10.5); pdf.setTextColor(20, 20, 20);
+  pdf.text(fecha(g.fecha_compra), 18, y + 15);
+  pdf.text(fecha(g.fecha_vencimiento), 85, y + 15);
+  if (duracion) pdf.text(duracion, 150, y + 15);
+  pdf.setFontSize(9); pdf.setTextColor(estado === 'vigente' ? 5 : 220, estado === 'vigente' ? 150 : 38, estado === 'vigente' ? 105 : 38);
+  pdf.text(estado === 'vigente' ? 'VIGENTE' : 'VENCIDA', 178, y + 15, { align: 'right' });
+  y += 30;
+
+  pdf.setFont(undefined, 'bold'); pdf.setFontSize(10); pdf.setTextColor(20, 20, 20);
+  pdf.text('Condiciones de la garantía', 14, y); y += 6;
+  pdf.setFont(undefined, 'normal'); pdf.setFontSize(8.5); pdf.setTextColor(55, 65, 81);
+  const condiciones = (g.condiciones || CONDICIONES_GARANTIA_DEFAULT).split('\n').filter(l => l.trim());
+  condiciones.forEach(parrafo => {
+    const lineas = pdf.splitTextToSize(parrafo, 182);
+    pdf.text(lineas, 14, y);
+    y += lineas.length * 4.2 + 3;
+  });
+
+  if (g.notas) { pdf.setFont(undefined, 'italic'); pdf.text(`Notas: ${g.notas}`, 14, y, { maxWidth: 182 }); y += 8; }
+
+  y = Math.max(y + 14, 245);
+  if (g.firma_base64) {
+    try { pdf.addImage(g.firma_base64, 'PNG', 25, y - 16, 50, 16); } catch (e) { /* firma inválida, seguimos sin ella */ }
+  }
+  pdf.setDrawColor(150, 150, 150);
+  pdf.line(20, y, 85, y); pdf.line(125, y, 190, y);
+  pdf.setFontSize(8.5); pdf.setTextColor(20, 20, 20);
+  pdf.text('Firma del cliente', 20, y + 6);
+  pdf.text('Registró', 125, y + 6);
+  pdf.setFont(undefined, 'bold');
+  pdf.text((g.registrado_por_nombre || '').toUpperCase(), 125, y + 11);
+
+  pdf.setFont(undefined, 'italic'); pdf.setFontSize(8); pdf.setTextColor(31, 41, 55);
+  pdf.text('Conserve este certificado junto a su comprobante de compra — es necesario para hacer válido cualquier reclamo.', 105, y + 22, { align: 'center', maxWidth: 175 });
+
+  pdf.save(`Garantia_${g.numero ? String(g.numero).padStart(4, '0') + '_' : ''}${(g.cliente_nombre || '').replace(/\s+/g, '_')}.pdf`);
+}
+
+async function compartirImagenGarantiaWhatsapp(g) {
+  const yaAbierto = document.getElementById('docprev-overlay');
+  if (yaAbierto) {
+    await generarYCompartirGarantiaImagen(g);
+    return;
+  }
+  abrirVistaPreviaGarantia(g);
+  setTimeout(() => generarYCompartirGarantiaImagen(g), 250);
+}
+
+async function generarYCompartirGarantiaImagen(g) {
+  const elPapel = document.getElementById('docprev-paper-el');
+  if (!elPapel || typeof html2canvas === 'undefined') return;
+  try {
+    const canvas = await html2canvas(elPapel, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const texto = `*Certificado de garantía ${g.numero ? 'N° ' + String(g.numero).padStart(4, '0') : ''} — Electrodomésticos BM*\nCliente: ${g.cliente_nombre}\nProducto: ${g.producto_descripcion}\nVence: ${fecha(g.fecha_vencimiento)}`;
+    if (blob) {
+      const file = new File([blob], `garantia_${g.numero || g.id}.png`, { type: 'image/png' });
+      await compartirArchivosWhatsapp({ files: [file], texto, titulo: 'Certificado de garantía', numeroWa: (g.cliente_telefono || '').replace(/[^0-9]/g, '') });
+    }
+  } catch (e) {
+    toast('No se pudo generar la imagen del certificado', 'error');
+  }
 }
 
 // ============================================================
@@ -2766,6 +3973,56 @@ function sonarNotificacion() {
   if (navigator.vibrate) navigator.vibrate(200);
 }
 
+// ------------------------------------------------------------
+// MODO DE NOTIFICACIONES DEL CHAT (sonido/vibración + notificación
+// del sistema operativo) — un solo interruptor para chat general y
+// chat privado, guardado por dispositivo. Activadas por defecto,
+// igual que el comportamiento que ya tenía la app.
+// ------------------------------------------------------------
+function notificacionesChatActivas() {
+  return localStorage.getItem('bm_chat_notif_activas') !== 'false';
+}
+
+async function activarNotificacionesChat() {
+  localStorage.setItem('bm_chat_notif_activas', 'true');
+  if ('Notification' in window && Notification.permission === 'default') {
+    try { await Notification.requestPermission(); } catch (e) { /* el usuario puede cerrar el permiso sin elegir */ }
+  }
+  actualizarBotonNotifChat();
+  toast('Notificaciones del chat activadas');
+}
+
+function desactivarNotificacionesChat() {
+  localStorage.setItem('bm_chat_notif_activas', 'false');
+  actualizarBotonNotifChat();
+  toast('Notificaciones del chat desactivadas');
+}
+
+function actualizarBotonNotifChat() {
+  const btn = $('#btn-toggle-notif-chat');
+  if (!btn) return;
+  const activas = notificacionesChatActivas();
+  btn.textContent = activas ? '🔔 Notificaciones activadas' : '🔕 Notificaciones desactivadas';
+  btn.classList.toggle('notif-chat-on', activas);
+  btn.classList.toggle('notif-chat-off', !activas);
+}
+
+// Notificación del sistema operativo (además del sonido) cuando llega
+// un mensaje y la pestaña/app no está a la vista — solo si el usuario
+// activó las notificaciones y ya le dio permiso al navegador.
+function notificarMensajeSistema(m, hilo) {
+  if (!notificacionesChatActivas()) return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!document.hidden) return;
+  const donde = hilo === 'general' ? 'Chat general' : 'Mensaje privado';
+  try {
+    new Notification(`${m.nombre_remitente || 'Alguien'} — ${donde}`, {
+      body: m.texto ? (m.texto.length > 100 ? m.texto.slice(0, 100) + '…' : m.texto) : '📷 Envió una foto',
+      icon: 'icons/icon-192.png'
+    });
+  } catch (e) { /* algunos navegadores/Android bloquean esto sin service worker activo */ }
+}
+
 async function cargarVendedores() {
   const { data } = await sb.from('profiles').select('*').eq('rol', 'vendedor').order('nombre');
   vendedoresCache = data || [];
@@ -2817,10 +4074,35 @@ async function inicializarNotificacionesChat() {
         if (vistaActual === 'chat' && chatModo === 'individual' && profile.rol === 'admin' && !chatHiloVendedorId) {
           renderListaVendedoresChat();
         }
+        mostrarBotAvisoMensaje(m, hilo);
       }
-      sonarNotificacion();
+      if (notificacionesChatActivas()) sonarNotificacion();
+      notificarMensajeSistema(m, hilo);
     })
     .subscribe();
+}
+
+// BAM avisa con una burbuja cuando llega un mensaje nuevo y no estás
+// viendo ese hilo (general o individual) — chat oficial (equipo) e interno
+// (vendedor ↔ administración) por igual.
+function mostrarBotAvisoMensaje(m, hilo) {
+  const remitente = escapeHtml(m.nombre_remitente || 'Alguien');
+  const donde = hilo === 'general'
+    ? 'en el chat general'
+    : (profile.rol === 'admin'
+      ? `con ${escapeHtml(vendedoresCache.find(v => v.id === hilo)?.nombre || 'un vendedor')}`
+      : 'con administración');
+  const preview = m.texto
+    ? escapeHtml(m.texto.length > 90 ? m.texto.slice(0, 90) + '…' : m.texto)
+    : '📷 Envió una foto';
+
+  mostrarBotBurbuja(`💬 ${remitente} — ${donde}`, preview, {
+    botones: [{ label: 'Ir al chat →', onClick: () => {
+      chatModo = hilo === 'general' ? 'general' : 'individual';
+      if (hilo !== 'general' && profile.rol === 'admin') chatHiloVendedorId = hilo;
+      switchView('chat');
+    } }]
+  });
 }
 
 async function renderChat() {
@@ -2829,6 +4111,7 @@ async function renderChat() {
   el.innerHTML = `
     <div class="section-head">
       <div><h2>Chat</h2><p class="sub">${soyAdmin ? 'Chat general del equipo y conversaciones individuales' : 'Chat general y conversación privada con administración'}</p></div>
+      <button class="btn btn-secondary" id="btn-toggle-notif-chat"></button>
     </div>
     <div class="tabs" id="chat-tabs">
       <button class="tab-btn ${chatModo === 'general' ? 'active' : ''}" data-modo="general">General</button>
@@ -2842,6 +4125,12 @@ async function renderChat() {
     if (chatModo === 'general') chatHiloVendedorId = null;
     renderChatCuerpo();
   }));
+
+  actualizarBotonNotifChat();
+  $('#btn-toggle-notif-chat').addEventListener('click', async () => {
+    if (notificacionesChatActivas()) desactivarNotificacionesChat();
+    else await activarNotificacionesChat();
+  });
 
   await renderChatCuerpo();
 }
@@ -3274,11 +4563,13 @@ function abrirVistaPreviaComprobante(c) {
   document.body.insertAdjacentHTML('beforeend', `
     <div class="docprev-overlay" id="docprev-overlay">
       <div class="docprev-topbar">
-        <span>Vista previa — Comprobante ${numeroFmt}</span>
+        <div class="docprev-topbar-head">
+          <span>Vista previa — Comprobante ${numeroFmt}</span>
+          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
+        </div>
         <div class="docprev-actions">
           <button class="docprev-btn docprev-btn-pdf" id="docprev-pdf">⬇ Descargar PDF</button>
           <button class="docprev-btn docprev-btn-wa" id="docprev-wa">📷 WhatsApp</button>
-          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
         </div>
       </div>
       <div class="docprev-scroll">
@@ -3670,13 +4961,15 @@ function abrirVistaPrevia(doc, tipoLabel, prefijo) {
   document.body.insertAdjacentHTML('beforeend', `
     <div class="docprev-overlay" id="docprev-overlay">
       <div class="docprev-topbar">
-        <span>Vista previa — ${numeroDoc(doc, prefijo)}</span>
+        <div class="docprev-topbar-head">
+          <span>Vista previa — ${numeroDoc(doc, prefijo)}</span>
+          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
+        </div>
         <div class="docprev-actions">
           <button class="docprev-btn docprev-btn-pdf" id="docprev-pdf">⬇ Descargar PDF</button>
           <button class="docprev-btn docprev-btn-wa" id="docprev-wa">📷 WhatsApp</button>
           ${hayFotos ? `<button class="docprev-btn" style="background:#0ea5e9;color:#fff" id="docprev-fotos">🖼️ Fotos artículos</button>` : ''}
           ${mostrarBtnMedioPago ? `<button class="docprev-btn" style="background:#7c3aed;color:#fff" id="docprev-mediopago">💳 Medio de pago</button>` : ''}
-          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
         </div>
       </div>
       <div class="docprev-scroll">
@@ -3967,4 +5260,145 @@ async function eliminarRegistro(tabla, id, callback) {
 
 function escapeHtml(str) {
   return String(str ?? '').replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+
+// ============================================================
+// CALCULADORAS: calefacción (estufas), agua caliente (termotanques)
+// y aire acondicionado — mismo motor de balance térmico para
+// calefacción y aires, con distinta unidad de salida (Kcal/h y BTU).
+// Disponible para admin y vendedores, desde Ventas → Calculadoras.
+// ============================================================
+const ZONA_CLIMA_BOLIVIA = {
+  'La Paz': 'frio', 'El Alto': 'frio', 'Oruro': 'frio', 'Potosí': 'frio', 'Uyuni': 'frio',
+  'Cochabamba': 'templado', 'Sucre': 'templado', 'Tarija': 'templado', 'Tupiza': 'templado', 'Camargo': 'templado',
+  'Santa Cruz de la Sierra': 'calido', 'Trinidad': 'calido', 'Cobija': 'calido', 'Montero': 'calido',
+  'Warnes': 'calido', 'Riberalta': 'calido', 'Yacuiba': 'calido', 'Villamontes': 'calido'
+};
+const COEF_ZONA_CLIMA = {
+  frio: { calefaccion: 45, refrigeracion: 25 },
+  templado: { calefaccion: 35, refrigeracion: 40 },
+  calido: { calefaccion: 25, refrigeracion: 55 }
+};
+const MULT_TIPO_AMBIENTE = { dormitorio: 1, bano: 0.85, living: 1.15, cocina: 1, oficina: 1.05 };
+const TAMANOS_ESTUFA_KCAL = [1500, 2000, 2500, 3000, 4000, 5000, 6000, 8000, 10000];
+const TAMANOS_AC_BTU = [5000, 6000, 9000, 12000, 18000, 24000, 30000, 36000];
+const TAMANOS_TERMOTANQUE_L = [40, 55, 85, 110, 130, 150, 200];
+
+function redondearATamano(valor, tamanos) {
+  return tamanos.find(t => t >= valor) || tamanos[tamanos.length - 1];
+}
+// Balance térmico simplificado: volumen del ambiente × coeficiente de la
+// zona climática × factor según el tipo de ambiente. Se usa tanto para
+// calefacción (Kcal/h) como para aire acondicionado (BTU/h, convertido).
+function calcularBalanceTermico(largo, ancho, altura, ciudad, tipoAmbiente) {
+  const zona = ZONA_CLIMA_BOLIVIA[ciudad] || 'templado';
+  const volumen = Math.max(0, largo) * Math.max(0, ancho) * Math.max(0, altura || 2.6);
+  const coef = COEF_ZONA_CLIMA[zona];
+  const mult = MULT_TIPO_AMBIENTE[tipoAmbiente] || 1;
+  return {
+    volumen,
+    kcalCalefaccion: Math.round(volumen * coef.calefaccion * mult),
+    btuRefrigeracion: Math.round(volumen * coef.refrigeracion * mult * 3.97) // 1 Kcal/h ≈ 3.97 BTU/h
+  };
+}
+function calcularTermotanque(personas, banosSimultaneos) {
+  const litros = personas * 25 + (banosSimultaneos - 1) * 25;
+  return redondearATamano(litros, TAMANOS_TERMOTANQUE_L);
+}
+
+const CALC_INFO = {
+  calefaccion: { titulo: 'Calefacción (Estufas)', icono: '🔥' },
+  agua: { titulo: 'Agua caliente (Termotanques)', icono: '🚿' },
+  aires: { titulo: 'Aire acondicionado', icono: '❄️' }
+};
+
+function abrirCalculadora(tipo) {
+  const info = CALC_INFO[tipo];
+  const ciudades = Object.keys(ZONA_CLIMA_BOLIVIA);
+
+  const camposAmbiente = `
+    <div class="field"><label>¿Qué ambiente vas a climatizar?</label>
+      <select id="calc-ambiente">
+        <option value="dormitorio">Dormitorio</option>
+        <option value="living">Living / Comedor</option>
+        <option value="cocina">Cocina</option>
+        <option value="bano">Baño</option>
+        <option value="oficina">Oficina</option>
+      </select>
+    </div>
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Largo (m)</label><input type="number" id="calc-largo" min="0" step="0.1" placeholder="Ej: 4" /></div>
+      <div class="field"><label>Ancho (m)</label><input type="number" id="calc-ancho" min="0" step="0.1" placeholder="Ej: 3" /></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Altura (m) — dejalo vacío para usar 2,6m estándar</label><input type="number" id="calc-altura" min="0" step="0.1" placeholder="2.6" /></div>
+    <div class="field" style="margin-top:10px"><label>Ciudad del cliente</label>
+      <select id="calc-ciudad">${ciudades.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select>
+    </div>
+  `;
+  const camposAgua = `
+    <div class="grid-2">
+      <div class="field"><label>Personas en el hogar</label>
+        <select id="calc-personas">${[1, 2, 3, 4, 5, 6].map(n => `<option value="${n}">${n}${n === 6 ? '+' : ''}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Baños de uso simultáneo</label>
+        <select id="calc-banos">${[1, 2, 3].map(n => `<option value="${n}">${n}${n === 3 ? '+' : ''}</option>`).join('')}</select>
+      </div>
+    </div>
+  `;
+
+  openModal(`
+    <div class="sheet-head"><h3>${info.icono} ${info.titulo}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <div id="calc-form">${tipo === 'agua' ? camposAgua : camposAmbiente}</div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cerrar</button>
+      <button class="btn btn-primary" id="calc-btn-calcular">Calcular</button>
+    </div>
+    <div id="calc-resultado"></div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+
+  $('#calc-btn-calcular').addEventListener('click', () => {
+    const resultadoCont = $('#calc-resultado');
+    let resultadoHtml, textoWa;
+
+    if (tipo === 'agua') {
+      const personas = Number($('#calc-personas').value);
+      const banos = Number($('#calc-banos').value);
+      const litros = calcularTermotanque(personas, banos);
+      resultadoHtml = `Termotanque recomendado: <strong>${litros} litros</strong> (${personas} persona${personas > 1 ? 's' : ''}, ${banos} baño${banos > 1 ? 's' : ''} simultáneo${banos > 1 ? 's' : ''}).`;
+      textoWa = `Hola! Según la calculadora de agua caliente de Electrodomésticos BM, para ${personas} persona(s) y ${banos} baño(s) de uso simultáneo se recomienda un termotanque de ${litros}L.`;
+    } else {
+      const largo = Number($('#calc-largo').value);
+      const ancho = Number($('#calc-ancho').value);
+      const altura = Number($('#calc-altura').value) || 2.6;
+      const ciudad = $('#calc-ciudad').value;
+      const ambiente = $('#calc-ambiente').value;
+      if (!largo || !ancho) {
+        resultadoCont.innerHTML = `<p style="color:#e5484d;font-size:13px;margin-top:10px">Completá el largo y el ancho del ambiente.</p>`;
+        return;
+      }
+      const r = calcularBalanceTermico(largo, ancho, altura, ciudad, ambiente);
+      const m2 = (largo * ancho).toFixed(1);
+      if (tipo === 'calefaccion') {
+        const kcal = redondearATamano(r.kcalCalefaccion, TAMANOS_ESTUFA_KCAL);
+        resultadoHtml = `Estufa recomendada: <strong>${kcal.toLocaleString('es-BO')} Kcal/h</strong> para ${m2} m² en ${escapeHtml(ciudad)}.`;
+        textoWa = `Hola! Según la calculadora de calefacción de Electrodomésticos BM, para un ambiente de ${largo}x${ancho}x${altura}m en ${ciudad} se recomienda una estufa de ${kcal} Kcal/h.`;
+      } else {
+        const btu = redondearATamano(r.btuRefrigeracion, TAMANOS_AC_BTU);
+        resultadoHtml = `Aire acondicionado recomendado: <strong>${btu.toLocaleString('es-BO')} BTU</strong> para ${m2} m² en ${escapeHtml(ciudad)}.`;
+        textoWa = `Hola! Según la calculadora de aire acondicionado de Electrodomésticos BM, para un ambiente de ${largo}x${ancho}x${altura}m en ${ciudad} se recomienda un equipo de ${btu} BTU.`;
+      }
+    }
+
+    resultadoCont.innerHTML = `
+      <div class="calc-resultado-box">
+        <div class="calc-resultado-texto">${resultadoHtml}</div>
+        <button class="btn btn-primary" id="calc-btn-wa" style="width:100%;justify-content:center;margin-top:10px">📤 Enviar al cliente por WhatsApp</button>
+      </div>
+    `;
+    resultadoCont.querySelector('#calc-btn-wa').addEventListener('click', () => {
+      window.open(`https://wa.me/?text=${encodeURIComponent(textoWa)}`, '_blank');
+    });
+  });
 }

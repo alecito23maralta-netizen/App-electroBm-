@@ -60,45 +60,58 @@ function renderRedesSociales() {
 }
 
 const PERRITO_SVG = `
-  <svg viewBox="0 0 120 130" xmlns="http://www.w3.org/2000/svg">
-    <rect x="8" y="70" width="15" height="34" rx="7.5" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="97" y="70" width="15" height="34" rx="7.5" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="40" y="112" width="17" height="17" rx="6" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="63" y="112" width="17" height="17" rx="6" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3"/>
-    <ellipse cx="48.5" cy="129" rx="10" ry="4" fill="#2f6fa8"/>
-    <ellipse cx="71.5" cy="129" rx="10" ry="4" fill="#2f6fa8"/>
-    <rect x="52" y="56" width="16" height="10" fill="#5fa8d3"/>
-    <rect x="24" y="64" width="72" height="38" rx="14" fill="#bfe4f5" stroke="#2f6fa8" stroke-width="3"/>
-    <rect x="43" y="76" width="34" height="17" rx="4" fill="#1c2b4a"/>
-    <rect x="55" y="80.5" width="10" height="10" rx="2" fill="#ffd23f" transform="rotate(45 60 85.5)"/>
-    <rect x="34" y="98" width="52" height="16" rx="8" fill="#ffd23f"/>
-    <text x="60" y="109.5" text-anchor="middle" font-size="10.5" font-weight="800" fill="#1c2b4a" font-family="Arial, sans-serif">BM</text>
-    <circle cx="33" cy="14" r="7" fill="#a8dcf0" stroke="#2f6fa8" stroke-width="2.5"/>
-    <circle cx="87" cy="14" r="7" fill="#a8dcf0" stroke="#2f6fa8" stroke-width="2.5"/>
-    <rect x="28" y="8" width="64" height="50" rx="15" fill="#7fc4e8" stroke="#2f6fa8" stroke-width="3.5"/>
-    <rect x="37" y="17" width="46" height="31" rx="9" fill="#1c2b4a"/>
-    <circle cx="50" cy="32.5" r="6.4" fill="#ffd23f"/>
-    <circle cx="70" cy="32.5" r="6.4" fill="#ffd23f"/>
-    <circle cx="52" cy="30.5" r="1.8" fill="#fff8d8"/>
-    <circle cx="72" cy="30.5" r="1.8" fill="#fff8d8"/>
+  <svg viewBox="0 0 140 150" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="70" cy="142" rx="34" ry="6" fill="#000" opacity="0.18"/>
+    <line x1="70" y1="9" x2="70" y2="24" stroke="#00b384" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="70" cy="7" r="6.5" fill="#00e5a0"/>
+    <rect x="26" y="78" width="14" height="34" rx="7" fill="#00b384"/>
+    <rect x="34" y="66" width="72" height="60" rx="24" fill="#00e5a0"/>
+    <circle cx="70" cy="98" r="13" fill="#05130f"/>
+    <text x="70" y="102.3" text-anchor="middle" font-size="11" font-weight="800" fill="#00e5a0" font-family="Arial, sans-serif">BM</text>
+    <rect x="46" y="122" width="14" height="16" rx="7" fill="#00b384"/>
+    <rect x="80" y="122" width="14" height="16" rx="7" fill="#00b384"/>
+    <rect x="30" y="22" width="80" height="54" rx="26" fill="#0d0f14" stroke="#00e5a0" stroke-width="3"/>
+    <circle cx="54" cy="49" r="9" fill="#00e5a0"/>
+    <circle cx="86" cy="49" r="9" fill="#00e5a0"/>
+    <circle cx="57" cy="46" r="2.6" fill="#eafff6"/>
+    <circle cx="89" cy="46" r="2.6" fill="#eafff6"/>
+    <path d="M56 62 Q70 70 84 62" stroke="#00e5a0" stroke-width="3.4" fill="none" stroke-linecap="round"/>
+    <rect x="97" y="53" width="14" height="32" rx="7" fill="#00b384" transform="rotate(-30 104 69)"/>
+    <circle cx="115" cy="45" r="9" fill="#00b384"/>
+    <rect x="106" y="12" width="30" height="21" rx="9" fill="#fff"/>
+    <polygon points="112,31 121,31 112,40" fill="#fff"/>
+    <circle cx="115" cy="22.5" r="2" fill="#00b384"/>
+    <circle cx="121" cy="22.5" r="2" fill="#00b384"/>
+    <circle cx="127" cy="22.5" r="2" fill="#00b384"/>
   </svg>
 `;
 
 function mostrarSaludoPerrito() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'saludo-backdrop';
+
   const div = document.createElement('div');
-  div.className = 'saludo-bienvenida';
+  div.className = 'saludo-bienvenida saludo-centro';
   div.innerHTML = `
+    <button class="saludo-cerrar" title="Cerrar">✕</button>
     <div class="saludo-personaje">${PERRITO_SVG}</div>
     <div class="saludo-texto">
-      <strong>¡Hola! Me llamo BAM 🤖</strong>
-      <span>Bienvenido a ElectrodomésticosBM — tenemos productos y herramientas para tu comodidad</span>
+      <strong>¡Hola! Soy BAM 🤖</strong>
+      <span>Te ayudo a encontrar el producto ideal para tu hogar</span>
+      <button class="saludo-cta" id="saludo-cta-chatear">💬 Chatear con BAM</button>
     </div>
-    <button class="saludo-cerrar" title="Cerrar">✕</button>
   `;
+  document.body.appendChild(backdrop);
   document.body.appendChild(div);
-  const quitar = () => { div.classList.add('saludo-salir'); setTimeout(() => div.remove(), 300); };
+  const quitar = () => {
+    div.classList.add('saludo-salir');
+    backdrop.classList.add('saludo-salir');
+    setTimeout(() => { div.remove(); backdrop.remove(); }, 300);
+  };
+  backdrop.addEventListener('click', quitar);
   div.querySelector('.saludo-cerrar').addEventListener('click', quitar);
-  setTimeout(quitar, 15 * 60 * 1000);
+  div.querySelector('#saludo-cta-chatear').addEventListener('click', () => { quitar(); abrirFormConsultaWhatsapp(); });
+  setTimeout(quitar, 15 * 1000);
 }
 
 function abrirFormConsultaWhatsapp(productoPreseleccionado) {
@@ -172,12 +185,195 @@ function crearBotFlotante() {
   cont.addEventListener('click', () => abrirFormConsultaWhatsapp());
 }
 
+// ------------------------------------------------------------
+// CALCULADORAS: calefacción (estufas), agua caliente (termotanques)
+// y aire acondicionado — mismo motor de balance térmico para
+// calefacción y aires, con distinta unidad de salida (Kcal/h y BTU).
+// ------------------------------------------------------------
+const ZONA_CLIMA_BOLIVIA = {
+  'La Paz': 'frio', 'El Alto': 'frio', 'Oruro': 'frio', 'Potosí': 'frio', 'Uyuni': 'frio',
+  'Cochabamba': 'templado', 'Sucre': 'templado', 'Tarija': 'templado', 'Tupiza': 'templado', 'Camargo': 'templado',
+  'Santa Cruz de la Sierra': 'calido', 'Trinidad': 'calido', 'Cobija': 'calido', 'Montero': 'calido',
+  'Warnes': 'calido', 'Riberalta': 'calido', 'Yacuiba': 'calido', 'Villamontes': 'calido'
+};
+const COEF_ZONA_CLIMA = {
+  frio: { calefaccion: 45, refrigeracion: 25 },
+  templado: { calefaccion: 35, refrigeracion: 40 },
+  calido: { calefaccion: 25, refrigeracion: 55 }
+};
+const MULT_TIPO_AMBIENTE = { dormitorio: 1, bano: 0.85, living: 1.15, cocina: 1, oficina: 1.05 };
+const TAMANOS_ESTUFA_KCAL = [1500, 2000, 2500, 3000, 4000, 5000, 6000, 8000, 10000];
+const TAMANOS_AC_BTU = [5000, 6000, 9000, 12000, 18000, 24000, 30000, 36000];
+const TAMANOS_TERMOTANQUE_L = [40, 55, 85, 110, 130, 150, 200];
+
+function redondearATamano(valor, tamanos) {
+  return tamanos.find(t => t >= valor) || tamanos[tamanos.length - 1];
+}
+// Balance térmico simplificado: volumen del ambiente × coeficiente de la
+// zona climática × factor según el tipo de ambiente. Se usa tanto para
+// calefacción (Kcal/h) como para aire acondicionado (BTU/h, convertido).
+function calcularBalanceTermico(largo, ancho, altura, ciudad, tipoAmbiente) {
+  const zona = ZONA_CLIMA_BOLIVIA[ciudad] || 'templado';
+  const volumen = Math.max(0, largo) * Math.max(0, ancho) * Math.max(0, altura || 2.6);
+  const coef = COEF_ZONA_CLIMA[zona];
+  const mult = MULT_TIPO_AMBIENTE[tipoAmbiente] || 1;
+  return {
+    volumen,
+    kcalCalefaccion: Math.round(volumen * coef.calefaccion * mult),
+    btuRefrigeracion: Math.round(volumen * coef.refrigeracion * mult * 3.97) // 1 Kcal/h ≈ 3.97 BTU/h
+  };
+}
+function calcularTermotanque(personas, banosSimultaneos) {
+  const litros = personas * 25 + (banosSimultaneos - 1) * 25;
+  return redondearATamano(litros, TAMANOS_TERMOTANQUE_L);
+}
+
+const CALC_INFO = {
+  calefaccion: { titulo: 'Calefacción (Estufas)', icono: '🔥' },
+  agua: { titulo: 'Agua caliente (Termotanques)', icono: '🚿' },
+  aires: { titulo: 'Aire acondicionado', icono: '❄️' }
+};
+
+function crearBotonCalculadora() {
+  const cont = document.createElement('div');
+  cont.className = 'calc-flotante-cont';
+  cont.innerHTML = `
+    <span class="bot-flotante-globo">Calculadora 🧮</span>
+    <button class="bot-flotante calc-flotante" title="Calculadora: qué equipo necesito">🧮</button>
+  `;
+  document.body.appendChild(cont);
+  cont.addEventListener('click', () => abrirMenuCalculadora());
+}
+
+function abrirMenuCalculadora() {
+  const overlay = document.createElement('div');
+  overlay.className = 'pub-detalle-overlay';
+  overlay.innerHTML = `
+    <div class="pub-detalle-card pub-consulta-card">
+      <button class="pub-detalle-cerrar" title="Cerrar">✕</button>
+      <div class="pub-detalle-info">
+        <h3 style="margin-bottom:4px">🧮 ¿Qué querés calcular?</h3>
+        <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px">Respondé un par de preguntas y te sugerimos el equipo ideal</p>
+        <div class="calc-menu">
+          ${Object.entries(CALC_INFO).map(([key, info]) => `
+            <button class="calc-menu-item" data-calc="${key}">
+              <span class="calc-menu-icono">${info.icono}</span>
+              <span>${info.titulo}</span>
+              <span class="calc-menu-flecha">→</span>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const cerrar = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cerrar(); });
+  overlay.querySelector('.pub-detalle-cerrar').addEventListener('click', cerrar);
+  overlay.querySelectorAll('[data-calc]').forEach(btn => {
+    btn.addEventListener('click', () => { cerrar(); abrirCalculadora(btn.dataset.calc); });
+  });
+}
+
+function abrirCalculadora(tipo) {
+  const info = CALC_INFO[tipo];
+  const ciudades = Object.keys(ZONA_CLIMA_BOLIVIA);
+
+  const camposAmbiente = `
+    <div class="field"><label>¿Qué ambiente vas a climatizar?</label>
+      <select id="calc-ambiente">
+        <option value="dormitorio">Dormitorio</option>
+        <option value="living">Living / Comedor</option>
+        <option value="cocina">Cocina</option>
+        <option value="bano">Baño</option>
+        <option value="oficina">Oficina</option>
+      </select>
+    </div>
+    <div class="pub-consulta-grid" style="margin-top:10px">
+      <div class="field"><label>Largo (m)</label><input type="number" id="calc-largo" min="0" step="0.1" placeholder="Ej: 4" /></div>
+      <div class="field"><label>Ancho (m)</label><input type="number" id="calc-ancho" min="0" step="0.1" placeholder="Ej: 3" /></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Altura (m) — dejalo vacío para usar 2,6m estándar</label><input type="number" id="calc-altura" min="0" step="0.1" placeholder="2.6" /></div>
+    <div class="field" style="margin-top:10px"><label>Ciudad</label>
+      <select id="calc-ciudad">${ciudades.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select>
+    </div>
+  `;
+  const camposAgua = `
+    <div class="field"><label>Cantidad de personas en el hogar</label>
+      <select id="calc-personas">${[1, 2, 3, 4, 5, 6].map(n => `<option value="${n}">${n}${n === 6 ? '+' : ''}</option>`).join('')}</select>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Baños de uso simultáneo</label>
+      <select id="calc-banos">${[1, 2, 3].map(n => `<option value="${n}">${n}${n === 3 ? '+' : ''}</option>`).join('')}</select>
+    </div>
+  `;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'pub-detalle-overlay';
+  overlay.innerHTML = `
+    <div class="pub-detalle-card pub-consulta-card">
+      <button class="pub-detalle-cerrar" title="Cerrar">✕</button>
+      <div class="pub-detalle-info">
+        <h3 style="margin-bottom:16px">${info.icono} ${info.titulo}</h3>
+        <div id="calc-form">${tipo === 'agua' ? camposAgua : camposAmbiente}</div>
+        <button class="pub-btn pub-btn-primary" id="calc-btn-calcular" style="width:100%;justify-content:center;margin-top:16px">Calcular</button>
+        <div id="calc-resultado"></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const cerrar = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) cerrar(); });
+  overlay.querySelector('.pub-detalle-cerrar').addEventListener('click', cerrar);
+
+  overlay.querySelector('#calc-btn-calcular').addEventListener('click', () => {
+    const resultadoCont = overlay.querySelector('#calc-resultado');
+    let resultadoHtml, textoWa;
+
+    if (tipo === 'agua') {
+      const personas = Number(overlay.querySelector('#calc-personas').value);
+      const banos = Number(overlay.querySelector('#calc-banos').value);
+      const litros = calcularTermotanque(personas, banos);
+      resultadoHtml = `Te recomendamos un <strong>termotanque de ${litros} litros</strong> aproximadamente.`;
+      textoWa = `Hola! Usé la calculadora de agua caliente: ${personas} persona(s) en el hogar, ${banos} baño(s) de uso simultáneo. Me recomienda un termotanque de ${litros}L. ¿Qué modelos tienen disponibles?`;
+    } else {
+      const largo = Number(overlay.querySelector('#calc-largo').value);
+      const ancho = Number(overlay.querySelector('#calc-ancho').value);
+      const altura = Number(overlay.querySelector('#calc-altura').value) || 2.6;
+      const ciudad = overlay.querySelector('#calc-ciudad').value;
+      const ambiente = overlay.querySelector('#calc-ambiente').value;
+      if (!largo || !ancho) {
+        resultadoCont.innerHTML = `<p style="color:#ff8a8a;font-size:13px;margin-top:12px">Completá el largo y el ancho del ambiente.</p>`;
+        return;
+      }
+      const r = calcularBalanceTermico(largo, ancho, altura, ciudad, ambiente);
+      const m2 = (largo * ancho).toFixed(1);
+      if (tipo === 'calefaccion') {
+        const kcal = redondearATamano(r.kcalCalefaccion, TAMANOS_ESTUFA_KCAL);
+        resultadoHtml = `Te recomendamos una <strong>estufa de aprox. ${kcal.toLocaleString('es-BO')} Kcal/h</strong> para un ambiente de ${m2} m².`;
+        textoWa = `Hola! Usé la calculadora de calefacción: ambiente de ${largo}x${ancho}x${altura}m en ${ciudad}. Me recomienda una estufa de ${kcal} Kcal/h. ¿Qué modelos tienen disponibles?`;
+      } else {
+        const btu = redondearATamano(r.btuRefrigeracion, TAMANOS_AC_BTU);
+        resultadoHtml = `Te recomendamos un <strong>aire acondicionado de ${btu.toLocaleString('es-BO')} BTU</strong> para un ambiente de ${m2} m².`;
+        textoWa = `Hola! Usé la calculadora de aire acondicionado: ambiente de ${largo}x${ancho}x${altura}m en ${ciudad}. Me recomienda un equipo de ${btu} BTU. ¿Qué modelos tienen disponibles?`;
+      }
+    }
+
+    resultadoCont.innerHTML = `
+      <div class="calc-resultado-box">
+        <div class="calc-resultado-texto">${resultadoHtml}</div>
+        <a href="${linkWhatsapp(textoWa)}" target="_blank" rel="noopener" class="pub-btn pub-btn-primary" style="width:100%;justify-content:center;margin-top:10px">💬 Consultar por WhatsApp</a>
+      </div>
+    `;
+  });
+}
+
 async function cargarCatalogoPublico() {
   await cargarConfiguracionTienda();
   wireBotonesWhatsapp();
   renderRedesSociales();
   mostrarSaludoPerrito();
   crearBotFlotante();
+  crearBotonCalculadora();
   const { data, error } = await sbPub.from('catalogo_publico').select('*').order('categoria').order('descripcion');
   const grid = $('#pub-grid');
   if (error) {

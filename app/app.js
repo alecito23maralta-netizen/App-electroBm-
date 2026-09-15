@@ -461,6 +461,26 @@ function cerrarMenuMobile() {
   $('#nav-backdrop')?.classList.remove('show');
 }
 
+// ------------------------------------------------------------
+// BOTÓN/GESTO "ATRÁS" DE ANDROID
+// Sin este listener, Android no sabe que hay una vista previa, un menú
+// o un formulario abiertos: el back físico puede no reaccionar o cerrar
+// la app de golpe en cualquier pantalla. Se resuelve en capas (lo que
+// esté "más encima" se cierra primero) y, si no hay nada que cerrar,
+// termina en una salida simple y directa — tan clara como cerrar sesión.
+// ------------------------------------------------------------
+if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.Plugins.App) {
+  const CapApp = window.Capacitor.Plugins.App;
+  CapApp.addListener('backButton', () => {
+    const docprev = document.getElementById('docprev-overlay');
+    if (docprev) { docprev.remove(); return; }
+    if ($('#bottom-nav')?.classList.contains('open')) { cerrarMenuMobile(); return; }
+    if ($('#modal-overlay')?.classList.contains('show')) { closeModal(); return; }
+    if (profile && vistaActual !== 'cotizaciones') { switchView('cotizaciones'); return; }
+    CapApp.exitApp();
+  });
+}
+
 async function switchView(view) {
   if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores') && profile.rol !== 'admin') view = 'cotizaciones';
   vistaActual = view;
@@ -3702,11 +3722,13 @@ function abrirVistaPreviaGarantia(g) {
   document.body.insertAdjacentHTML('beforeend', `
     <div class="docprev-overlay" id="docprev-overlay">
       <div class="docprev-topbar">
-        <span>Vista previa — Certificado de garantía ${numeroFmt}</span>
+        <div class="docprev-topbar-head">
+          <span>Vista previa — Certificado de garantía ${numeroFmt}</span>
+          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
+        </div>
         <div class="docprev-actions">
           <button class="docprev-btn docprev-btn-pdf" id="docprev-pdf">⬇ Descargar PDF</button>
           <button class="docprev-btn docprev-btn-wa" id="docprev-wa">📷 WhatsApp</button>
-          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
         </div>
       </div>
       <div class="docprev-scroll">
@@ -4541,11 +4563,13 @@ function abrirVistaPreviaComprobante(c) {
   document.body.insertAdjacentHTML('beforeend', `
     <div class="docprev-overlay" id="docprev-overlay">
       <div class="docprev-topbar">
-        <span>Vista previa — Comprobante ${numeroFmt}</span>
+        <div class="docprev-topbar-head">
+          <span>Vista previa — Comprobante ${numeroFmt}</span>
+          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
+        </div>
         <div class="docprev-actions">
           <button class="docprev-btn docprev-btn-pdf" id="docprev-pdf">⬇ Descargar PDF</button>
           <button class="docprev-btn docprev-btn-wa" id="docprev-wa">📷 WhatsApp</button>
-          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
         </div>
       </div>
       <div class="docprev-scroll">
@@ -4937,13 +4961,15 @@ function abrirVistaPrevia(doc, tipoLabel, prefijo) {
   document.body.insertAdjacentHTML('beforeend', `
     <div class="docprev-overlay" id="docprev-overlay">
       <div class="docprev-topbar">
-        <span>Vista previa — ${numeroDoc(doc, prefijo)}</span>
+        <div class="docprev-topbar-head">
+          <span>Vista previa — ${numeroDoc(doc, prefijo)}</span>
+          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
+        </div>
         <div class="docprev-actions">
           <button class="docprev-btn docprev-btn-pdf" id="docprev-pdf">⬇ Descargar PDF</button>
           <button class="docprev-btn docprev-btn-wa" id="docprev-wa">📷 WhatsApp</button>
           ${hayFotos ? `<button class="docprev-btn" style="background:#0ea5e9;color:#fff" id="docprev-fotos">🖼️ Fotos artículos</button>` : ''}
           ${mostrarBtnMedioPago ? `<button class="docprev-btn" style="background:#7c3aed;color:#fff" id="docprev-mediopago">💳 Medio de pago</button>` : ''}
-          <button class="docprev-btn docprev-btn-x" id="docprev-close">✕</button>
         </div>
       </div>
       <div class="docprev-scroll">

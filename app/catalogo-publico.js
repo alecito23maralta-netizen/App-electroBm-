@@ -87,8 +87,11 @@ const PERRITO_SVG = `
 `;
 
 function mostrarSaludoPerrito() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'saludo-backdrop';
+
   const div = document.createElement('div');
-  div.className = 'saludo-bienvenida';
+  div.className = 'saludo-bienvenida saludo-centro';
   div.innerHTML = `
     <button class="saludo-cerrar" title="Cerrar">✕</button>
     <div class="saludo-personaje">${PERRITO_SVG}</div>
@@ -98,8 +101,14 @@ function mostrarSaludoPerrito() {
       <button class="saludo-cta" id="saludo-cta-chatear">💬 Chatear con BAM</button>
     </div>
   `;
+  document.body.appendChild(backdrop);
   document.body.appendChild(div);
-  const quitar = () => { div.classList.add('saludo-salir'); setTimeout(() => div.remove(), 300); };
+  const quitar = () => {
+    div.classList.add('saludo-salir');
+    backdrop.classList.add('saludo-salir');
+    setTimeout(() => { div.remove(); backdrop.remove(); }, 300);
+  };
+  backdrop.addEventListener('click', quitar);
   div.querySelector('.saludo-cerrar').addEventListener('click', quitar);
   div.querySelector('#saludo-cta-chatear').addEventListener('click', () => { quitar(); abrirFormConsultaWhatsapp(); });
   setTimeout(quitar, 15 * 1000);

@@ -789,8 +789,14 @@ function renderItemRows() {
         <div class="it-sugerencias" hidden></div>
         ${!it.producto_id ? `<input class="it-desc" placeholder="Descripción manual" value="${escapeHtml(it.descripcion || '')}" style="margin-top:6px" />` : ''}
       </div>
-      <div class="field"><label>Cant.</label><input type="number" class="it-cant" value="${it.cantidad}" min="1" /></div>
-      <div class="field"><label>Precio (Bs)</label><input type="number" class="it-precio" value="${it.precio_unitario}" min="0" step="0.01" /></div>
+      <div class="field"><label>Cant.</label>
+        <div class="qty-stepper">
+          <button type="button" class="qty-btn qty-menos" tabindex="-1">－</button>
+          <input type="number" inputmode="numeric" class="it-cant" value="${it.cantidad}" min="1" />
+          <button type="button" class="qty-btn qty-mas" tabindex="-1">＋</button>
+        </div>
+      </div>
+      <div class="field"><label>Precio (Bs)</label><input type="number" inputmode="decimal" class="it-precio" value="${it.precio_unitario}" min="0" step="0.01" /></div>
       <button class="icon-btn it-del" title="Quitar">🗑</button>
     </div>
   `;
@@ -844,7 +850,18 @@ function renderItemRows() {
 
     const descInput = row.querySelector('.it-desc');
     if (descInput) descInput.addEventListener('input', (e) => { it.descripcion = e.target.value; });
-    row.querySelector('.it-cant').addEventListener('input', (e) => { it.cantidad = Number(e.target.value) || 1; recalcularTotal(); });
+    const cantInput = row.querySelector('.it-cant');
+    cantInput.addEventListener('input', (e) => { it.cantidad = Number(e.target.value) || 1; recalcularTotal(); });
+    row.querySelector('.qty-menos').addEventListener('click', () => {
+      it.cantidad = Math.max(1, (Number(it.cantidad) || 1) - 1);
+      cantInput.value = it.cantidad;
+      recalcularTotal();
+    });
+    row.querySelector('.qty-mas').addEventListener('click', () => {
+      it.cantidad = (Number(it.cantidad) || 0) + 1;
+      cantInput.value = it.cantidad;
+      recalcularTotal();
+    });
     row.querySelector('.it-precio').addEventListener('input', (e) => { it.precio_unitario = Number(e.target.value) || 0; recalcularTotal(); });
     row.querySelector('.it-del').addEventListener('click', () => { itemsForm = itemsForm.filter(x => x.id !== it.id); renderItemRows(); recalcularTotal(); });
   });
@@ -2851,17 +2868,22 @@ async function renderAutorizaciones() {
     html += `<div class="table-wrap"><table>
       <thead><tr><th>N°</th><th>Cliente</th><th>Vendedor</th><th>Total</th><th>Fecha</th><th>Acciones</th></tr></thead>
       <tbody>
-        ${ventasPend.map(v => `
+        ${ventasPend.map(v => {
+          const necesitaAutorizar = v.condicion_pago === 'credito' && !v.autorizada;
+          return `
           <tr>
             <td>#${v.numero}</td><td>${escapeHtml(v.cliente_nombre)}</td>
             <td>${escapeHtml(v.profiles?.nombre || v.profiles?.usuario || '—')}</td>
             <td>${money(v.total)}</td><td>${fecha(v.created_at)}</td>
             <td><div class="row-actions">
               <button class="icon-btn" data-actev="editar" data-id="${v.id}" title="Modificar">✎</button>
-              <button class="btn btn-primary btn-sm" data-actv="cobrar" data-id="${v.id}">💰 Cobrar</button>
+              ${necesitaAutorizar
+                ? `<button class="btn btn-secondary btn-sm" data-acta="autorizar" data-id="${v.id}" title="Venta a crédito: registra Bs 0 en caja, no se cobró nada todavía">✅ Autorizar (Bs 0)</button>`
+                : `<button class="btn btn-primary btn-sm" data-actv="cobrar" data-id="${v.id}">💰 Cobrar</button>`}
             </div></td>
           </tr>
-        `).join('')}
+        `;
+        }).join('')}
       </tbody>
     </table></div>`;
   }
@@ -2893,6 +2915,51 @@ async function renderAutorizaciones() {
   target.querySelectorAll('[data-actv]').forEach(btn => {
     const v = ventasPend.find(x => x.id === btn.dataset.id);
     btn.addEventListener('click', () => abrirFormCobrarVenta(v));
+  });
+
+  target.querySelectorAll('[data-acta]').forEach(btn => {
+    const v = ventasPend.find(x => x.id === btn.dataset.id);
+    btn.addEventListener('click', () => abrirFormAutorizarCredito(v));
+  });
+}
+
+// Venta a crédito recién hecha: el cliente todavía no pagó nada, así que
+// autorizarla registra Bs 0 en caja (no suma ni resta el saldo actual).
+// Cuando el cliente efectivamente pague, se usa "Cobrar" (con el monto
+// real) — ese botón aparece recién después de autorizada.
+function abrirFormAutorizarCredito(venta) {
+  if (!sesionCajaActual) {
+    toast('Primero abrí tu caja en la pestaña "Mi caja"', 'error');
+    return;
+  }
+  openModal(`
+    <div class="sheet-head"><h3>Autorizar venta a crédito #${venta.numero}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <p style="color:var(--text-dim);font-size:13.5px;margin-top:-6px">Cliente: ${escapeHtml(venta.cliente_nombre)} · Total: <strong>${money(venta.total)}</strong></p>
+    <p style="color:var(--text-dim);font-size:13px;margin-top:10px">Esta venta es a crédito: el cliente todavía no pagó nada, así que se autoriza por <strong>Bs 0</strong> — tu saldo de caja no cambia. Cuando el cliente pague, usá "Cobrar" con el monto real.</p>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
+      <button class="btn btn-primary" id="btn-guardar">✅ Autorizar por Bs 0</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-guardar').addEventListener('click', async () => {
+    const { error: e1 } = await sb.from('caja_movimientos').insert({
+      sesion_id: sesionCajaActual.id,
+      tipo: 'ingreso',
+      concepto: `Autorización venta a crédito #${venta.numero} - ${venta.cliente_nombre} (Bs 0, pendiente de cobro)`,
+      monto: 0,
+      metodo_pago: 'credito',
+      usuario_id: profile.id,
+      venta_id: venta.id
+    });
+    if (e1) { toast('Error: ' + e1.message, 'error'); return; }
+    const { error: e2 } = await sb.from('ventas').update({ autorizada: true }).eq('id', venta.id);
+    if (e2) { toast('Error: ' + e2.message, 'error'); return; }
+
+    toast('Venta a crédito autorizada (Bs 0, sin afectar tu caja)');
+    closeModal();
+    renderAutorizaciones();
   });
 }
 

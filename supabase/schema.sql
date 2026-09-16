@@ -742,3 +742,23 @@ alter table public.productos add column if not exists descuento_maximo_pct numer
 -- Ejecutar en el proyecto que ya tenías creado
 -- ============================================================
 alter table public.configuracion add column if not exists margen_minimo_pct numeric(5,2) not null default 20;
+
+-- ============================================================
+-- ACTUALIZACIÓN: autorización de ventas a crédito en Bs 0.
+-- Una venta a crédito recién hecha no tiene que mover la caja (el
+-- cliente todavía no pagó nada) — antes, el único botón disponible
+-- en Caja → Autorizar era "Cobrar", que siempre registraba el monto
+-- total como ingreso, aumentando el saldo aunque no haya entrado
+-- plata real. Ahora las ventas a crédito pasan primero por
+-- "Autorizar" (registra Bs 0 en caja_movimientos, sin tocar el
+-- saldo) y recién cuando el cliente efectivamente paga se usa
+-- "Cobrar" (igual que antes, con el monto real).
+-- default false para que las ventas a crédito ya cargadas y aún no
+-- cobradas pidan esta autorización la próxima vez que se las vea.
+-- También se afloja la restricción de caja_movimientos.monto (antes
+-- exigía > 0) para poder registrar este movimiento en Bs 0.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.ventas add column if not exists autorizada boolean not null default false;
+alter table public.caja_movimientos drop constraint if exists caja_movimientos_monto_check;
+alter table public.caja_movimientos add constraint caja_movimientos_monto_check check (monto >= 0);

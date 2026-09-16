@@ -17,6 +17,7 @@ let intervaloNotificaciones = null;
 let intervaloBotPendientes = null;  // BAM re-revisa autorizaciones/cobros pendientes (admin y vendedores)
 let intervaloBotPrecios = null;     // BAM re-revisa cambios de precio (admin y vendedores)
 let intervaloBotGarantias = null;   // BAM re-revisa garantías por vencer (solo admin)
+let intervaloBotCobranza = null;    // BAM re-revisa ventas a crédito por cobrar (solo admin)
 let vistaActual = 'cotizaciones';
 let canalChatGlobal = null;
 let sesionCajaActual = null;
@@ -159,16 +160,19 @@ async function iniciarApp() {
   setTimeout(mostrarBotPendientesEntrada, 1200);
   setTimeout(mostrarBotCambiosPrecio, 2600);
   setTimeout(mostrarBotGarantiasPorVencer, 3800);
+  setTimeout(mostrarBotCobranzaProxima, 5000);
 
   // BAM vuelve a revisar autorizaciones/cobros pendientes, cambios de
-  // precio y garantías por vencer cada 20 min mientras la app está
-  // abierta (antes solo avisaba una vez, al entrar).
+  // precio, garantías por vencer y cobranzas de crédito cada 20 min
+  // mientras la app está abierta (antes solo avisaba una vez, al entrar).
   clearInterval(intervaloBotPendientes);
   intervaloBotPendientes = setInterval(mostrarBotPendientesEntrada, 20 * 60 * 1000);
   clearInterval(intervaloBotPrecios);
   intervaloBotPrecios = setInterval(mostrarBotCambiosPrecio, 20 * 60 * 1000);
   clearInterval(intervaloBotGarantias);
   intervaloBotGarantias = setInterval(mostrarBotGarantiasPorVencer, 20 * 60 * 1000);
+  clearInterval(intervaloBotCobranza);
+  intervaloBotCobranza = setInterval(mostrarBotCobranzaProxima, 20 * 60 * 1000);
 
   if (profile.rol !== 'admin') {
     mostrarPopupPromosVendedor();
@@ -266,7 +270,10 @@ function mostrarSaludoBienvenida() {
 async function mostrarBotPendientesEntrada() {
   if (profile.rol === 'admin') {
     const { count: nCotiz } = await sb.from('cotizaciones').select('*', { count: 'exact', head: true }).eq('estado', 'pendiente');
-    const { count: nVentas } = await sb.from('ventas').select('*', { count: 'exact', head: true }).eq('cobrado', false);
+    // Las ventas a crédito ya autorizadas (Bs 0) no son "sin cobrar" urgente
+    // — están en su plazo, esperando la fecha de pago. Ver mostrarBotCobranzaProxima.
+    const { count: nVentas } = await sb.from('ventas').select('*', { count: 'exact', head: true })
+      .eq('cobrado', false).or('condicion_pago.neq.credito,autorizada.eq.false');
     if (!nCotiz && !nVentas) return;
     const partes = [];
     if (nCotiz) partes.push(`${nCotiz} cotización${nCotiz > 1 ? 'es' : ''} sin autorizar`);
@@ -277,7 +284,8 @@ async function mostrarBotPendientesEntrada() {
   } else {
     const hace5h = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
     const { count: nCotiz } = await sb.from('cotizaciones').select('*', { count: 'exact', head: true }).eq('vendedor_id', profile.id).eq('estado', 'pendiente').lt('created_at', hace5h);
-    const { count: nVentas } = await sb.from('ventas').select('*', { count: 'exact', head: true }).eq('vendedor_id', profile.id).eq('cobrado', false).lt('created_at', hace5h);
+    const { count: nVentas } = await sb.from('ventas').select('*', { count: 'exact', head: true }).eq('vendedor_id', profile.id).eq('cobrado', false).lt('created_at', hace5h)
+      .or('condicion_pago.neq.credito,autorizada.eq.false');
     if (!nCotiz && !nVentas) return;
     const partes = [];
     if (nCotiz) partes.push(`${nCotiz} cotización${nCotiz > 1 ? 'es' : ''}`);
@@ -331,6 +339,46 @@ async function mostrarBotGarantiasPorVencer() {
   });
 }
 
+// Días que faltan para la fecha de pago de una venta a crédito (según
+// cuota2_dias, o cuota1_dias si no hay 2da cuota) — negativo = ya vencida.
+function diasRestantesCuota(v) {
+  const plazo = v.cuota2_dias || v.cuota1_dias || 0;
+  const limite = new Date(v.created_at);
+  limite.setDate(limite.getDate() + plazo);
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  limite.setHours(0, 0, 0, 0);
+  return Math.round((limite - hoy) / (24 * 60 * 60 * 1000));
+}
+
+// El bot avisa al admin sobre ventas a crédito YA AUTORIZADAS (Bs 0, sin
+// afectar caja) cuya fecha de pago está por llegar o ya pasó — recién acá
+// aparecen como alerta de cobranza, no apenas se autorizan (ver también
+// mostrarBotPendientesEntrada, que ya no las cuenta como "sin cobrar").
+async function mostrarBotCobranzaProxima() {
+  if (profile.rol !== 'admin') return;
+  const { data } = await sb.from('ventas').select('id, numero, cliente_nombre, created_at, cuota1_dias, cuota2_dias')
+    .eq('condicion_pago', 'credito').eq('autorizada', true).eq('cobrado', false);
+  if (!data || data.length === 0) return;
+
+  const vistas = notifsVistas();
+  const proximas = data
+    .map(v => ({ ...v, dias: diasRestantesCuota(v) }))
+    .filter(v => v.dias <= 5 && !vistas.includes(`cobranza-${v.id}-${v.dias}`))
+    .sort((a, b) => a.dias - b.dias);
+  if (proximas.length === 0) return;
+
+  proximas.forEach(v => marcarNotifVista(`cobranza-${v.id}-${v.dias}`));
+
+  const lineas = proximas.slice(0, 5).map(v => {
+    const cuando = v.dias < 0 ? `vencida hace ${Math.abs(v.dias)} día${Math.abs(v.dias) > 1 ? 's' : ''}` : v.dias === 0 ? 'vence hoy' : `vence en ${v.dias} día${v.dias > 1 ? 's' : ''}`;
+    return `#${v.numero} ${escapeHtml(v.cliente_nombre)} — ${cuando}`;
+  }).join('<br>');
+  const extra = proximas.length > 5 ? `<br>y ${proximas.length - 5} más...` : '';
+  mostrarBotBurbuja('🧾 BAM te avisa:', `${proximas.length} venta${proximas.length > 1 ? 's' : ''} a crédito por cobrar:<br>${lineas}${extra}`, {
+    botones: [{ label: 'Ir a Autorizar →', onClick: () => { cajaVistaAdmin = 'autorizar'; switchView('caja'); } }]
+  });
+}
+
 // Restaurar sesión si ya había una activa (recarga de página)
 (async function checkSesionExistente() {
   const { data } = await sb.auth.getSession();
@@ -358,6 +406,7 @@ async function verificarPendientesVendedor() {
   const [{ data: cotizPend }, { data: ventasPend }] = await Promise.all([
     sb.from('cotizaciones').select('numero, created_at').eq('vendedor_id', profile.id).eq('estado', 'pendiente').lt('created_at', hace5h),
     sb.from('ventas').select('numero, created_at').eq('vendedor_id', profile.id).eq('cobrado', false).lt('created_at', hace5h)
+      .or('condicion_pago.neq.credito,autorizada.eq.false')
   ]);
 
   const total = (cotizPend?.length || 0) + (ventasPend?.length || 0);
@@ -4054,11 +4103,18 @@ function notificacionesChatActivas() {
   return localStorage.getItem('bm_chat_notif_activas') !== 'false';
 }
 
+// Pide permiso del navegador/SO una sola vez (si todavía no se preguntó).
+// Como las notificaciones vienen activadas por defecto, nadie tocaba nunca
+// el botón que era el único lugar donde se pedía el permiso — quedaba en
+// 'default' para siempre y por eso no llegaba ninguna notificación real.
+async function pedirPermisoNotifChat() {
+  if (!('Notification' in window) || Notification.permission !== 'default') return;
+  try { await Notification.requestPermission(); } catch (e) { /* el usuario puede cerrar el permiso sin elegir */ }
+}
+
 async function activarNotificacionesChat() {
   localStorage.setItem('bm_chat_notif_activas', 'true');
-  if ('Notification' in window && Notification.permission === 'default') {
-    try { await Notification.requestPermission(); } catch (e) { /* el usuario puede cerrar el permiso sin elegir */ }
-  }
+  await pedirPermisoNotifChat();
   actualizarBotonNotifChat();
   toast('Notificaciones del chat activadas');
 }
@@ -4081,17 +4137,29 @@ function actualizarBotonNotifChat() {
 // Notificación del sistema operativo (además del sonido) cuando llega
 // un mensaje y la pestaña/app no está a la vista — solo si el usuario
 // activó las notificaciones y ya le dio permiso al navegador.
-function notificarMensajeSistema(m, hilo) {
+// IMPORTANTE: Chrome/WebView en Android no soportan "new Notification()"
+// (tira "Illegal constructor" silenciosamente) — hay que mostrarla a
+// través del service worker, que sí funciona en Android y en desktop.
+async function notificarMensajeSistema(m, hilo) {
   if (!notificacionesChatActivas()) return;
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   if (!document.hidden) return;
   const donde = hilo === 'general' ? 'Chat general' : 'Mensaje privado';
+  const titulo = `${m.nombre_remitente || 'Alguien'} — ${donde}`;
+  const opciones = {
+    body: m.texto ? (m.texto.length > 100 ? m.texto.slice(0, 100) + '…' : m.texto) : '📷 Envió una foto',
+    icon: 'icons/icon-192.png',
+    badge: 'icons/icon-192.png',
+    tag: `chat-${hilo}`
+  };
   try {
-    new Notification(`${m.nombre_remitente || 'Alguien'} — ${donde}`, {
-      body: m.texto ? (m.texto.length > 100 ? m.texto.slice(0, 100) + '…' : m.texto) : '📷 Envió una foto',
-      icon: 'icons/icon-192.png'
-    });
-  } catch (e) { /* algunos navegadores/Android bloquean esto sin service worker activo */ }
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(titulo, opciones);
+    } else {
+      new Notification(titulo, opciones);
+    }
+  } catch (e) { /* algunos navegadores bloquean esto en ciertos contextos */ }
 }
 
 async function cargarVendedores() {
@@ -4101,6 +4169,7 @@ async function cargarVendedores() {
 
 async function inicializarNotificacionesChat() {
   chatNoLeidosPorHilo = {};
+  if (notificacionesChatActivas()) pedirPermisoNotifChat();
 
   const vistoGeneral = localStorage.getItem(claveVistoHilo('general')) || new Date(0).toISOString();
   const { count: nGeneral } = await sb.from('mensajes').select('*', { count: 'exact', head: true })

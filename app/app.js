@@ -351,9 +351,10 @@ function diasRestantesCuota(v) {
 }
 
 // El bot avisa al admin sobre ventas a crédito YA AUTORIZADAS (Bs 0, sin
-// afectar caja) cuya fecha de pago está por llegar o ya pasó — recién acá
-// aparecen como alerta de cobranza, no apenas se autorizan (ver también
-// mostrarBotPendientesEntrada, que ya no las cuenta como "sin cobrar").
+// afectar caja) cuya fecha de pago está por llegar (2 días antes) o ya
+// pasó — recién acá aparecen como alerta de cobranza, no apenas se
+// autorizan (ver también mostrarBotPendientesEntrada, que ya no las
+// cuenta como "sin cobrar").
 async function mostrarBotCobranzaProxima() {
   if (profile.rol !== 'admin') return;
   const { data } = await sb.from('ventas').select('id, numero, cliente_nombre, created_at, cuota1_dias, cuota2_dias')
@@ -363,7 +364,7 @@ async function mostrarBotCobranzaProxima() {
   const vistas = notifsVistas();
   const proximas = data
     .map(v => ({ ...v, dias: diasRestantesCuota(v) }))
-    .filter(v => v.dias <= 5 && !vistas.includes(`cobranza-${v.id}-${v.dias}`))
+    .filter(v => v.dias <= 2 && !vistas.includes(`cobranza-${v.id}-${v.dias}`))
     .sort((a, b) => a.dias - b.dias);
   if (proximas.length === 0) return;
 
@@ -2328,7 +2329,7 @@ async function cargarYRenderCobranza() {
   const cont = $('#cobranza-content');
   const { desde, hasta } = rangoPeriodoCobranza(cobranzaPeriodo);
   const { data } = await sb.from('ventas')
-    .select('total, cobrado, cuota1_dias, cuota2_dias, created_at')
+    .select('id, total, cobrado, cuota1_dias, cuota2_dias, created_at')
     .gte('created_at', desde.toISOString()).lt('created_at', hasta.toISOString());
 
   const lista = data || [];
@@ -2337,18 +2338,31 @@ async function cargarYRenderCobranza() {
     return;
   }
 
+  // Los abonos parciales ya cobrados de una venta a crédito cuentan como
+  // "pagada" — solo el saldo restante entra en vigente/vencida.
+  const idsNoCobradas = lista.filter(v => !v.cobrado).map(v => v.id);
+  let abonadoPorVenta = {};
+  if (idsNoCobradas.length > 0) {
+    const { data: abonos } = await sb.from('venta_abonos').select('venta_id, monto').in('venta_id', idsNoCobradas);
+    (abonos || []).forEach(a => { abonadoPorVenta[a.venta_id] = (abonadoPorVenta[a.venta_id] || 0) + Number(a.monto); });
+  }
+
   const hoy = new Date();
   let ventasTotal = 0, pagada = 0, vencida = 0, vigente = 0;
   lista.forEach(v => {
     const total = Number(v.total);
     ventasTotal += total;
     if (v.cobrado) { pagada += total; return; }
+    const abonado = abonadoPorVenta[v.id] || 0;
+    pagada += abonado;
+    const saldo = total - abonado;
+    if (saldo <= 0) return;
     // Vencida = ya pasó el plazo de pago (cuota2 si es crédito, cuota1/0
     // días si es contado — contado no cobrado el mismo día ya es vencido).
     const dias = v.cuota2_dias || v.cuota1_dias || 0;
     const limite = new Date(v.created_at);
     limite.setDate(limite.getDate() + dias);
-    if (limite < hoy) vencida += total; else vigente += total;
+    if (limite < hoy) vencida += saldo; else vigente += saldo;
   });
   const aCobrar = vencida + vigente;
   const pctVencido = ventasTotal > 0 ? (vencida / ventasTotal * 100) : 0;
@@ -2889,6 +2903,15 @@ async function renderAutorizaciones() {
     sb.from('ventas').select('*, profiles(nombre, usuario)').eq('cobrado', false).order('created_at', { ascending: false })
   ]);
 
+  // Saldo ya abonado de cada venta a crédito autorizada (para mostrar
+  // "Saldo pendiente" y no dejar abonar de más).
+  const idsAutorizadas = (ventasPend || []).filter(v => v.condicion_pago === 'credito' && v.autorizada).map(v => v.id);
+  let abonadoPorVenta = {};
+  if (idsAutorizadas.length > 0) {
+    const { data: abonos } = await sb.from('venta_abonos').select('venta_id, monto').in('venta_id', idsAutorizadas);
+    (abonos || []).forEach(a => { abonadoPorVenta[a.venta_id] = (abonadoPorVenta[a.venta_id] || 0) + Number(a.monto); });
+  }
+
   let html = `<div class="card-title">Cotizaciones por autorizar</div>`;
   if (!cotizPend || cotizPend.length === 0) {
     html += `<div class="empty-state">No hay cotizaciones pendientes.</div>`;
@@ -2918,17 +2941,26 @@ async function renderAutorizaciones() {
       <thead><tr><th>N°</th><th>Cliente</th><th>Vendedor</th><th>Total</th><th>Fecha</th><th>Acciones</th></tr></thead>
       <tbody>
         ${ventasPend.map(v => {
-          const necesitaAutorizar = v.condicion_pago === 'credito' && !v.autorizada;
+          const esCredito = v.condicion_pago === 'credito';
+          const necesitaAutorizar = esCredito && !v.autorizada;
+          const yaAutorizada = esCredito && v.autorizada;
+          const abonado = abonadoPorVenta[v.id] || 0;
+          const saldo = Math.max(0, Number(v.total) - abonado);
+          const totalCelda = yaAutorizada && abonado > 0
+            ? `${money(v.total)}<br><span style="color:var(--text-dim);font-size:11.5px">Saldo: ${money(saldo)}</span>`
+            : money(v.total);
           return `
           <tr>
             <td>#${v.numero}</td><td>${escapeHtml(v.cliente_nombre)}</td>
             <td>${escapeHtml(v.profiles?.nombre || v.profiles?.usuario || '—')}</td>
-            <td>${money(v.total)}</td><td>${fecha(v.created_at)}</td>
+            <td>${totalCelda}</td><td>${fecha(v.created_at)}</td>
             <td><div class="row-actions">
               <button class="icon-btn" data-actev="editar" data-id="${v.id}" title="Modificar">✎</button>
               ${necesitaAutorizar
                 ? `<button class="btn btn-secondary btn-sm" data-acta="autorizar" data-id="${v.id}" title="Venta a crédito: registra Bs 0 en caja, no se cobró nada todavía">✅ Autorizar (Bs 0)</button>`
-                : `<button class="btn btn-primary btn-sm" data-actv="cobrar" data-id="${v.id}">💰 Cobrar</button>`}
+                : yaAutorizada
+                  ? `<button class="btn btn-primary btn-sm" data-actab="abonar" data-id="${v.id}" title="Registrar abono parcial o total">💵 Abonar</button>`
+                  : `<button class="btn btn-primary btn-sm" data-actv="cobrar" data-id="${v.id}">💰 Cobrar</button>`}
             </div></td>
           </tr>
         `;
@@ -2969,6 +3001,11 @@ async function renderAutorizaciones() {
   target.querySelectorAll('[data-acta]').forEach(btn => {
     const v = ventasPend.find(x => x.id === btn.dataset.id);
     btn.addEventListener('click', () => abrirFormAutorizarCredito(v));
+  });
+
+  target.querySelectorAll('[data-actab]').forEach(btn => {
+    const v = ventasPend.find(x => x.id === btn.dataset.id);
+    btn.addEventListener('click', () => abrirFormAbonarVenta(v, abonadoPorVenta[v.id] || 0));
   });
 }
 
@@ -3078,6 +3115,108 @@ function abrirFormCobrarVenta(venta) {
     closeModal();
     renderCaja();
     if (comprobante) abrirVistaPreviaComprobante(comprobante);
+  });
+}
+
+// Venta a crédito ya autorizada: el cliente puede ir pagando en varios
+// abonos en vez de todo junto. Cada abono genera su propio caja_movimientos
+// (por la plata que efectivamente entra ese día) y un registro en
+// venta_abonos. Recién cuando el saldo llega a Bs 0 la venta queda
+// marcada como cobrada de verdad (comprobante + descuento de stock,
+// igual que un "Cobrar" normal).
+async function abrirFormAbonarVenta(venta, abonadoPrevio) {
+  if (!sesionCajaActual) {
+    toast('Primero abrí tu caja en la pestaña "Mi caja"', 'error');
+    return;
+  }
+  const { data: abonosPrevios } = await sb.from('venta_abonos').select('*').eq('venta_id', venta.id).order('created_at', { ascending: false });
+  const abonado = (abonosPrevios || []).reduce((s, a) => s + Number(a.monto), 0) || abonadoPrevio;
+  const saldo = Math.max(0, Number(venta.total) - abonado);
+
+  const historial = (abonosPrevios && abonosPrevios.length)
+    ? `<div style="margin-top:10px;font-size:12.5px;color:var(--text-dim)">
+        <strong>Abonos anteriores:</strong><br>
+        ${abonosPrevios.map(a => `${fecha(a.created_at)} — ${money(a.monto)} (${a.metodo_pago})`).join('<br>')}
+       </div>`
+    : '';
+
+  openModal(`
+    <div class="sheet-head"><h3>Abonar venta a crédito #${venta.numero}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <p style="color:var(--text-dim);font-size:13.5px;margin-top:-6px">Cliente: ${escapeHtml(venta.cliente_nombre)}</p>
+    <div class="grid-2" style="margin-top:12px">
+      <div class="field"><label>Total de la venta</label><input type="text" value="${money(venta.total)}" disabled /></div>
+      <div class="field"><label>Saldo pendiente</label><input type="text" value="${money(saldo)}" disabled /></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Monto del abono (Bs)</label><input type="number" id="f-monto" value="${saldo}" min="0.01" max="${saldo}" step="0.01" /></div>
+    <div class="field" style="margin-top:10px"><label>Método de pago</label>
+      <select id="f-metodo">
+        <option value="efectivo">Efectivo</option>
+        <option value="transferencia">Transferencia</option>
+        <option value="qr">QR</option>
+      </select>
+    </div>
+    ${historial}
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
+      <button class="btn btn-primary" id="btn-guardar">💾 Registrar abono</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-guardar').addEventListener('click', async () => {
+    const monto = Number($('#f-monto').value || 0);
+    if (monto <= 0) { toast('Ingresá un monto mayor a 0', 'error'); return; }
+    if (monto > saldo + 0.01) { toast(`El abono no puede superar el saldo pendiente (${money(saldo)})`, 'error'); return; }
+    const metodo = $('#f-metodo').value;
+
+    const { data: movimiento, error: e1 } = await sb.from('caja_movimientos').insert({
+      sesion_id: sesionCajaActual.id,
+      tipo: 'ingreso',
+      concepto: `Abono venta a crédito #${venta.numero} - ${venta.cliente_nombre}`,
+      monto, metodo_pago: metodo, usuario_id: profile.id, venta_id: venta.id
+    }).select().single();
+    if (e1) { toast('Error: ' + e1.message, 'error'); return; }
+
+    const { error: e2 } = await sb.from('venta_abonos').insert({
+      venta_id: venta.id, monto, metodo_pago: metodo, usuario_id: profile.id, caja_movimiento_id: movimiento.id
+    });
+    if (e2) { toast('Error: ' + e2.message, 'error'); return; }
+
+    const saldoRestante = Math.max(0, Number(venta.total) - (abonado + monto));
+
+    if (saldoRestante <= 0.01) {
+      const { error: e3 } = await sb.from('ventas').update({ cobrado: true, metodo_pago: metodo }).eq('id', venta.id);
+      if (e3) { toast('Error: ' + e3.message, 'error'); return; }
+
+      const formaComprobante = metodo === 'efectivo' ? 'efectivo' : (metodo === 'qr' ? 'qr' : 'transferencia');
+      const { data: comprobante } = await sb.from('comprobantes').insert({
+        cliente_nombre: venta.cliente_nombre,
+        venta_numero: `#${venta.numero}`,
+        forma_pago: formaComprobante,
+        monto_total: venta.total,
+        monto_efectivo: metodo === 'efectivo' ? venta.total : 0,
+        monto_transferido: metodo !== 'efectivo' ? venta.total : 0,
+        saldo_pendiente: 0,
+        cajero_id: profile.id,
+        cajero_nombre: profile.nombre || profile.usuario,
+        caja_movimiento_id: movimiento.id
+      }).select().single();
+      if (comprobante) await sb.from('caja_movimientos').update({ comprobante_id: comprobante.id }).eq('id', movimiento.id);
+
+      for (const it of (venta.items || [])) {
+        if (it.producto_id) await ajustarStock(it.producto_id, -it.cantidad, `Venta #${venta.numero} (cobrada)`);
+      }
+      await cargarProductos();
+
+      toast('Abono registrado — venta saldada por completo');
+      closeModal();
+      renderCaja();
+      if (comprobante) abrirVistaPreviaComprobante(comprobante);
+    } else {
+      toast(`Abono de ${money(monto)} registrado — saldo pendiente: ${money(saldoRestante)}`);
+      closeModal();
+      renderAutorizaciones();
+    }
   });
 }
 
@@ -4103,11 +4242,25 @@ function notificacionesChatActivas() {
   return localStorage.getItem('bm_chat_notif_activas') !== 'false';
 }
 
-// Pide permiso del navegador/SO una sola vez (si todavía no se preguntó).
+// La app corre nativa (APK) si Capacitor está disponible y el plugin de
+// notificaciones locales quedó registrado (requiere el APK compilado con
+// @capacitor/local-notifications — no alcanza con subir solo el código web).
+function notifLocalNativaDisponible() {
+  return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.Plugins.LocalNotifications);
+}
+
+// Pide permiso del SO una sola vez (si todavía no se preguntó).
 // Como las notificaciones vienen activadas por defecto, nadie tocaba nunca
 // el botón que era el único lugar donde se pedía el permiso — quedaba en
 // 'default' para siempre y por eso no llegaba ninguna notificación real.
+// - Dentro del APK: permiso nativo de Android (obligatorio desde Android 13
+//   para poder mostrar cualquier notificación en la barra del sistema).
+// - En la web/PWA: permiso del navegador (Notification.requestPermission).
 async function pedirPermisoNotifChat() {
+  if (notifLocalNativaDisponible()) {
+    try { await window.Capacitor.Plugins.LocalNotifications.requestPermissions(); } catch (e) { /* el usuario puede cerrar el permiso sin elegir */ }
+    return;
+  }
   if (!('Notification' in window) || Notification.permission !== 'default') return;
   try { await Notification.requestPermission(); } catch (e) { /* el usuario puede cerrar el permiso sin elegir */ }
 }
@@ -4134,30 +4287,48 @@ function actualizarBotonNotifChat() {
   btn.classList.toggle('notif-chat-off', !activas);
 }
 
-// Notificación del sistema operativo (además del sonido) cuando llega
-// un mensaje y la pestaña/app no está a la vista — solo si el usuario
-// activó las notificaciones y ya le dio permiso al navegador.
-// IMPORTANTE: Chrome/WebView en Android no soportan "new Notification()"
-// (tira "Illegal constructor" silenciosamente) — hay que mostrarla a
-// través del service worker, que sí funciona en Android y en desktop.
+// Notificación del sistema, como en WhatsApp/Messenger: aparece cuando
+// llega un mensaje de un hilo que NO estás mirando en ese momento, sin
+// importar si la app está en primer o segundo plano — solo si el usuario
+// activó las notificaciones y ya le dio el permiso.
+// IMPORTANTE — por qué antes no llegaba ninguna:
+// 1) Dentro del APK, el WebView de Android NO soporta la API web de
+//    notificaciones (ni "new Notification()" ni, en la mayoría de
+//    versiones, "ServiceWorkerRegistration.showNotification()" llegan a
+//    mostrar algo real en la barra del sistema) — hace falta un plugin
+//    nativo. Por eso se usa @capacitor/local-notifications, que sí
+//    dispara una notificación de Android de verdad.
+// 2) En la web (PWA/navegador) se seguía usando "new Notification()",
+//    que Chrome/WebView en Android bloquean en silencio — se cambia a
+//    showNotification() vía service worker, que sí funciona ahí.
 async function notificarMensajeSistema(m, hilo) {
   if (!notificacionesChatActivas()) return;
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  if (!document.hidden) return;
   const donde = hilo === 'general' ? 'Chat general' : 'Mensaje privado';
   const titulo = `${m.nombre_remitente || 'Alguien'} — ${donde}`;
-  const opciones = {
-    body: m.texto ? (m.texto.length > 100 ? m.texto.slice(0, 100) + '…' : m.texto) : '📷 Envió una foto',
-    icon: 'icons/icon-192.png',
-    badge: 'icons/icon-192.png',
-    tag: `chat-${hilo}`
-  };
+  const cuerpo = m.texto ? (m.texto.length > 100 ? m.texto.slice(0, 100) + '…' : m.texto) : '📷 Envió una foto';
+  const idNumerico = Math.floor(Math.random() * 2147483647);
+
+  if (notifLocalNativaDisponible()) {
+    try {
+      await window.Capacitor.Plugins.LocalNotifications.schedule({
+        notifications: [{
+          id: idNumerico,
+          title: titulo,
+          body: cuerpo,
+          schedule: { at: new Date(Date.now() + 100) }
+        }]
+      });
+    } catch (e) { /* sin permiso todavía, o el usuario lo negó */ }
+    return;
+  }
+
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
   try {
     if ('serviceWorker' in navigator) {
       const reg = await navigator.serviceWorker.ready;
-      await reg.showNotification(titulo, opciones);
+      await reg.showNotification(titulo, { body: cuerpo, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: `chat-${hilo}` });
     } else {
-      new Notification(titulo, opciones);
+      new Notification(titulo, { body: cuerpo, icon: 'icons/icon-192.png' });
     }
   } catch (e) { /* algunos navegadores bloquean esto en ciertos contextos */ }
 }
@@ -4215,9 +4386,9 @@ async function inicializarNotificacionesChat() {
           renderListaVendedoresChat();
         }
         mostrarBotAvisoMensaje(m, hilo);
+        notificarMensajeSistema(m, hilo);
       }
       if (notificacionesChatActivas()) sonarNotificacion();
-      notificarMensajeSistema(m, hilo);
     })
     .subscribe();
 }

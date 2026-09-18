@@ -762,3 +762,34 @@ alter table public.configuracion add column if not exists margen_minimo_pct nume
 alter table public.ventas add column if not exists autorizada boolean not null default false;
 alter table public.caja_movimientos drop constraint if exists caja_movimientos_monto_check;
 alter table public.caja_movimientos add constraint caja_movimientos_monto_check check (monto >= 0);
+
+-- ============================================================
+-- ACTUALIZACIÓN: abonos/amortizaciones a ventas a crédito.
+-- Antes, una venta a crédito ya autorizada solo se podía "Cobrar" por
+-- el total completo de una sola vez. Ahora se le pueden ir registrando
+-- abonos parciales (cada uno genera su propio caja_movimientos, por
+-- la plata que efectivamente entra ese día) hasta cubrir el saldo —
+-- recién ahí la venta queda marcada como cobrada de verdad.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.venta_abonos (
+  id uuid primary key default gen_random_uuid(),
+  venta_id uuid not null references public.ventas (id) on delete cascade,
+  monto numeric(12,2) not null check (monto > 0),
+  metodo_pago text not null default 'efectivo',
+  usuario_id uuid references public.profiles (id),
+  caja_movimiento_id uuid references public.caja_movimientos (id),
+  created_at timestamptz not null default now()
+);
+alter table public.venta_abonos enable row level security;
+
+drop policy if exists "venta_abonos_select" on public.venta_abonos;
+create policy "venta_abonos_select" on public.venta_abonos
+  for select using (
+    public.is_admin()
+    or exists (select 1 from public.ventas v where v.id = venta_id and v.vendedor_id = auth.uid())
+  );
+
+drop policy if exists "venta_abonos_insert" on public.venta_abonos;
+create policy "venta_abonos_insert" on public.venta_abonos
+  for insert with check (public.is_admin());

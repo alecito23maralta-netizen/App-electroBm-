@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=15" />
+<link rel="stylesheet" href="style.css?v=16" />
 </head>
 <body>
 
@@ -169,20 +169,21 @@
   <div class="toast" id="toast"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- jsPDF, html2canvas, JSZip y XLSX (SheetJS) YA NO se cargan acá: pesan
+       varios cientos de KB y casi nunca hacen falta al abrir la app. Ahora
+       se cargan solas, recién la primera vez que se genera un PDF, se
+       comparte una foto por WhatsApp o se importa/exporta un Excel — ver
+       cargarJsPDF()/cargarHtml2Canvas()/cargarJSZip()/cargarXLSX() en app.js. -->
   <!-- Puente nativo Capacitor: solo se activa dentro de la app instalada (APK). En el navegador no hace nada. -->
-  <script src="vendor/capacitor/capacitor-core.js?v=15"></script>
-  <script src="vendor/capacitor/synapse.js?v=15"></script>
-  <script src="vendor/capacitor/bridge-alias.js?v=15"></script>
-  <script src="vendor/capacitor/filesystem-plugin.js?v=15"></script>
-  <script src="vendor/capacitor/share-plugin.js?v=15"></script>
-  <script src="vendor/capacitor/app-plugin.js?v=15"></script>
-  <script src="vendor/capacitor/local-notifications-plugin.js?v=15"></script>
-  <script src="config.js?v=15"></script>
-  <script src="app.js?v=15"></script>
+  <script src="vendor/capacitor/capacitor-core.js?v=16"></script>
+  <script src="vendor/capacitor/synapse.js?v=16"></script>
+  <script src="vendor/capacitor/bridge-alias.js?v=16"></script>
+  <script src="vendor/capacitor/filesystem-plugin.js?v=16"></script>
+  <script src="vendor/capacitor/share-plugin.js?v=16"></script>
+  <script src="vendor/capacitor/app-plugin.js?v=16"></script>
+  <script src="vendor/capacitor/local-notifications-plugin.js?v=16"></script>
+  <script src="config.js?v=16"></script>
+  <script src="app.js?v=16"></script>
 
   <script>
     if ('serviceWorker' in navigator) {

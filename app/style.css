@@ -477,6 +477,20 @@ tbody tr:hover { background: var(--surface-2); }
   display: grid; grid-template-columns: 2.2fr 0.7fr 0.9fr auto; gap: 8px;
   align-items: end; margin-bottom: 8px;
 }
+.qty-stepper { display: flex; align-items: stretch; gap: 6px; }
+.qty-stepper .it-cant {
+  flex: 1; min-width: 0; text-align: center; padding-left: 4px; padding-right: 4px;
+  -moz-appearance: textfield;
+}
+.qty-stepper .it-cant::-webkit-outer-spin-button,
+.qty-stepper .it-cant::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.qty-btn {
+  flex-shrink: 0; width: 40px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text); font-size: 18px; font-weight: 700; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.qty-btn:active { border-color: var(--accent); color: var(--accent); }
 .items-total {
   display: flex; justify-content: space-between; padding-top: 12px; margin-top: 8px;
   border-top: 1px solid var(--border); font-size: 14px;

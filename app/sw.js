@@ -8,26 +8,27 @@
 // Los archivos propios se sirven "caché primero" — sin el ?v=N nuevo, el
 // navegador puede seguir mostrando la versión vieja aunque ya hayas
 // resubido los archivos a Cloudflare.
-const CACHE_VERSION = 'bm-app-v11';
+const CACHE_VERSION = 'bm-app-v15';
 const APP_SHELL = [
   'index.html',
   'catalogo.html',
-  'style.css?v=11',
-  'app.js?v=11',
-  'catalogo-publico.js?v=11',
-  'config.js?v=11',
+  'style.css?v=15',
+  'app.js?v=15',
+  'catalogo-publico.js?v=15',
+  'config.js?v=15',
   'offline.html',
   'manifest.json',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/icon-maskable-512.png',
   'icons/apple-touch-icon.png',
-  'vendor/capacitor/capacitor-core.js?v=11',
-  'vendor/capacitor/synapse.js?v=11',
-  'vendor/capacitor/bridge-alias.js?v=11',
-  'vendor/capacitor/filesystem-plugin.js?v=11',
-  'vendor/capacitor/share-plugin.js?v=11',
-  'vendor/capacitor/app-plugin.js?v=11'
+  'vendor/capacitor/capacitor-core.js?v=15',
+  'vendor/capacitor/synapse.js?v=15',
+  'vendor/capacitor/bridge-alias.js?v=15',
+  'vendor/capacitor/filesystem-plugin.js?v=15',
+  'vendor/capacitor/share-plugin.js?v=15',
+  'vendor/capacitor/app-plugin.js?v=15',
+  'vendor/capacitor/local-notifications-plugin.js?v=15'
 ];
 
 self.addEventListener('install', (event) => {

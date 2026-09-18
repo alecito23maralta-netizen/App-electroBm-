@@ -742,3 +742,54 @@ alter table public.productos add column if not exists descuento_maximo_pct numer
 -- Ejecutar en el proyecto que ya tenías creado
 -- ============================================================
 alter table public.configuracion add column if not exists margen_minimo_pct numeric(5,2) not null default 20;
+
+-- ============================================================
+-- ACTUALIZACIÓN: autorización de ventas a crédito en Bs 0.
+-- Una venta a crédito recién hecha no tiene que mover la caja (el
+-- cliente todavía no pagó nada) — antes, el único botón disponible
+-- en Caja → Autorizar era "Cobrar", que siempre registraba el monto
+-- total como ingreso, aumentando el saldo aunque no haya entrado
+-- plata real. Ahora las ventas a crédito pasan primero por
+-- "Autorizar" (registra Bs 0 en caja_movimientos, sin tocar el
+-- saldo) y recién cuando el cliente efectivamente paga se usa
+-- "Cobrar" (igual que antes, con el monto real).
+-- default false para que las ventas a crédito ya cargadas y aún no
+-- cobradas pidan esta autorización la próxima vez que se las vea.
+-- También se afloja la restricción de caja_movimientos.monto (antes
+-- exigía > 0) para poder registrar este movimiento en Bs 0.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.ventas add column if not exists autorizada boolean not null default false;
+alter table public.caja_movimientos drop constraint if exists caja_movimientos_monto_check;
+alter table public.caja_movimientos add constraint caja_movimientos_monto_check check (monto >= 0);
+
+-- ============================================================
+-- ACTUALIZACIÓN: abonos/amortizaciones a ventas a crédito.
+-- Antes, una venta a crédito ya autorizada solo se podía "Cobrar" por
+-- el total completo de una sola vez. Ahora se le pueden ir registrando
+-- abonos parciales (cada uno genera su propio caja_movimientos, por
+-- la plata que efectivamente entra ese día) hasta cubrir el saldo —
+-- recién ahí la venta queda marcada como cobrada de verdad.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.venta_abonos (
+  id uuid primary key default gen_random_uuid(),
+  venta_id uuid not null references public.ventas (id) on delete cascade,
+  monto numeric(12,2) not null check (monto > 0),
+  metodo_pago text not null default 'efectivo',
+  usuario_id uuid references public.profiles (id),
+  caja_movimiento_id uuid references public.caja_movimientos (id),
+  created_at timestamptz not null default now()
+);
+alter table public.venta_abonos enable row level security;
+
+drop policy if exists "venta_abonos_select" on public.venta_abonos;
+create policy "venta_abonos_select" on public.venta_abonos
+  for select using (
+    public.is_admin()
+    or exists (select 1 from public.ventas v where v.id = venta_id and v.vendedor_id = auth.uid())
+  );
+
+drop policy if exists "venta_abonos_insert" on public.venta_abonos;
+create policy "venta_abonos_insert" on public.venta_abonos
+  for insert with check (public.is_admin());

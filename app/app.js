@@ -47,6 +47,43 @@ let chatHiloVendedorId = null;  // hilo elegido por el admin en modo individual 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
+// ------------------------------------------------------------
+// CARGA PEREZOSA DE LIBRERÍAS PESADAS (PDF, fotos, Excel)
+// Antes las 5 librerías de CDN (supabase, jsPDF, html2canvas, JSZip,
+// SheetJS/XLSX) se cargaban de una sola vez al abrir la app, aunque la
+// gran mayoría de las visitas nunca genera un PDF ni importa un Excel
+// — eso es varios cientos de KB (sobre todo xlsx.full.min.js) que se
+// bajaban SIEMPRE antes de poder ni loguearse, y es la causa principal
+// de la lentitud reportada, sobre todo con datos móviles. Ahora esas 4
+// (supabase-js sigue cargando siempre, es imprescindible desde el
+// arranque) se piden recién la primera vez que hace falta cada una, y
+// quedan en caché para el resto de la sesión.
+// ------------------------------------------------------------
+const _scriptsCache = {};
+function cargarScript(url) {
+  if (_scriptsCache[url]) return _scriptsCache[url];
+  _scriptsCache[url] = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = url;
+    s.onload = () => resolve();
+    s.onerror = () => { delete _scriptsCache[url]; reject(new Error('No se pudo cargar un recurso necesario. Revisá tu conexión a internet.')); };
+    document.head.appendChild(s);
+  });
+  return _scriptsCache[url];
+}
+function cargarJsPDF() {
+  return window.jspdf ? Promise.resolve() : cargarScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+}
+function cargarHtml2Canvas() {
+  return typeof html2canvas !== 'undefined' ? Promise.resolve() : cargarScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+}
+function cargarJSZip() {
+  return typeof JSZip !== 'undefined' ? Promise.resolve() : cargarScript('https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js');
+}
+function cargarXLSX() {
+  return typeof XLSX !== 'undefined' ? Promise.resolve() : cargarScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+}
+
 function metodoLabel(m) {
   return m === 'qr' ? 'QR' : (m ? m[0].toUpperCase() + m.slice(1) : '—');
 }
@@ -151,10 +188,10 @@ async function iniciarApp() {
   $('.nav-group[data-group="ventas"]')?.classList.add('open');
   if (profile.rol === 'admin') $('#nav-group-gestion')?.classList.add('open');
 
-  await cargarProductos();
-  await cargarClientes();
-  await cargarMediosPago();
-  await cargarPromociones();
+  // Las 4 en paralelo, no una atrás de la otra — son independientes
+  // entre sí y hacerlas de a una sumaba varios segundos de espera al
+  // login en datos móviles.
+  await Promise.all([cargarProductos(), cargarClientes(), cargarMediosPago(), cargarPromociones()]);
   switchView('cotizaciones');
   mostrarSaludoBienvenida();
   setTimeout(mostrarBotPendientesEntrada, 1200);
@@ -187,32 +224,7 @@ async function iniciarApp() {
   await inicializarNotificacionesChat();
 }
 
-const PERRITO_SVG = `
-  <svg viewBox="0 0 140 150" xmlns="http://www.w3.org/2000/svg">
-    <ellipse cx="70" cy="142" rx="34" ry="6" fill="#000" opacity="0.18"/>
-    <line x1="70" y1="9" x2="70" y2="24" stroke="#00b384" stroke-width="4" stroke-linecap="round"/>
-    <circle cx="70" cy="7" r="6.5" fill="#00e5a0"/>
-    <rect x="26" y="78" width="14" height="34" rx="7" fill="#00b384"/>
-    <rect x="34" y="66" width="72" height="60" rx="24" fill="#00e5a0"/>
-    <circle cx="70" cy="98" r="13" fill="#05130f"/>
-    <text x="70" y="102.3" text-anchor="middle" font-size="11" font-weight="800" fill="#00e5a0" font-family="Arial, sans-serif">BM</text>
-    <rect x="46" y="122" width="14" height="16" rx="7" fill="#00b384"/>
-    <rect x="80" y="122" width="14" height="16" rx="7" fill="#00b384"/>
-    <rect x="30" y="22" width="80" height="54" rx="26" fill="#0d0f14" stroke="#00e5a0" stroke-width="3"/>
-    <circle cx="54" cy="49" r="9" fill="#00e5a0"/>
-    <circle cx="86" cy="49" r="9" fill="#00e5a0"/>
-    <circle cx="57" cy="46" r="2.6" fill="#eafff6"/>
-    <circle cx="89" cy="46" r="2.6" fill="#eafff6"/>
-    <path d="M56 62 Q70 70 84 62" stroke="#00e5a0" stroke-width="3.4" fill="none" stroke-linecap="round"/>
-    <rect x="97" y="53" width="14" height="32" rx="7" fill="#00b384" transform="rotate(-30 104 69)"/>
-    <circle cx="115" cy="45" r="9" fill="#00b384"/>
-    <rect x="106" y="12" width="30" height="21" rx="9" fill="#fff"/>
-    <polygon points="112,31 121,31 112,40" fill="#fff"/>
-    <circle cx="115" cy="22.5" r="2" fill="#00b384"/>
-    <circle cx="121" cy="22.5" r="2" fill="#00b384"/>
-    <circle cx="127" cy="22.5" r="2" fill="#00b384"/>
-  </svg>
-`;
+const PERRITO_SVG = `<img src="icons/bam-avatar.png" alt="BAM" />`;
 
 // Contenedor fijo donde se apilan las burbujas de BAM (una encima de otra,
 // de abajo hacia arriba). Con flexbox no hace falta calcular offsets en
@@ -1713,6 +1725,7 @@ async function extraerFotosDeExcel(zip) {
 // abierto tanto por este mismo lector como por una librería externa
 // (openpyxl) antes de integrarlo acá.
 async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila) {
+  await Promise.all([cargarXLSX(), cargarJSZip()]);
   const hoja = XLSX.utils.aoa_to_sheet(filas);
   hoja['!cols'] = COLUMNAS_IMPORT_PRODUCTOS.map((_, i) => i === 1 ? { wch: 34 } : { wch: 15 });
   const libro = XLSX.utils.book_new();
@@ -1855,6 +1868,7 @@ async function abrirImportadorProductos() {
 }
 
 async function analizarArchivoImportacion(archivo) {
+  await Promise.all([cargarXLSX(), cargarJSZip()]);
   const buf = await archivo.arrayBuffer();
 
   const wb = XLSX.read(buf, { type: 'array' });
@@ -3105,10 +3119,12 @@ function abrirFormCobrarVenta(venta) {
     }).select().single();
     if (comprobante) await sb.from('caja_movimientos').update({ comprobante_id: comprobante.id }).eq('id', movimiento.id);
 
-    // Recién ahora, al cobrarse, se descuenta el stock real
-    for (const it of (venta.items || [])) {
-      if (it.producto_id) await ajustarStock(it.producto_id, -it.cantidad, `Venta #${venta.numero} (cobrada)`);
-    }
+    // Recién ahora, al cobrarse, se descuenta el stock real. En paralelo
+    // (no uno por uno) — cada ítem toca un producto distinto, y en un
+    // celular con datos móviles esperar cada viaje de a uno se sentía lento.
+    await Promise.all((venta.items || [])
+      .filter(it => it.producto_id)
+      .map(it => ajustarStock(it.producto_id, -it.cantidad, `Venta #${venta.numero} (cobrada)`)));
     await cargarProductos();
 
     toast('Cobro registrado y comprobante generado');
@@ -3203,9 +3219,9 @@ async function abrirFormAbonarVenta(venta, abonadoPrevio) {
       }).select().single();
       if (comprobante) await sb.from('caja_movimientos').update({ comprobante_id: comprobante.id }).eq('id', movimiento.id);
 
-      for (const it of (venta.items || [])) {
-        if (it.producto_id) await ajustarStock(it.producto_id, -it.cantidad, `Venta #${venta.numero} (cobrada)`);
-      }
+      await Promise.all((venta.items || [])
+        .filter(it => it.producto_id)
+        .map(it => ajustarStock(it.producto_id, -it.cantidad, `Venta #${venta.numero} (cobrada)`)));
       await cargarProductos();
 
       toast('Abono registrado — venta saldada por completo');
@@ -3329,6 +3345,7 @@ async function descargarCatalogoPDF() {
 
   if (items.length === 0) { toast('No hay productos para descargar en esta categoría', 'error'); return; }
 
+  await cargarJsPDF();
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF();
   const tituloCategoria = catalogoCategoria === 'todas' ? 'Catálogo completo' : `Catálogo — ${catalogoCategoria}`;
@@ -4070,7 +4087,8 @@ function certificadoGarantiaHtml(g) {
   `;
 }
 
-function generarPdfGarantia(g) {
+async function generarPdfGarantia(g) {
+  await cargarJsPDF();
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF();
   const estado = estadoGarantia(g);
@@ -4161,8 +4179,9 @@ async function compartirImagenGarantiaWhatsapp(g) {
 
 async function generarYCompartirGarantiaImagen(g) {
   const elPapel = document.getElementById('docprev-paper-el');
-  if (!elPapel || typeof html2canvas === 'undefined') return;
+  if (!elPapel) return;
   try {
+    await cargarHtml2Canvas();
     const canvas = await html2canvas(elPapel, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
     const texto = `*Certificado de garantía ${g.numero ? 'N° ' + String(g.numero).padStart(4, '0') : ''} — Electrodomésticos BM*\nCliente: ${g.cliente_nombre}\nProducto: ${g.producto_descripcion}\nVence: ${fecha(g.fecha_vencimiento)}`;
@@ -4342,23 +4361,33 @@ async function inicializarNotificacionesChat() {
   chatNoLeidosPorHilo = {};
   if (notificacionesChatActivas()) pedirPermisoNotifChat();
 
+  // Todos los conteos de no leídos en paralelo (antes uno por vendedor,
+  // de a uno — con varios vendedores eso eran varios viajes de red
+  // seguidos, uno atrás del otro, solo para calcular las insignias).
   const vistoGeneral = localStorage.getItem(claveVistoHilo('general')) || new Date(0).toISOString();
-  const { count: nGeneral } = await sb.from('mensajes').select('*', { count: 'exact', head: true })
+  const pGeneral = sb.from('mensajes').select('*', { count: 'exact', head: true })
     .is('conversacion_con', null).gt('created_at', vistoGeneral).neq('usuario_id', profile.id);
-  chatNoLeidosPorHilo.general = nGeneral || 0;
 
   if (profile.rol === 'admin') {
     await cargarVendedores();
-    for (const v of vendedoresCache) {
-      const visto = localStorage.getItem(claveVistoHilo(v.id)) || new Date(0).toISOString();
-      const { count } = await sb.from('mensajes').select('*', { count: 'exact', head: true })
-        .eq('conversacion_con', v.id).gt('created_at', visto).neq('usuario_id', profile.id);
-      chatNoLeidosPorHilo[v.id] = count || 0;
-    }
+    const [{ count: nGeneral }, ...counts] = await Promise.all([
+      pGeneral,
+      ...vendedoresCache.map(v => {
+        const visto = localStorage.getItem(claveVistoHilo(v.id)) || new Date(0).toISOString();
+        return sb.from('mensajes').select('*', { count: 'exact', head: true })
+          .eq('conversacion_con', v.id).gt('created_at', visto).neq('usuario_id', profile.id);
+      })
+    ]);
+    chatNoLeidosPorHilo.general = nGeneral || 0;
+    vendedoresCache.forEach((v, i) => { chatNoLeidosPorHilo[v.id] = counts[i].count || 0; });
   } else {
     const visto = localStorage.getItem(claveVistoHilo(profile.id)) || new Date(0).toISOString();
-    const { count } = await sb.from('mensajes').select('*', { count: 'exact', head: true })
-      .eq('conversacion_con', profile.id).gt('created_at', visto).neq('usuario_id', profile.id);
+    const [{ count: nGeneral }, { count }] = await Promise.all([
+      pGeneral,
+      sb.from('mensajes').select('*', { count: 'exact', head: true })
+        .eq('conversacion_con', profile.id).gt('created_at', visto).neq('usuario_id', profile.id)
+    ]);
+    chatNoLeidosPorHilo.general = nGeneral || 0;
     chatNoLeidosPorHilo[profile.id] = count || 0;
   }
   actualizarBadgeChat();
@@ -4951,7 +4980,8 @@ function comprobanteHtml(c) {
   `;
 }
 
-function generarPdfComprobante(c) {
+async function generarPdfComprobante(c) {
+  await cargarJsPDF();
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF();
   pdf.setFontSize(16); pdf.setFont(undefined, 'bold'); pdf.setTextColor(20, 20, 20);
@@ -5029,8 +5059,9 @@ async function compartirImagenComprobanteWhatsapp(c) {
 
 async function generarYCompartirComprobanteImagen(c) {
   const elPapel = document.getElementById('docprev-paper-el');
-  if (!elPapel || typeof html2canvas === 'undefined') return;
+  if (!elPapel) return;
   try {
+    await cargarHtml2Canvas();
     const canvas = await html2canvas(elPapel, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
     const texto = `*Comprobante de pago N° ${String(c.numero).padStart(5, '0')} — Electrodomésticos BM*\nRecibimos de: ${c.cliente_nombre}\nMonto: ${money(c.monto_total)}`;
@@ -5391,7 +5422,7 @@ async function compartirFotosItems(items, doc, prefijo) {
 async function compartirImagenDocumentoWhatsapp(doc, tipoLabel, prefijo) {
   const btn = document.getElementById('docprev-wa');
   const elPapel = document.getElementById('docprev-paper-el');
-  if (!elPapel || typeof html2canvas === 'undefined') {
+  if (!elPapel) {
     compartirWhatsapp(doc, tipoLabel, prefijo);
     return;
   }
@@ -5399,6 +5430,7 @@ async function compartirImagenDocumentoWhatsapp(doc, tipoLabel, prefijo) {
   btn.textContent = '⏳ Generando…';
   btn.disabled = true;
   try {
+    await cargarHtml2Canvas();
     const canvas = await html2canvas(elPapel, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
     const numeroTel = (doc.cliente_telefono || '').replace(/[^0-9]/g, '');
@@ -5419,7 +5451,8 @@ async function compartirImagenDocumentoWhatsapp(doc, tipoLabel, prefijo) {
   }
 }
 
-function generarPdfDocumento(doc, tipoLabel, prefijo) {
+async function generarPdfDocumento(doc, tipoLabel, prefijo) {
+  await cargarJsPDF();
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF();
   const tituloDoc = tipoLabel === 'Venta' ? 'NOTA DE VENTA' : 'COTIZACIÓN';

@@ -59,32 +59,7 @@ function renderRedesSociales() {
   $('#pub-redes-bar').style.display = links.length > 0 ? '' : 'none';
 }
 
-const PERRITO_SVG = `
-  <svg viewBox="0 0 140 150" xmlns="http://www.w3.org/2000/svg">
-    <ellipse cx="70" cy="142" rx="34" ry="6" fill="#000" opacity="0.18"/>
-    <line x1="70" y1="9" x2="70" y2="24" stroke="#00b384" stroke-width="4" stroke-linecap="round"/>
-    <circle cx="70" cy="7" r="6.5" fill="#00e5a0"/>
-    <rect x="26" y="78" width="14" height="34" rx="7" fill="#00b384"/>
-    <rect x="34" y="66" width="72" height="60" rx="24" fill="#00e5a0"/>
-    <circle cx="70" cy="98" r="13" fill="#05130f"/>
-    <text x="70" y="102.3" text-anchor="middle" font-size="11" font-weight="800" fill="#00e5a0" font-family="Arial, sans-serif">BM</text>
-    <rect x="46" y="122" width="14" height="16" rx="7" fill="#00b384"/>
-    <rect x="80" y="122" width="14" height="16" rx="7" fill="#00b384"/>
-    <rect x="30" y="22" width="80" height="54" rx="26" fill="#0d0f14" stroke="#00e5a0" stroke-width="3"/>
-    <circle cx="54" cy="49" r="9" fill="#00e5a0"/>
-    <circle cx="86" cy="49" r="9" fill="#00e5a0"/>
-    <circle cx="57" cy="46" r="2.6" fill="#eafff6"/>
-    <circle cx="89" cy="46" r="2.6" fill="#eafff6"/>
-    <path d="M56 62 Q70 70 84 62" stroke="#00e5a0" stroke-width="3.4" fill="none" stroke-linecap="round"/>
-    <rect x="97" y="53" width="14" height="32" rx="7" fill="#00b384" transform="rotate(-30 104 69)"/>
-    <circle cx="115" cy="45" r="9" fill="#00b384"/>
-    <rect x="106" y="12" width="30" height="21" rx="9" fill="#fff"/>
-    <polygon points="112,31 121,31 112,40" fill="#fff"/>
-    <circle cx="115" cy="22.5" r="2" fill="#00b384"/>
-    <circle cx="121" cy="22.5" r="2" fill="#00b384"/>
-    <circle cx="127" cy="22.5" r="2" fill="#00b384"/>
-  </svg>
-`;
+const PERRITO_SVG = `<img src="icons/bam-avatar.png" alt="BAM" />`;
 
 function mostrarSaludoPerrito() {
   const backdrop = document.createElement('div');

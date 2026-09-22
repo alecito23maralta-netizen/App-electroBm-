@@ -5153,6 +5153,24 @@ async function renderUsuarios() {
   });
 }
 
+// Grilla de permisos del formulario de Usuarios. Por ahora es solo
+// informativa/queda guardada — el acceso real lo sigue controlando el
+// rol Vendedor/Administrador, como hasta ahora (se puede conectar
+// para restringir el menú por módulo más adelante).
+const PERMISOS_MODULOS = [
+  { key: 'cotizaciones', label: 'Cotizaciones' },
+  { key: 'ventas', label: 'Ventas' },
+  { key: 'catalogo', label: 'Catálogo' },
+  { key: 'promos', label: 'Promos' },
+  { key: 'vendedores', label: 'Vendedores' },
+  { key: 'chat', label: 'Chat' },
+  { key: 'comprobantes', label: 'Comprobantes' },
+  { key: 'inventario', label: 'Invent.' },
+  { key: 'importar_excel', label: 'Importar Excel' },
+  { key: 'caja', label: 'Caja' },
+  { key: 'garantias', label: 'Garantías' }
+];
+
 // Un solo formulario para crear y editar usuarios — solo el admin llega
 // acá (la vista Usuarios entera es admin-only). Crear, cambiar rol y
 // habilitar/deshabilitar quedan todos en el mismo lugar.
@@ -5179,7 +5197,18 @@ function abrirFormUsuario(existing) {
     <div class="field"><select id="f-rol">
       <option value="vendedor" ${(!existing || existing.rol === 'vendedor') ? 'selected' : ''}>Vendedor / campo</option>
       <option value="admin" ${existing?.rol === 'admin' ? 'selected' : ''}>Administrador</option>
-    </select></div>` : ''}
+    </select></div>
+
+    <div class="card-title" style="margin-top:18px">Permisos de acceso</div>
+    <p style="color:var(--text-dim);font-size:12.5px;margin:-6px 0 10px">Por ahora es informativo — el acceso real lo sigue definiendo el rol de arriba.</p>
+    <div class="permisos-grid">
+      ${PERMISOS_MODULOS.map(m => `
+        <label class="permiso-check">
+          <input type="checkbox" value="${m.key}" ${(existing?.permisos || []).includes(m.key) ? 'checked' : ''} />
+          ${m.label}
+        </label>
+      `).join('')}
+    </div>` : ''}
 
     ${existing && !esUnoMismo ? `
     <div class="card-title" style="margin-top:18px">Estado de la cuenta</div>
@@ -5219,6 +5248,7 @@ function abrirFormUsuario(existing) {
       if (!esUnoMismo) {
         payload.rol = $('#f-rol').value;
         payload.activo = estadoActual;
+        payload.permisos = $$('.permiso-check input[type=checkbox]:checked').map(cb => cb.value);
       }
       const { error } = await sb.from('profiles').update(payload).eq('id', existing.id);
       if (error) { toast('Error: ' + error.message, 'error'); return; }
@@ -5232,9 +5262,10 @@ function abrirFormUsuario(existing) {
     const usuario = $('#f-usuario').value.trim();
     const password = $('#f-password').value;
     const rol = $('#f-rol').value;
+    const permisos = $$('.permiso-check input[type=checkbox]:checked').map(cb => cb.value);
     if (!usuario || password.length < 6) { toast('Completá usuario y contraseña (6+ caracteres)', 'error'); return; }
 
-    const { error } = await sb.auth.signUp({
+    const { data, error } = await sb.auth.signUp({
       email: emailFor(usuario),
       password,
       options: { data: { usuario, nombre, rol, telefono } }
@@ -5243,6 +5274,12 @@ function abrirFormUsuario(existing) {
 
     // El signUp deja logueado al usuario nuevo — volvemos a entrar como admin
     if (adminCreds) await sb.auth.signInWithPassword({ email: emailFor(adminCreds.usuario), password: adminCreds.password });
+
+    // Los permisos no viajan por el trigger de creación (solo usuario/nombre/
+    // rol/teléfono) — se guardan aparte, ya logueados otra vez como admin.
+    if (data?.user?.id && permisos.length > 0) {
+      await sb.from('profiles').update({ permisos }).eq('id', data.user.id);
+    }
 
     toast('Usuario creado correctamente');
     closeModal();

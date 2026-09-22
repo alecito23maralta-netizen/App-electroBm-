@@ -400,6 +400,19 @@ main.view { padding: 18px; max-width: 900px; margin: 0 auto; }
 
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
+/* Grilla de permisos de acceso (formulario de Usuarios) */
+.permisos-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px;
+}
+.permiso-check {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm); padding: 9px 11px;
+  font-size: 13px; color: var(--text-dim); cursor: pointer;
+}
+.permiso-check:has(input:checked) { color: var(--text); border-color: #00e5a055; background: var(--accent-dim); }
+.permiso-check input { accent-color: var(--accent); width: 15px; height: 15px; flex-shrink: 0; }
+
 /* Resultado de las calculadoras (calefacción / agua / aires) */
 .calc-resultado-box {
   margin-top: 14px; background: var(--accent-dim); border: 1px solid #00e5a044;

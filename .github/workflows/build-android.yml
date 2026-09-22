@@ -30,6 +30,13 @@ jobs:
 
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # El paquete "tools" (heredado) ya no existe en el repositorio de
+          # Google — instalarlo por defecto hacía fallar este paso siempre,
+          # antes de siquiera llegar a compilar nada. Con solo platform-tools
+          # alcanza: el runner ya trae los platforms/build-tools necesarios,
+          # y Gradle baja el resto según lo que pida el proyecto Android.
+          packages: 'platform-tools'
 
       - name: Configurar Node
         uses: actions/setup-node@v4

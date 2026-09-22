@@ -793,3 +793,12 @@ create policy "venta_abonos_select" on public.venta_abonos
 drop policy if exists "venta_abonos_insert" on public.venta_abonos;
 create policy "venta_abonos_insert" on public.venta_abonos
   for insert with check (public.is_admin());
+
+-- ============================================================
+-- ACTUALIZACIÓN: permisos de acceso por módulo (grilla de checkboxes
+-- en el formulario de Usuarios). Por ahora es solo informativo — el
+-- acceso real lo sigue controlando el rol Vendedor/Administrador
+-- como hasta ahora; esto queda guardado para conectarlo más adelante.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.profiles add column if not exists permisos text[] not null default '{}';

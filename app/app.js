@@ -1253,6 +1253,9 @@ function sameMonth(dateStr) {
 let tabInventario = 'catalogo';
 let filtroCategoriaInventario = 'todas';
 let busquedaInventario = '';
+let lotesCostosCache = [];
+let loteCostosAbierto = null;
+let itemsCostosCache = [];
 let catalogoBusqueda = '';
 let catalogoCategoria = 'todas';
 
@@ -1274,7 +1277,8 @@ async function renderInventario() {
     <div class="tabs">
       <button class="tab-btn ${tabInventario === 'catalogo' ? 'active' : ''}" id="tab-catalogo">Catálogo</button>
       <button class="tab-btn ${tabInventario === 'movimientos' ? 'active' : ''}" id="tab-movimientos">Movimientos</button>
-      ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>` : ''}
+      ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>
+      <button class="tab-btn ${tabInventario === 'costos' ? 'active' : ''}" id="tab-costos">💰 Costos</button>` : ''}
     </div>
     <div id="inv-content"></div>
   `;
@@ -1282,6 +1286,7 @@ async function renderInventario() {
     $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
     $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
     $('#tab-rentabilidad').addEventListener('click', () => { tabInventario = 'rentabilidad'; renderInventario(); });
+    $('#tab-costos').addEventListener('click', () => { tabInventario = 'costos'; renderInventario(); });
   }
   $('#tab-catalogo').addEventListener('click', () => { tabInventario = 'catalogo'; renderInventario(); });
   $('#tab-movimientos').addEventListener('click', () => { tabInventario = 'movimientos'; renderInventario(); });
@@ -1289,6 +1294,7 @@ async function renderInventario() {
   if (tabInventario === 'catalogo') renderCatalogoProductos();
   else if (tabInventario === 'movimientos') renderMovimientosInventario();
   else if (tabInventario === 'rentabilidad' && profile.rol === 'admin') renderRentabilidad();
+  else if (tabInventario === 'costos' && profile.rol === 'admin') renderCostos();
 }
 
 function celdaMargenHtml(p) {
@@ -1478,11 +1484,253 @@ async function renderRentabilidad() {
   });
 }
 
-function abrirFormProducto(existing) {
+// ------------------------------------------------------------
+// COSTOS: réplica del "libro de costos" que se llevaba en Excel —
+// un lote de compra con flete total repartido entre todos sus ítems
+// y un % de ganancia único, que calcula el costo final y precio de
+// venta de cada ítem. Cada ítem se puede subir a Inventario como
+// producto nuevo, ya con el costo y precio de venta calculados.
+// ------------------------------------------------------------
+function calcularItemCosto(item, lote, totalCantidadLote) {
+  const cantidad = Number(item.cantidad) || 0;
+  const costoUnitario = cantidad > 0 ? Number(item.monto_compra) / cantidad : 0;
+  const envioUnitario = totalCantidadLote > 0 ? Number(lote.flete_total) / totalCantidadLote : 0;
+  const costoUnitarioFinal = costoUnitario + envioUnitario;
+  const costoTotal = costoUnitarioFinal * cantidad;
+  const precioVentaUnitario = costoUnitarioFinal * (1 + Number(lote.ganancia_pct) / 100);
+  const utilidadUnitaria = precioVentaUnitario - costoUnitarioFinal;
+  const utilidadTotal = utilidadUnitaria * cantidad;
+  return { costoUnitario, envioUnitario, costoUnitarioFinal, costoTotal, precioVentaUnitario, utilidadUnitaria, utilidadTotal };
+}
+
+async function cargarLotesCostos() {
+  const { data } = await sb.from('lotes_costos').select('*').order('created_at', { ascending: false });
+  lotesCostosCache = data || [];
+}
+
+async function cargarItemsCostos(loteId) {
+  const { data } = await sb.from('items_costos').select('*').eq('lote_id', loteId).order('created_at');
+  itemsCostosCache = data || [];
+}
+
+async function renderCostos() {
+  const cont = $('#inv-content');
+  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  if (!loteCostosAbierto) {
+    await cargarLotesCostos();
+    renderListaLotesCostos(cont);
+  } else {
+    await cargarItemsCostos(loteCostosAbierto.id);
+    renderDetalleLoteCostos(cont);
+  }
+}
+
+function renderListaLotesCostos(cont) {
+  cont.innerHTML = `
+    <div class="section-head" style="margin-bottom:14px">
+      <div><p class="sub">Calculá el costo final y precio de venta de un lote de compra (con el flete repartido entre los ítems) y subilo directo a Inventario.</p></div>
+      <button class="btn btn-primary" id="btn-nuevo-lote-costos">+ Nuevo lote</button>
+    </div>
+    ${lotesCostosCache.length === 0 ? `<div class="empty-state">Todavía no creaste ningún lote de costos.</div>` : `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Lote</th><th>Fecha</th><th>Flete total</th><th>% Ganancia</th><th>Acciones</th></tr></thead>
+        <tbody>${lotesCostosCache.map(l => `
+          <tr>
+            <td>${escapeHtml(l.nombre)}</td>
+            <td>${fecha(l.created_at)}</td>
+            <td>${money(l.flete_total)}</td>
+            <td>${Number(l.ganancia_pct).toFixed(0)}%</td>
+            <td><div class="row-actions">
+              <button class="icon-btn" data-act="abrir" data-id="${l.id}" title="Abrir">📂</button>
+              <button class="icon-btn" data-act="editar" data-id="${l.id}" title="Editar parámetros">✎</button>
+              <button class="icon-btn" data-act="eliminar" data-id="${l.id}" title="Eliminar">🗑</button>
+            </div></td>
+          </tr>
+        `).join('')}</tbody>
+      </table></div>
+    `}
+  `;
+  $('#btn-nuevo-lote-costos').addEventListener('click', () => abrirFormLoteCostos());
+  cont.querySelectorAll('[data-act]').forEach(btn => {
+    const lote = lotesCostosCache.find(l => l.id === btn.dataset.id);
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if (act === 'abrir') { loteCostosAbierto = lote; renderCostos(); }
+      if (act === 'editar') abrirFormLoteCostos(lote);
+      if (act === 'eliminar') eliminarRegistro('lotes_costos', lote.id, () => {
+        lotesCostosCache = lotesCostosCache.filter(x => x.id !== lote.id);
+        renderCostos();
+      });
+    });
+  });
+}
+
+function renderDetalleLoteCostos(cont) {
+  const lote = loteCostosAbierto;
+  const totalCantidad = itemsCostosCache.reduce((s, i) => s + Number(i.cantidad), 0);
+  const calculados = itemsCostosCache.map(item => ({ item, ...calcularItemCosto(item, lote, totalCantidad) }));
+  const inversionTotal = calculados.reduce((s, c) => s + c.costoTotal, 0);
+  const utilidadTotal = calculados.reduce((s, c) => s + c.utilidadTotal, 0);
+  const ventaTotal = inversionTotal + utilidadTotal;
+  const margenReal = ventaTotal > 0 ? (utilidadTotal / ventaTotal) * 100 : 0;
+
+  cont.innerHTML = `
+    <button class="btn btn-secondary" id="btn-volver-lotes" style="margin-bottom:12px">← Volver a lotes</button>
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-title">${escapeHtml(lote.nombre)}</div>
+      <div class="grid-2" style="margin-top:10px">
+        <div><span style="color:var(--text-faint);font-size:12px">Flete total</span><br>${money(lote.flete_total)}</div>
+        <div><span style="color:var(--text-faint);font-size:12px">% de ganancia sobre el costo</span><br>${Number(lote.ganancia_pct).toFixed(0)}%</div>
+      </div>
+      <button class="btn btn-secondary" id="btn-editar-params-lote" style="margin-top:10px">✎ Editar parámetros</button>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Inversión total</div><div class="value">${money(inversionTotal)}</div></div>
+      <div class="stat-chip accent"><div class="label">Utilidad total</div><div class="value">${money(utilidadTotal)}</div></div>
+      <div class="stat-chip"><div class="label">Venta total estimada</div><div class="value">${money(ventaTotal)}</div></div>
+      <div class="stat-chip"><div class="label">Margen real</div><div class="value">${margenReal.toFixed(1)}%</div></div>
+    </div>
+
+    <div class="section-head" style="margin:14px 0">
+      <div></div>
+      <button class="btn btn-primary" id="btn-agregar-item-costo">+ Agregar ítem</button>
+    </div>
+
+    ${calculados.length === 0 ? `<div class="empty-state">Todavía no agregaste ítems a este lote.</div>` : `
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Descripción</th><th>Cant.</th><th>Compra total</th><th>Costo unit.</th><th>Envío/u</th><th>Costo final</th><th>Precio venta</th><th>Utilidad</th><th>Acciones</th>
+      </tr></thead>
+      <tbody>${calculados.map(({ item, costoUnitario, envioUnitario, costoUnitarioFinal, precioVentaUnitario, utilidadUnitaria, utilidadTotal }) => `
+        <tr>
+          <td>${escapeHtml(item.descripcion)}${item.producto_id ? '<br><span class="badge badge-ok" style="margin-top:4px;display:inline-block">✓ En inventario</span>' : ''}</td>
+          <td>${item.cantidad}</td>
+          <td>${money(item.monto_compra)}</td>
+          <td>${money(costoUnitario)}</td>
+          <td>${money(envioUnitario)}</td>
+          <td>${money(costoUnitarioFinal)}</td>
+          <td>${money(precioVentaUnitario)}</td>
+          <td>${money(utilidadUnitaria)}<br><span style="color:var(--text-faint);font-size:11px">${money(utilidadTotal)} total</span></td>
+          <td><div class="row-actions">
+            <button class="icon-btn" data-act="editar-item" data-id="${item.id}" title="Editar">✎</button>
+            ${!item.producto_id ? `<button class="icon-btn" data-act="subir-item" data-id="${item.id}" title="Subir a inventario">⬆</button>` : ''}
+            <button class="icon-btn" data-act="eliminar-item" data-id="${item.id}" title="Eliminar">🗑</button>
+          </div></td>
+        </tr>
+      `).join('')}</tbody>
+    </table></div>
+    `}
+  `;
+
+  $('#btn-volver-lotes').addEventListener('click', () => { loteCostosAbierto = null; renderCostos(); });
+  $('#btn-editar-params-lote').addEventListener('click', () => abrirFormLoteCostos(lote));
+  $('#btn-agregar-item-costo').addEventListener('click', () => abrirFormItemCosto());
+  cont.querySelectorAll('[data-act]').forEach(btn => {
+    const item = itemsCostosCache.find(i => i.id === btn.dataset.id);
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if (act === 'editar-item') abrirFormItemCosto(item);
+      if (act === 'eliminar-item') eliminarRegistro('items_costos', item.id, () => {
+        itemsCostosCache = itemsCostosCache.filter(x => x.id !== item.id);
+        renderCostos();
+      });
+      if (act === 'subir-item') {
+        const calc = calcularItemCosto(item, lote, totalCantidad);
+        abrirFormProducto(null, {
+          descripcion: item.descripcion,
+          costo: Number(calc.costoUnitarioFinal.toFixed(2)),
+          precio_venta: Number(calc.precioVentaUnitario.toFixed(2)),
+          stock: item.cantidad,
+          onGuardado: async (producto) => {
+            await sb.from('items_costos').update({ producto_id: producto.id }).eq('id', item.id);
+            item.producto_id = producto.id;
+          }
+        });
+      }
+    });
+  });
+}
+
+function abrirFormLoteCostos(existing) {
+  openModal(`
+    <div class="sheet-head"><h3>${existing ? 'Editar lote de costos' : 'Nuevo lote de costos'}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <div class="field"><label>Nombre del lote *</label><input id="f-lote-nombre" value="${existing ? escapeHtml(existing.nombre) : ''}" placeholder="Ej: Compra Herramientas Octubre" required /></div>
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Flete total (Bs)<br><span style="font-weight:400;color:var(--text-faint)">se reparte entre todos los ítems del lote</span></label><input type="number" id="f-lote-flete" value="${existing ? existing.flete_total : 0}" min="0" step="0.01" /></div>
+      <div class="field"><label>% de ganancia sobre el costo</label><input type="number" id="f-lote-ganancia" value="${existing ? existing.ganancia_pct : 100}" min="0" step="1" /></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
+      <button class="btn btn-primary" id="btn-guardar">💾 Guardar</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-guardar').addEventListener('click', async () => {
+    const nombre = $('#f-lote-nombre').value.trim();
+    if (!nombre) { toast('Ingresá un nombre para el lote', 'error'); return; }
+    const payload = {
+      nombre,
+      flete_total: Number($('#f-lote-flete').value || 0),
+      ganancia_pct: Number($('#f-lote-ganancia').value || 0)
+    };
+    let resp;
+    if (existing) resp = await sb.from('lotes_costos').update(payload).eq('id', existing.id).select().single();
+    else resp = await sb.from('lotes_costos').insert({ ...payload, usuario_id: profile.id }).select().single();
+    if (resp.error) { toast('Error: ' + resp.error.message, 'error'); return; }
+    toast('Lote guardado');
+    closeModal();
+    if (existing) Object.assign(loteCostosAbierto, resp.data);
+    else loteCostosAbierto = resp.data;
+    renderCostos();
+  });
+}
+
+function abrirFormItemCosto(existing) {
+  openModal(`
+    <div class="sheet-head"><h3>${existing ? 'Editar ítem' : 'Agregar ítem'}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <div class="field"><label>Descripción *</label><input id="f-item-desc" value="${existing ? escapeHtml(existing.descripcion) : ''}" required /></div>
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Cantidad *</label><input type="number" id="f-item-cant" value="${existing ? existing.cantidad : 1}" min="1" step="1" /></div>
+      <div class="field"><label>Monto total de compra (Bs) *<br><span style="font-weight:400;color:var(--text-faint)">lo que pagaste por esa cantidad</span></label><input type="number" id="f-item-monto" value="${existing ? existing.monto_compra : 0}" min="0" step="0.01" /></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
+      <button class="btn btn-primary" id="btn-guardar">💾 Guardar</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-guardar').addEventListener('click', async () => {
+    const descripcion = $('#f-item-desc').value.trim();
+    const cantidad = Number($('#f-item-cant').value || 0);
+    const monto_compra = Number($('#f-item-monto').value || 0);
+    if (!descripcion) { toast('Ingresá una descripción', 'error'); return; }
+    if (cantidad <= 0) { toast('Ingresá una cantidad válida', 'error'); return; }
+    const payload = { descripcion, cantidad, monto_compra };
+    let resp;
+    if (existing) resp = await sb.from('items_costos').update(payload).eq('id', existing.id).select().single();
+    else resp = await sb.from('items_costos').insert({ ...payload, lote_id: loteCostosAbierto.id }).select().single();
+    if (resp.error) { toast('Error: ' + resp.error.message, 'error'); return; }
+    toast('Ítem guardado');
+    closeModal();
+    if (existing) Object.assign(existing, resp.data);
+    else itemsCostosCache.push(resp.data);
+    renderCostos();
+  });
+}
+
+function abrirFormProducto(existing, prefill) {
   const catInicial = existing?.categoria || CATEGORIAS_PRODUCTO[0];
+  const descInicial = existing ? existing.descripcion : (prefill?.descripcion || '');
+  const costoInicial = existing ? existing.costo : (prefill?.costo ?? 0);
+  const precioInicial = existing ? existing.precio_venta : (prefill?.precio_venta ?? 0);
+  const stockInicial = existing ? existing.stock : (prefill?.stock ?? 0);
   openModal(`
     <div class="sheet-head"><h3>${existing ? 'Editar producto' : 'Agregar producto'}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <div class="field"><label>Descripción *</label><input id="f-desc" value="${existing ? escapeHtml(existing.descripcion) : ''}" required /></div>
+    ${prefill ? `<p style="color:var(--text-dim);font-size:12.5px;margin:-8px 0 12px">Precios calculados desde el subgrupo de Costos — revisá categoría y stock antes de guardar.</p>` : ''}
+    <div class="field"><label>Descripción *</label><input id="f-desc" value="${escapeHtml(descInicial)}" required /></div>
     <div class="grid-2" style="margin-top:10px">
       <div class="field"><label>Categoría</label>
         <select id="f-cat">
@@ -1495,11 +1743,11 @@ function abrirFormProducto(existing) {
       <div class="field"><label>Código de fábrica</label><input id="f-codfab" value="${existing ? escapeHtml(existing.codigo_fabrica || '') : ''}" placeholder="Ej: JDCC8395" /></div>
       <div class="field"><label>Código interno</label><input id="f-codint" value="${existing ? escapeHtml(existing.codigo_interno || '') : ''}" placeholder="Ej: H0001" /></div>
     </div>
-    <div class="field" style="margin-top:10px"><label>Precio Mayorista<br><span style="font-weight:400;color:var(--text-faint)">lo que te cobra tu proveedor</span></label><input type="number" id="f-costo" value="${existing ? existing.costo : 0}" min="0" step="0.01" /></div>
-    <div class="field" style="margin-top:10px"><label>Precio Venta<br><span style="font-weight:400;color:var(--text-faint)">lo que le cobrás al cliente</span></label><input type="number" id="f-precio" value="${existing ? existing.precio_venta : 0}" min="0" step="0.01" /></div>
+    <div class="field" style="margin-top:10px"><label>Precio Mayorista<br><span style="font-weight:400;color:var(--text-faint)">lo que te cobra tu proveedor</span></label><input type="number" id="f-costo" value="${costoInicial}" min="0" step="0.01" /></div>
+    <div class="field" style="margin-top:10px"><label>Precio Venta<br><span style="font-weight:400;color:var(--text-faint)">lo que le cobrás al cliente</span></label><input type="number" id="f-precio" value="${precioInicial}" min="0" step="0.01" /></div>
     <div class="field" style="margin-top:10px"><label>Descuento máximo al cliente (%)<br><span style="font-weight:400;color:var(--text-faint)">tope al armar una cotización/venta — vacío = sin límite</span></label><input type="number" id="f-desc-max" value="${existing?.descuento_maximo_pct ?? ''}" min="0" max="100" step="0.01" placeholder="Sin límite" /></div>
     <div class="grid-2" style="margin-top:10px">
-      <div class="field"><label>Stock inicial</label><input type="number" id="f-stock" value="${existing ? existing.stock : 0}" min="0" ${existing ? 'disabled' : ''} /></div>
+      <div class="field"><label>Stock inicial</label><input type="number" id="f-stock" value="${stockInicial}" min="0" ${existing ? 'disabled' : ''} /></div>
       <div class="field"><label>Stock mínimo (alerta)</label><input type="number" id="f-stockmin" value="${existing ? existing.stock_minimo : 5}" min="0" /></div>
     </div>
     <div class="field" style="margin-top:10px"><label>Foto (para el catálogo de clientes)</label><input type="file" id="f-imagen-producto" accept="image/*" /></div>
@@ -1555,10 +1803,11 @@ function abrirFormProducto(existing) {
     if (!payload.descripcion) { toast('Ingresá una descripción', 'error'); return; }
     let resp;
     if (existing) resp = await sb.from('productos').update(payload).eq('id', existing.id);
-    else resp = await sb.from('productos').insert({ ...payload, stock: Number($('#f-stock').value || 0) });
+    else resp = await sb.from('productos').insert({ ...payload, stock: Number($('#f-stock').value || 0) }).select().single();
     if (resp.error) { toast('Error: ' + resp.error.message, 'error'); return; }
     toast('Producto guardado');
     closeModal();
+    if (!existing && prefill?.onGuardado && resp.data) await prefill.onGuardado(resp.data);
     renderInventario();
   });
 }

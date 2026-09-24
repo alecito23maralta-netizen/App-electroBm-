@@ -802,3 +802,45 @@ create policy "venta_abonos_insert" on public.venta_abonos
 -- Ejecutar en el proyecto que ya tenías creado
 -- ============================================================
 alter table public.profiles add column if not exists permisos text[] not null default '{}';
+
+-- ============================================================
+-- ACTUALIZACIÓN: subgrupo "Costos" dentro de Inventario — réplica
+-- del libro de costos que se llevaba en Excel. Un lote_costos agrupa
+-- una compra con su flete total y % de ganancia; cada items_costos
+-- es un ítem de esa compra (descripción, cantidad, monto total
+-- pagado). El costo unitario, el envío repartido, el costo final y
+-- el precio de venta se calculan en la app (no se guardan, para que
+-- siempre reflejen los parámetros actuales del lote). Cuando un ítem
+-- se sube a Inventario como producto nuevo, queda linkeado en
+-- items_costos.producto_id.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.lotes_costos (
+  id uuid primary key default gen_random_uuid(),
+  nombre text not null,
+  flete_total numeric(12,2) not null default 0,
+  ganancia_pct numeric(6,2) not null default 100,
+  usuario_id uuid references public.profiles (id),
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.items_costos (
+  id uuid primary key default gen_random_uuid(),
+  lote_id uuid not null references public.lotes_costos (id) on delete cascade,
+  descripcion text not null,
+  cantidad integer not null check (cantidad > 0),
+  monto_compra numeric(12,2) not null default 0,
+  producto_id uuid references public.productos (id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.lotes_costos enable row level security;
+alter table public.items_costos enable row level security;
+
+drop policy if exists "lotes_costos_all" on public.lotes_costos;
+create policy "lotes_costos_all" on public.lotes_costos
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "items_costos_all" on public.items_costos;
+create policy "items_costos_all" on public.items_costos
+  for all using (public.is_admin()) with check (public.is_admin());

@@ -1934,11 +1934,13 @@ function construirFilasAgrupadas(grupos) {
   const todasFilas = [];
   const fotosPorFila = {};
   const merges = [];
+  const bannerRows = [];
   grupos.forEach((grupo, gi) => {
     if (gi > 0) todasFilas.push(Array(nCols).fill(''));
     const filaBanner = todasFilas.length;
     todasFilas.push([grupo.categoria.toUpperCase(), ...Array(nCols - 1).fill('')]);
     merges.push({ s: { r: filaBanner, c: 0 }, e: { r: filaBanner, c: nCols - 1 } });
+    bannerRows.push(filaBanner);
     todasFilas.push(COLUMNAS_IMPORT_PRODUCTOS);
     grupo.filas.forEach((fila, i) => {
       const filaIdx = todasFilas.length;
@@ -1946,7 +1948,46 @@ function construirFilasAgrupadas(grupos) {
       if (grupo.fotos && grupo.fotos[i]) fotosPorFila[filaIdx] = grupo.fotos[i];
     });
   });
-  return { filas: todasFilas, fotosPorFila, merges };
+  return { filas: todasFilas, fotosPorFila, merges, bannerRows };
+}
+
+// SheetJS gratis no escribe estilos de celda (negrita/color de fondo) al
+// generar un .xlsx nuevo — los ignora en silencio — así que el título de
+// cada tabla de categoría se inyecta a mano en xl/styles.xml (fuente
+// blanca en negrita + relleno verde, mismo mecanismo que las fotos: XML
+// crudo dentro del .zip). Devuelve el styles.xml modificado y el índice
+// de estilo a usar en las celdas de esas filas.
+function inyectarEstiloCategoriaEnStylesXml(stylesXml) {
+  const fontXml = '<font><b/><sz val="12"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>';
+  const nuevaFuenteIdx = Number(stylesXml.match(/<fonts count="(\d+)">/)[1]);
+  stylesXml = stylesXml
+    .replace(/<fonts count="\d+">/, `<fonts count="${nuevaFuenteIdx + 1}">`)
+    .replace('</fonts>', `${fontXml}</fonts>`);
+
+  const fillXml = '<fill><patternFill patternType="solid"><fgColor rgb="FF1B8F5A"/><bgColor indexed="64"/></patternFill></fill>';
+  const nuevoFillIdx = Number(stylesXml.match(/<fills count="(\d+)">/)[1]);
+  stylesXml = stylesXml
+    .replace(/<fills count="\d+">/, `<fills count="${nuevoFillIdx + 1}">`)
+    .replace('</fills>', `${fillXml}</fills>`);
+
+  const nuevoXfIdx = Number(stylesXml.match(/<cellXfs count="(\d+)">/)[1]);
+  const xfXml = `<xf numFmtId="0" fontId="${nuevaFuenteIdx}" fillId="${nuevoFillIdx}" borderId="0" xfId="0" applyFont="1" applyFill="1"/>`;
+  stylesXml = stylesXml
+    .replace(/<cellXfs count="\d+">/, `<cellXfs count="${nuevoXfIdx + 1}">`)
+    .replace('</cellXfs>', `${xfXml}</cellXfs>`);
+
+  return { stylesXml, estiloIdx: nuevoXfIdx };
+}
+
+// Aplica ese índice de estilo a todas las celdas de las filas-título de
+// categoría (bannerRows, 0-indexado) dentro del XML de la hoja.
+function aplicarEstiloFilasBanner(sheetXml, bannerRows, estiloIdx) {
+  bannerRows.forEach((idx0) => {
+    const rowNum = idx0 + 1; // 1-indexado en el XML de la hoja
+    const re = new RegExp(`(<row r="${rowNum}"[^>]*>)([\\s\\S]*?)(</row>)`);
+    sheetXml = sheetXml.replace(re, (_, open, inner, close) => open + inner.replace(/<c /g, `<c s="${estiloIdx}" `) + close);
+  });
+  return sheetXml;
 }
 
 // Margen de ganancia sobre el costo (lo que le agregás a lo que pagaste),
@@ -2063,7 +2104,7 @@ async function extraerFotosDeExcel(zip) {
 // extraerFotosDeExcel(), pero al revés. Validado con un archivo real
 // abierto tanto por este mismo lector como por una librería externa
 // (openpyxl) antes de integrarlo acá.
-async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila, merges) {
+async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila, merges, bannerRows) {
   await Promise.all([cargarXLSX(), cargarJSZip()]);
   const hoja = XLSX.utils.aoa_to_sheet(filas);
   hoja['!cols'] = COLUMNAS_IMPORT_PRODUCTOS.map((_, i) => i === 1 ? { wch: 34 } : { wch: 15 });
@@ -2074,6 +2115,17 @@ async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila, merges) 
 
   const zip = await JSZip.loadAsync(bufferBase);
   const entradasFotos = Object.entries(fotosPorFila || {}).filter(([, url]) => !!url);
+
+  if (bannerRows && bannerRows.length > 0) {
+    const stylesXml = await zip.file('xl/styles.xml').async('text');
+    const { stylesXml: stylesConEstilo, estiloIdx } = inyectarEstiloCategoriaEnStylesXml(stylesXml);
+    zip.file('xl/styles.xml', stylesConEstilo);
+
+    const sheetXmlConEstilo = aplicarEstiloFilasBanner(
+      await zip.file('xl/worksheets/sheet1.xml').async('text'), bannerRows, estiloIdx
+    );
+    zip.file('xl/worksheets/sheet1.xml', sheetXmlConEstilo);
+  }
 
   if (entradasFotos.length > 0) {
     const colFotoIndex = COLUMNAS_IMPORT_PRODUCTOS.indexOf('Foto');
@@ -2119,8 +2171,8 @@ function descargarPlantillaImportacion() {
     { categoria: 'Termotanques', filas: [['TQ-80L', 'Termotanque Rheem 80L', 900, 1250, margenPct(900, 1250).toFixed(1), 10, '']] },
     { categoria: 'Estufas', filas: [['', 'Estufa Longvie 3000 Kcal', 320, 480, margenPct(320, 480).toFixed(1), 15, '']] }
   ];
-  const { filas, fotosPorFila, merges } = construirFilasAgrupadas(grupos);
-  generarExcelConFotos('Plantilla_productos_BM.xlsx', filas, fotosPorFila, merges);
+  const { filas, fotosPorFila, merges, bannerRows } = construirFilasAgrupadas(grupos);
+  generarExcelConFotos('Plantilla_productos_BM.xlsx', filas, fotosPorFila, merges, bannerRows);
 }
 
 // Enlaza Inventario con la importación: exporta TODO lo que ya tenés
@@ -2152,8 +2204,8 @@ async function descargarInventarioActualExcel() {
     return { categoria: cat, filas, fotos };
   });
 
-  const { filas, fotosPorFila, merges } = construirFilasAgrupadas(grupos);
-  await generarExcelConFotos(`Inventario_BM_${new Date().toISOString().slice(0, 10)}.xlsx`, filas, fotosPorFila, merges);
+  const { filas, fotosPorFila, merges, bannerRows } = construirFilasAgrupadas(grupos);
+  await generarExcelConFotos(`Inventario_BM_${new Date().toISOString().slice(0, 10)}.xlsx`, filas, fotosPorFila, merges, bannerRows);
 }
 
 function encontrarProductoExistente(codigo, descripcion) {

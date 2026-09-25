@@ -1253,6 +1253,12 @@ function sameMonth(dateStr) {
 let tabInventario = 'catalogo';
 let filtroCategoriaInventario = 'todas';
 let busquedaInventario = '';
+// Categorías que el usuario abrió a mano en el Catálogo — antes la
+// primera categoría se auto-abría en cada render (incluso al sólo
+// modificar un precio), lo que hacía "saltar" la pantalla porque se
+// volvía a expandir sola. Ahora ninguna se abre sola: solo la que el
+// usuario haya tocado se mantiene abierta entre renders.
+let categoriasInventarioAbiertas = new Set();
 let lotesCostosCache = [];
 let loteCostosAbierto = null;
 let itemsCostosCache = [];
@@ -1371,10 +1377,10 @@ function renderCatalogoProductos() {
   const otrasCategorias = [...new Set(productosCache.map(p => p.categoria).filter(c => !CATEGORIAS_PRODUCTO.includes(c)))];
   const ordenFinal = [...categoriasPresentes, ...otrasCategorias];
 
-  cont.innerHTML = buscadorHtml + ordenFinal.map((cat, idx) => {
+  cont.innerHTML = buscadorHtml + ordenFinal.map((cat) => {
     const items = productosCache.filter(p => p.categoria === cat);
     return `
-      <details class="cat-section" ${(idx === 0 && items.length <= 30) ? 'open' : ''}>
+      <details class="cat-section" data-cat="${escapeHtml(cat)}" ${categoriasInventarioAbiertas.has(cat) ? 'open' : ''}>
         <summary class="cat-header">${escapeHtml(cat)} <span class="cat-count">${items.length}</span></summary>
         <div class="table-wrap">
           <table>
@@ -1395,6 +1401,12 @@ function renderCatalogoProductos() {
   }).join('');
 
   $('#inv-buscar').addEventListener('input', (e) => { busquedaInventario = e.target.value; renderCatalogoProductos(); });
+  cont.querySelectorAll('.cat-section').forEach((det) => {
+    det.addEventListener('toggle', () => {
+      if (det.open) categoriasInventarioAbiertas.add(det.dataset.cat);
+      else categoriasInventarioAbiertas.delete(det.dataset.cat);
+    });
+  });
   wireFilaAcciones(cont, productosCache);
 }
 

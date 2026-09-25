@@ -1914,8 +1914,40 @@ async function ajustarStock(productoId, delta, motivo) {
 // Solo admin. Los productos que coincidan por código o por
 // descripción exacta con uno ya cargado se actualizan (precio,
 // costo, descuento máximo y foto); el resto se crea como nuevo.
+// El archivo va agrupado en una tabla por categoría (título de
+// categoría + fila de encabezados + sus filas, después la próxima
+// categoría), igual que se ve agrupado el Catálogo en la app — por
+// eso ya no hay columna "Categoria" por fila: la categoría de cada
+// producto es el título de la tabla en la que está.
 // ============================================================
-const COLUMNAS_IMPORT_PRODUCTOS = ['Codigo', 'Descripcion', 'Categoria', 'Precio Mayorista', 'Precio Venta', 'Margen %', 'Descuento Maximo %', 'Foto'];
+const COLUMNAS_IMPORT_PRODUCTOS = ['Codigo', 'Descripcion', 'Precio Mayorista', 'Precio Venta', 'Margen %', 'Descuento Maximo %', 'Foto'];
+
+// Arma las filas de un Excel a partir de grupos por categoría —
+// [{ categoria, filas: [[...fila sin categoría...], ...], fotos: {indiceEnFilas: dataUrl} }] —
+// insertando el título de cada tabla, su fila de encabezados y una
+// fila en blanco entre categorías. Devuelve las filas ya combinadas,
+// el mapa de fotos reindexado a la fila absoluta del archivo (para
+// generarExcelConFotos) y los merges para que el título de cada
+// tabla se vea como una sola celda ancha.
+function construirFilasAgrupadas(grupos) {
+  const nCols = COLUMNAS_IMPORT_PRODUCTOS.length;
+  const todasFilas = [];
+  const fotosPorFila = {};
+  const merges = [];
+  grupos.forEach((grupo, gi) => {
+    if (gi > 0) todasFilas.push(Array(nCols).fill(''));
+    const filaBanner = todasFilas.length;
+    todasFilas.push([grupo.categoria.toUpperCase(), ...Array(nCols - 1).fill('')]);
+    merges.push({ s: { r: filaBanner, c: 0 }, e: { r: filaBanner, c: nCols - 1 } });
+    todasFilas.push(COLUMNAS_IMPORT_PRODUCTOS);
+    grupo.filas.forEach((fila, i) => {
+      const filaIdx = todasFilas.length;
+      todasFilas.push(fila);
+      if (grupo.fotos && grupo.fotos[i]) fotosPorFila[filaIdx] = grupo.fotos[i];
+    });
+  });
+  return { filas: todasFilas, fotosPorFila, merges };
+}
 
 // Margen de ganancia sobre el costo (lo que le agregás a lo que pagaste),
 // en %. null si no hay costo cargado (no se puede calcular).
@@ -2031,10 +2063,11 @@ async function extraerFotosDeExcel(zip) {
 // extraerFotosDeExcel(), pero al revés. Validado con un archivo real
 // abierto tanto por este mismo lector como por una librería externa
 // (openpyxl) antes de integrarlo acá.
-async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila) {
+async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila, merges) {
   await Promise.all([cargarXLSX(), cargarJSZip()]);
   const hoja = XLSX.utils.aoa_to_sheet(filas);
   hoja['!cols'] = COLUMNAS_IMPORT_PRODUCTOS.map((_, i) => i === 1 ? { wch: 34 } : { wch: 15 });
+  if (merges && merges.length) hoja['!merges'] = merges;
   const libro = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(libro, hoja, 'Productos');
   const bufferBase = XLSX.write(libro, { type: 'array', bookType: 'xlsx' });
@@ -2082,37 +2115,45 @@ async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila) {
 }
 
 function descargarPlantillaImportacion() {
-  const datos = [
-    COLUMNAS_IMPORT_PRODUCTOS,
-    ['TQ-80L', 'Termotanque Rheem 80L', 'Termotanques', 900, 1250, margenPct(900, 1250).toFixed(1), 10, ''],
-    ['', 'Estufa Longvie 3000 Kcal', 'Estufas', 320, 480, margenPct(320, 480).toFixed(1), 15, '']
+  const grupos = [
+    { categoria: 'Termotanques', filas: [['TQ-80L', 'Termotanque Rheem 80L', 900, 1250, margenPct(900, 1250).toFixed(1), 10, '']] },
+    { categoria: 'Estufas', filas: [['', 'Estufa Longvie 3000 Kcal', 320, 480, margenPct(320, 480).toFixed(1), 15, '']] }
   ];
-  generarExcelConFotos('Plantilla_productos_BM.xlsx', datos, {});
+  const { filas, fotosPorFila, merges } = construirFilasAgrupadas(grupos);
+  generarExcelConFotos('Plantilla_productos_BM.xlsx', filas, fotosPorFila, merges);
 }
 
 // Enlaza Inventario con la importación: exporta TODO lo que ya tenés
-// cargado (con sus fotos) a un Excel — para la próxima actualización de
-// precios, alcanza con abrir este archivo, tocar lo que cambió y volver
-// a subirlo, en vez de empezar de cero cada vez.
+// cargado (con sus fotos) a un Excel, agrupado en una tabla por
+// categoría — para la próxima actualización de precios, alcanza con
+// abrir este archivo, tocar lo que cambió y volver a subirlo, en vez
+// de empezar de cero cada vez.
 async function descargarInventarioActualExcel() {
-  const filas = [COLUMNAS_IMPORT_PRODUCTOS];
-  const fotosPorFila = {};
-  productosCache.forEach((p, i) => {
-    const fila = i + 1;
-    const margen = margenPct(p.costo, p.precio_venta);
-    filas.push([
-      p.codigo_interno || p.codigo_fabrica || '',
-      p.descripcion,
-      p.categoria,
-      Number(p.costo) || 0,
-      Number(p.precio_venta) || 0,
-      margen != null ? margen.toFixed(1) : '',
-      p.descuento_maximo_pct ?? '',
-      ''
-    ]);
-    if (p.imagen_base64) fotosPorFila[fila] = p.imagen_base64;
+  const categoriasPresentes = CATEGORIAS_PRODUCTO.filter(cat => productosCache.some(p => p.categoria === cat));
+  const otrasCategorias = [...new Set(productosCache.map(p => p.categoria).filter(c => !CATEGORIAS_PRODUCTO.includes(c)))];
+  const ordenFinal = [...categoriasPresentes, ...otrasCategorias];
+
+  const grupos = ordenFinal.map(cat => {
+    const filas = [];
+    const fotos = {};
+    productosCache.filter(p => p.categoria === cat).forEach((p, i) => {
+      const margen = margenPct(p.costo, p.precio_venta);
+      filas.push([
+        p.codigo_interno || p.codigo_fabrica || '',
+        p.descripcion,
+        Number(p.costo) || 0,
+        Number(p.precio_venta) || 0,
+        margen != null ? margen.toFixed(1) : '',
+        p.descuento_maximo_pct ?? '',
+        ''
+      ]);
+      if (p.imagen_base64) fotos[i] = p.imagen_base64;
+    });
+    return { categoria: cat, filas, fotos };
   });
-  await generarExcelConFotos(`Inventario_BM_${new Date().toISOString().slice(0, 10)}.xlsx`, filas, fotosPorFila);
+
+  const { filas, fotosPorFila, merges } = construirFilasAgrupadas(grupos);
+  await generarExcelConFotos(`Inventario_BM_${new Date().toISOString().slice(0, 10)}.xlsx`, filas, fotosPorFila, merges);
 }
 
 function encontrarProductoExistente(codigo, descripcion) {
@@ -2136,7 +2177,7 @@ async function abrirImportadorProductos() {
   openModal(`
     <div class="sheet-head"><h3>📥 Importar productos desde Excel</h3><button class="sheet-close" id="sheet-close">✕</button></div>
     <p style="color:var(--text-dim);font-size:13px;margin-top:-6px">
-      Un solo Excel con Descripción, Categoría, Precio Mayorista, Precio Venta y una foto pegada en la celda de cada fila.
+      Un Excel organizado en una tabla por categoría (Termotanques, Estufas, etc.), con Descripción, Precio Mayorista, Precio Venta y una foto pegada en la celda de cada fila.
       Los productos que ya tenés cargados (por código o por descripción exacta) se actualizan; el resto se crea como nuevo.
     </p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
@@ -2183,11 +2224,18 @@ async function analizarArchivoImportacion(archivo) {
   const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
   if (filas.length < 2) throw new Error('El archivo no tiene filas de datos.');
 
-  const encabezados = filas[0].map(normalizarTextoImport);
+  // La fila de encabezados ("Codigo", "Descripcion"...) se repite antes
+  // de cada tabla de categoría, pero las columnas están en el mismo
+  // orden en todas — alcanza con leer la primera que aparezca.
+  const filaEncabezado = filas.find(f => normalizarTextoImport(f[0]) === 'codigo');
+  if (!filaEncabezado) {
+    throw new Error('No encontré la fila de encabezados ("Codigo", "Descripcion"...) — usá la plantilla sin cambiar los encabezados.');
+  }
+  const encabezados = filaEncabezado.map(normalizarTextoImport);
   const idx = {
     codigo: encabezados.indexOf('codigo'),
     descripcion: encabezados.indexOf('descripcion'),
-    categoria: encabezados.indexOf('categoria'),
+    categoria: encabezados.indexOf('categoria'), // -1 en la plantilla nueva agrupada por tablas
     precioVenta: encabezados.indexOf('precio venta'),
     precioMayorista: encabezados.indexOf('precio mayorista'),
     descuentoMax: encabezados.indexOf('descuento maximo %')
@@ -2201,9 +2249,21 @@ async function analizarArchivoImportacion(archivo) {
   const categoriaDefault = CATEGORIAS_PRODUCTO[CATEGORIAS_PRODUCTO.length - 1];
 
   const filasProcesadas = [];
-  for (let i = 1; i < filas.length; i++) {
+  let categoriaActual = null; // se actualiza con el título de cada tabla ("TERMOTANQUES", "ESTUFAS"...)
+  for (let i = 0; i < filas.length; i++) {
     const fila = filas[i];
-    if (fila.every(c => c === '' || c == null)) continue;
+    if (fila.every(c => c === '' || c == null)) continue; // fila en blanco entre tablas
+
+    const primeraCelda = normalizarTextoImport(fila[0]);
+    if (primeraCelda === 'codigo') continue; // fila de encabezados de columna (se repite en cada tabla)
+
+    const restoVacio = fila.slice(1).every(c => c === '' || c == null);
+    if (restoVacio && fila[0]) {
+      // única celda con texto = título de la tabla de esa categoría
+      const cat = CATEGORIAS_PRODUCTO.find(c => normalizarTextoImport(c) === primeraCelda);
+      categoriaActual = cat || String(fila[0]).trim();
+      continue;
+    }
 
     const descripcion = String(fila[idx.descripcion] || '').trim();
     if (!descripcion) continue;
@@ -2214,7 +2274,10 @@ async function analizarArchivoImportacion(archivo) {
     const costo = costoRaw !== '' ? Number(costoRaw) : null;
     const descMaxRaw = idx.descuentoMax > -1 ? fila[idx.descuentoMax] : '';
     const descuento_maximo_pct = descMaxRaw !== '' ? Number(descMaxRaw) : null;
-    const categoriaRaw = idx.categoria > -1 ? String(fila[idx.categoria] || '').trim() : '';
+    // Categoría: si el archivo trae columna "Categoria" (formato viejo,
+    // una sola tabla) se usa esa; si no, la de la tabla donde está esta
+    // fila (título de sección, formato nuevo agrupado).
+    const categoriaRaw = idx.categoria > -1 ? String(fila[idx.categoria] || '').trim() : (categoriaActual || '');
     const catReconocida = CATEGORIAS_PRODUCTO.find(c => normalizarTextoImport(c) === normalizarTextoImport(categoriaRaw));
 
     const existente = encontrarProductoExistente(codigo, descripcion);

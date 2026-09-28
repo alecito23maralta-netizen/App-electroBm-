@@ -2820,7 +2820,7 @@ async function renderMiCaja() {
       </aside>
     </div>
   `;
-  $('#btn-nuevo-comprobante-caja').addEventListener('click', () => abrirFormComprobante(true));
+  $('#btn-nuevo-comprobante-caja').addEventListener('click', () => abrirFormComprobante({ origenCaja: true }));
   $('#btn-ingreso').addEventListener('click', () => abrirFormMovimientoCaja('ingreso'));
   $('#btn-egreso').addEventListener('click', () => abrirFormMovimientoCaja('egreso'));
   $('#btn-cerrar-caja').addEventListener('click', () => abrirFormCierreCaja(saldo));
@@ -2838,7 +2838,9 @@ async function renderMiCaja() {
             <td>${money(m.monto)}</td>
             <td>${metodoLabel(m.metodo_pago)}</td>
             <td>${fechaHora(m.created_at)}</td>
-            <td>${m.comprobante_id ? `<button class="icon-btn" data-ver-recibo="${m.comprobante_id}" title="Ver recibo">🧾</button>` : '—'}</td>
+            <td>${m.comprobante_id
+              ? `<button class="icon-btn" data-ver-recibo="${m.comprobante_id}" title="Ver recibo">🧾</button>`
+              : (m.tipo === 'ingreso' ? `<button class="icon-btn" data-generar-recibo="${m.id}" title="Generar recibo para este cobro">🧾+</button>` : '—')}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -2848,6 +2850,12 @@ async function renderMiCaja() {
       btn.addEventListener('click', async () => {
         const { data: comp } = await sb.from('comprobantes').select('*').eq('id', btn.dataset.verRecibo).single();
         if (comp) abrirVistaPreviaComprobante(comp);
+      });
+    });
+    movCont.querySelectorAll('[data-generar-recibo]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mov = movs.find(x => x.id === btn.dataset.generarRecibo);
+        if (mov) abrirFormComprobante({ origenCaja: true, movimientoExistente: mov });
       });
     });
   }
@@ -5455,11 +5463,13 @@ async function cargarVentasCreditoPendientes() {
   return pendientes.map(venta => ({ venta, abonadoPrevio: abonadoPorVenta[venta.id] || 0 }));
 }
 
-async function abrirFormComprobante(origenCaja) {
+async function abrirFormComprobante(opts = {}) {
+  const { origenCaja = false, movimientoExistente = null } = opts;
   const numeroSiguiente = comprobantesCache.length > 0 ? Math.max(...comprobantesCache.map(c => c.numero)) + 1 : 1;
   const ventasCredito = await cargarVentasCreditoPendientes();
   openModal(`
     <div class="sheet-head"><h3>Nuevo comprobante de pago</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    ${movimientoExistente ? `<p style="color:var(--text-dim);font-size:13px;margin-top:-6px">Generando el comprobante del ingreso: <strong style="color:var(--text)">${escapeHtml(movimientoExistente.concepto)}</strong> — ${money(movimientoExistente.monto)}</p>` : ''}
     <div class="grid-2">
       <div class="field"><label>N° comprobante</label><input value="#${String(numeroSiguiente).padStart(5, '0')}" disabled /></div>
       <div class="field"><label>Fecha</label><input type="date" id="f-comp-fecha" value="${new Date().toISOString().slice(0, 10)}" /></div>
@@ -5476,16 +5486,16 @@ async function abrirFormComprobante(origenCaja) {
     <div class="field" style="margin-top:10px"><label>N° de venta (opcional)</label><input id="f-comp-venta" placeholder="Ej: 235-5-2026" /></div>
     <div class="field" style="margin-top:10px"><label>Forma de pago</label>
       <select id="f-comp-forma">
-        <option value="efectivo">Efectivo</option>
-        <option value="transferencia">Transferencia</option>
-        <option value="qr">QR</option>
+        <option value="efectivo" ${(!movimientoExistente || movimientoExistente.metodo_pago === 'efectivo') ? 'selected' : ''}>Efectivo</option>
+        <option value="transferencia" ${movimientoExistente?.metodo_pago === 'transferencia' ? 'selected' : ''}>Transferencia</option>
+        <option value="qr" ${movimientoExistente?.metodo_pago === 'qr' ? 'selected' : ''}>QR</option>
         <option value="mixto">Mixto (Efectivo + Transferencia)</option>
       </select>
     </div>
-    <div class="field" style="margin-top:10px"><label>Total a pagar (Bs) *</label><input type="number" id="f-comp-total" min="0" step="0.01" required /></div>
+    <div class="field" style="margin-top:10px"><label>Total a pagar (Bs) *</label><input type="number" id="f-comp-total" min="0" step="0.01" value="${movimientoExistente ? movimientoExistente.monto : ''}" required /></div>
     <div class="grid-2" style="margin-top:10px">
-      <div class="field"><label>Recibido en efectivo (Bs)</label><input type="number" id="f-comp-efectivo" min="0" step="0.01" value="0" /></div>
-      <div class="field"><label>Recibido por transferencia (Bs)</label><input type="number" id="f-comp-transferido" min="0" step="0.01" value="0" /></div>
+      <div class="field"><label>Recibido en efectivo (Bs)</label><input type="number" id="f-comp-efectivo" min="0" step="0.01" value="${(movimientoExistente && movimientoExistente.metodo_pago === 'efectivo') ? movimientoExistente.monto : 0}" /></div>
+      <div class="field"><label>Recibido por transferencia (Bs)</label><input type="number" id="f-comp-transferido" min="0" step="0.01" value="${(movimientoExistente && movimientoExistente.metodo_pago !== 'efectivo') ? movimientoExistente.monto : 0}" /></div>
     </div>
     <div class="grid-2" id="comp-datos-transferencia" style="margin-top:10px; display:none">
       <div class="field"><label>Banco</label><input id="f-comp-banco" /></div>
@@ -5602,11 +5612,15 @@ async function abrirFormComprobante(origenCaja) {
     const monto_total = Number($('#f-comp-total').value || 0);
     if (!cliente_nombre || monto_total <= 0) { toast('Completá el cliente y el total a pagar', 'error'); return; }
 
-    const { data: sesionesAbiertas } = await sb.from('caja_sesiones').select('*').eq('usuario_id', profile.id).eq('estado', 'abierta').limit(1);
-    const sesionAbierta = sesionesAbiertas && sesionesAbiertas[0];
-    if (!sesionAbierta) {
-      toast('Primero abrí tu caja en Caja → Mi caja para poder generar el comprobante', 'error');
-      return;
+    let sesionAbiertaId = null;
+    if (!movimientoExistente) {
+      const { data: sesionesAbiertas } = await sb.from('caja_sesiones').select('*').eq('usuario_id', profile.id).eq('estado', 'abierta').limit(1);
+      const sesionAbierta = sesionesAbiertas && sesionesAbiertas[0];
+      if (!sesionAbierta) {
+        toast('Primero abrí tu caja en Caja → Mi caja para poder generar el comprobante', 'error');
+        return;
+      }
+      sesionAbiertaId = sesionAbierta.id;
     }
 
     const forma_pago = $('#f-comp-forma').value;
@@ -5625,17 +5639,24 @@ async function abrirFormComprobante(origenCaja) {
     }
     const saldo_pendiente = ventaSeleccionada ? Math.max(0, saldoActualVenta - montoRecibido) : Math.max(0, monto_total - monto_efectivo - monto_transferido);
 
-    // Movimiento de caja enlazado (solo por lo efectivamente recibido, no el saldo pendiente)
-    const { data: movimiento, error: eMov } = await sb.from('caja_movimientos').insert({
-      sesion_id: sesionAbierta.id,
-      tipo: 'ingreso',
-      concepto: ventaSeleccionada ? `Abono venta a crédito #${ventaSeleccionada.venta.numero} - ${cliente_nombre}` : `Comprobante — ${cliente_nombre}`,
-      monto: montoRecibido > 0 ? montoRecibido : monto_total,
-      metodo_pago: forma_pago === 'mixto' ? 'efectivo' : forma_pago,
-      usuario_id: profile.id,
-      ...(ventaSeleccionada ? { venta_id: ventaSeleccionada.venta.id } : {})
-    }).select().single();
-    if (eMov) { toast('Error al registrar el movimiento de caja: ' + eMov.message, 'error'); return; }
+    // Movimiento de caja enlazado (solo por lo efectivamente recibido, no el
+    // saldo pendiente) — si venimos de "Generar recibo" sobre un ingreso ya
+    // registrado, se reutiliza ese mismo movimiento en vez de crear uno
+    // nuevo (si no, se estaría contando la plata recibida dos veces).
+    let movimiento = movimientoExistente;
+    if (!movimiento) {
+      const { data: nuevoMovimiento, error: eMov } = await sb.from('caja_movimientos').insert({
+        sesion_id: sesionAbiertaId,
+        tipo: 'ingreso',
+        concepto: ventaSeleccionada ? `Abono venta a crédito #${ventaSeleccionada.venta.numero} - ${cliente_nombre}` : `Comprobante — ${cliente_nombre}`,
+        monto: montoRecibido > 0 ? montoRecibido : monto_total,
+        metodo_pago: forma_pago === 'mixto' ? 'efectivo' : forma_pago,
+        usuario_id: profile.id,
+        ...(ventaSeleccionada ? { venta_id: ventaSeleccionada.venta.id } : {})
+      }).select().single();
+      if (eMov) { toast('Error al registrar el movimiento de caja: ' + eMov.message, 'error'); return; }
+      movimiento = nuevoMovimiento;
+    }
 
     if (ventaSeleccionada) {
       const { error: eAbono } = await sb.from('venta_abonos').insert({

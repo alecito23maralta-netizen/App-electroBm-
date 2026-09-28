@@ -5172,14 +5172,35 @@ function renderListaComprobantes() {
   });
 }
 
-function abrirFormComprobante() {
+// Ventas a crédito, autorizadas y todavía no cobradas del todo — las
+// mismas que aparecen en Caja → Autorizar con el botón "Abonar" — junto
+// con lo que ya se les abonó, para poder enlazarlas desde acá.
+async function cargarVentasCreditoPendientes() {
+  const { data: ventas } = await sb.from('ventas').select('*').eq('cobrado', false);
+  const pendientes = (ventas || []).filter(v => v.condicion_pago === 'credito' && v.autorizada);
+  if (pendientes.length === 0) return [];
+  const { data: abonos } = await sb.from('venta_abonos').select('venta_id, monto').in('venta_id', pendientes.map(v => v.id));
+  const abonadoPorVenta = {};
+  (abonos || []).forEach(a => { abonadoPorVenta[a.venta_id] = (abonadoPorVenta[a.venta_id] || 0) + Number(a.monto); });
+  return pendientes.map(venta => ({ venta, abonadoPrevio: abonadoPorVenta[venta.id] || 0 }));
+}
+
+async function abrirFormComprobante() {
   const numeroSiguiente = comprobantesCache.length > 0 ? Math.max(...comprobantesCache.map(c => c.numero)) + 1 : 1;
+  const ventasCredito = await cargarVentasCreditoPendientes();
   openModal(`
     <div class="sheet-head"><h3>Nuevo comprobante de pago</h3><button class="sheet-close" id="sheet-close">✕</button></div>
     <div class="grid-2">
       <div class="field"><label>N° comprobante</label><input value="#${String(numeroSiguiente).padStart(5, '0')}" disabled /></div>
       <div class="field"><label>Fecha</label><input type="date" id="f-comp-fecha" value="${new Date().toISOString().slice(0, 10)}" /></div>
     </div>
+    ${ventasCredito.length > 0 ? `
+    <div class="field" style="margin-top:10px"><label>Venta a crédito a abonar (opcional)<br><span style="font-weight:400;color:var(--text-faint)">enlaza este comprobante como abono a cuenta de esa venta</span></label>
+      <select id="f-comp-venta-credito">
+        <option value="">— Comprobante libre (sin venta asociada) —</option>
+        ${ventasCredito.map(({ venta, abonadoPrevio }) => `<option value="${venta.id}">#${venta.numero} — ${escapeHtml(venta.cliente_nombre)} — Saldo: ${money(Math.max(0, Number(venta.total) - abonadoPrevio))}</option>`).join('')}
+      </select>
+    </div>` : ''}
     <div class="field" style="margin-top:10px"><label>Recibimos de (cliente) *</label><input id="f-comp-cliente" list="clientes-datalist" required /></div>
     <datalist id="clientes-datalist">${clientesCache.map(c => `<option value="${escapeHtml(c.nombre)}"></option>`).join('')}</datalist>
     <div class="field" style="margin-top:10px"><label>N° de venta (opcional)</label><input id="f-comp-venta" placeholder="Ej: 235-5-2026" /></div>
@@ -5216,6 +5237,27 @@ function abrirFormComprobante() {
   `);
   $('#sheet-close').addEventListener('click', closeModal);
   $('#btn-cancelar').addEventListener('click', closeModal);
+
+  // Cuando se enlaza una venta a crédito: cliente, N° de venta y total
+  // quedan fijos a esa venta (no se pueden editar a mano), y el saldo
+  // tiene en cuenta lo que ya se le había abonado antes.
+  let ventaSeleccionada = null;
+  $('#f-comp-venta-credito')?.addEventListener('change', (e) => {
+    const id = e.target.value;
+    ventaSeleccionada = id ? ventasCredito.find(x => x.venta.id === id) : null;
+    const campoCliente = $('#f-comp-cliente'), campoVenta = $('#f-comp-venta'), campoTotal = $('#f-comp-total');
+    if (ventaSeleccionada) {
+      const { venta } = ventaSeleccionada;
+      campoCliente.value = venta.cliente_nombre; campoCliente.disabled = true;
+      campoVenta.value = `#${venta.numero}`; campoVenta.disabled = true;
+      campoTotal.value = venta.total; campoTotal.disabled = true;
+    } else {
+      campoCliente.value = ''; campoCliente.disabled = false;
+      campoVenta.value = ''; campoVenta.disabled = false;
+      campoTotal.value = ''; campoTotal.disabled = false;
+    }
+    actualizarSaldo();
+  });
 
   const firmaCanvas = $('#firma-canvas');
   const firmaCtx = firmaCanvas.getContext('2d');
@@ -5275,7 +5317,8 @@ function abrirFormComprobante() {
     const total = Number($('#f-comp-total').value || 0);
     const ef = Number($('#f-comp-efectivo').value || 0);
     const tr = Number($('#f-comp-transferido').value || 0);
-    const saldo = Math.max(0, total - ef - tr);
+    const abonadoPrevio = ventaSeleccionada ? ventaSeleccionada.abonadoPrevio : 0;
+    const saldo = Math.max(0, total - abonadoPrevio - ef - tr);
     $('#comp-saldo-preview').textContent = money(saldo);
   }
   $('#f-comp-forma').addEventListener('change', () => { actualizarVisibilidadForma(); actualizarSaldo(); });
@@ -5299,19 +5342,46 @@ function abrirFormComprobante() {
     const forma_pago = $('#f-comp-forma').value;
     const monto_efectivo = (forma_pago === 'transferencia' || forma_pago === 'qr') ? 0 : Number($('#f-comp-efectivo').value || 0);
     const monto_transferido = forma_pago === 'efectivo' ? 0 : Number($('#f-comp-transferido').value || 0);
-    const saldo_pendiente = Math.max(0, monto_total - monto_efectivo - monto_transferido);
     const montoRecibido = monto_efectivo + monto_transferido;
+
+    // Si está enlazado a una venta a crédito, el saldo pendiente tiene que
+    // descontar también lo que ya se le había abonado antes — no alcanza
+    // con total - lo recibido ahora.
+    let saldoActualVenta = null;
+    if (ventaSeleccionada) {
+      saldoActualVenta = Math.max(0, Number(ventaSeleccionada.venta.total) - ventaSeleccionada.abonadoPrevio);
+      if (montoRecibido <= 0) { toast('Ingresá el monto recibido de este abono', 'error'); return; }
+      if (montoRecibido > saldoActualVenta + 0.01) { toast(`El pago no puede superar el saldo pendiente de la venta (${money(saldoActualVenta)})`, 'error'); return; }
+    }
+    const saldo_pendiente = ventaSeleccionada ? Math.max(0, saldoActualVenta - montoRecibido) : Math.max(0, monto_total - monto_efectivo - monto_transferido);
 
     // Movimiento de caja enlazado (solo por lo efectivamente recibido, no el saldo pendiente)
     const { data: movimiento, error: eMov } = await sb.from('caja_movimientos').insert({
       sesion_id: sesionAbierta.id,
       tipo: 'ingreso',
-      concepto: `Comprobante — ${cliente_nombre}`,
+      concepto: ventaSeleccionada ? `Abono venta a crédito #${ventaSeleccionada.venta.numero} - ${cliente_nombre}` : `Comprobante — ${cliente_nombre}`,
       monto: montoRecibido > 0 ? montoRecibido : monto_total,
       metodo_pago: forma_pago === 'mixto' ? 'efectivo' : forma_pago,
-      usuario_id: profile.id
+      usuario_id: profile.id,
+      ...(ventaSeleccionada ? { venta_id: ventaSeleccionada.venta.id } : {})
     }).select().single();
     if (eMov) { toast('Error al registrar el movimiento de caja: ' + eMov.message, 'error'); return; }
+
+    if (ventaSeleccionada) {
+      const { error: eAbono } = await sb.from('venta_abonos').insert({
+        venta_id: ventaSeleccionada.venta.id, monto: montoRecibido, metodo_pago: forma_pago, usuario_id: profile.id, caja_movimiento_id: movimiento.id
+      });
+      if (eAbono) { toast('Error al registrar el abono: ' + eAbono.message, 'error'); return; }
+
+      if (saldo_pendiente <= 0.01) {
+        const metodoVenta = forma_pago === 'mixto' ? (monto_efectivo > 0 ? 'efectivo' : 'transferencia') : forma_pago;
+        await sb.from('ventas').update({ cobrado: true, metodo_pago: metodoVenta }).eq('id', ventaSeleccionada.venta.id);
+        await Promise.all((ventaSeleccionada.venta.items || [])
+          .filter(it => it.producto_id)
+          .map(it => ajustarStock(it.producto_id, -it.cantidad, `Venta #${ventaSeleccionada.venta.numero} (cobrada)`)));
+        await cargarProductos();
+      }
+    }
 
     const payload = {
       fecha: $('#f-comp-fecha').value,
@@ -5332,7 +5402,7 @@ function abrirFormComprobante() {
     await sb.from('caja_movimientos').update({ comprobante_id: data.id }).eq('id', movimiento.id);
 
     await guardarClienteSiNoExiste(cliente_nombre, '', '', '');
-    toast('Comprobante generado y enlazado a tu caja');
+    toast(ventaSeleccionada ? 'Abono registrado y comprobante generado' : 'Comprobante generado y enlazado a tu caja');
     closeModal();
     await cargarComprobantes();
     switchView('comprobantes');

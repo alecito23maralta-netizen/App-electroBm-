@@ -18,6 +18,7 @@ let intervaloBotPendientes = null;  // BAM re-revisa autorizaciones/cobros pendi
 let intervaloBotPrecios = null;     // BAM re-revisa cambios de precio (admin y vendedores)
 let intervaloBotGarantias = null;   // BAM re-revisa garantías por vencer (solo admin)
 let intervaloBotCobranza = null;    // BAM re-revisa ventas a crédito por cobrar (solo admin)
+let intervaloBamRecordatorios = null; // BAM re-revisa la agenda de recordatorios (cada usuario, cada 5 min)
 let vistaActual = 'cotizaciones';
 let canalChatGlobal = null;
 let sesionCajaActual = null;
@@ -203,7 +204,7 @@ async function iniciarApp() {
   // Genera el informe diario y revisa la agenda de recordatorios ya al
   // entrar (silencioso, sin burbuja) para que estén listos en la
   // pestaña BAM del Chat apenas el usuario la abra.
-  setTimeout(() => { asegurarInformeDiarioBam(); avisarRecordatoriosPendientesBam(); }, 6000);
+  setTimeout(() => { asegurarInformeDiarioBam(); revisarRecordatoriosBam(); }, 6000);
 
   // BAM vuelve a revisar autorizaciones/cobros pendientes, cambios de
   // precio, garantías por vencer y cobranzas de crédito cada 20 min
@@ -216,6 +217,10 @@ async function iniciarApp() {
   intervaloBotGarantias = setInterval(mostrarBotGarantiasPorVencer, 20 * 60 * 1000);
   clearInterval(intervaloBotCobranza);
   intervaloBotCobranza = setInterval(mostrarBotCobranzaProxima, 20 * 60 * 1000);
+  // Los recordatorios de la agenda se revisan más seguido (cada 5 min)
+  // porque el aviso "30 min antes" necesita más precisión que el resto.
+  clearInterval(intervaloBamRecordatorios);
+  intervaloBamRecordatorios = setInterval(revisarRecordatoriosBam, 5 * 60 * 1000);
 
   if (profile.rol !== 'admin') {
     mostrarPopupPromosVendedor();
@@ -5511,24 +5516,147 @@ async function asegurarInformeDiarioBam() {
   return !error;
 }
 
-// Revisa la agenda del usuario y postea (una sola vez, marcando
-// avisado=true) un mensaje de BAM por cada recordatorio cuya fecha ya
-// llegó o pasó y todavía no se avisó.
-async function avisarRecordatoriosPendientesBam() {
-  const hoyStr = new Date().toISOString().slice(0, 10);
+// Los recordatorios avisan en 3 momentos fijos: la noche anterior a
+// las 20:00, la mañana del día acordado a las 07:00, y — si se cargó
+// una hora puntual — 30 minutos antes de esa hora.
+const BAM_HORA_AVISO_NOCHE = 20;
+const BAM_HORA_AVISO_MANANA = 7;
+
+// 'YYYY-MM-DD' + hora/minutos -> Date en horario local (evita el lío de
+// zonas horarias de parsear "YYYY-MM-DDTHH:mm" directo, que en algunos
+// navegadores lo toma como UTC).
+function fechaHoraLocal(fechaStr, horas, minutos = 0) {
+  const [y, m, d] = fechaStr.split('-').map(Number);
+  return new Date(y, m - 1, d, horas, minutos, 0, 0);
+}
+
+// Reproduce el timbre + vibración de siempre y, si hay permiso,
+// también manda la notificación del sistema (barra de Android o del
+// navegador) — así el aviso "suena" aunque no estés mirando el chat.
+async function avisarNotificacionSistemaBam(titulo, cuerpo) {
+  sonarNotificacion();
+  const idNumerico = Math.floor(Math.random() * 2147483647);
+  if (notifLocalNativaDisponible()) {
+    try {
+      await window.Capacitor.Plugins.LocalNotifications.schedule({
+        notifications: [{ id: idNumerico, title: titulo, body: cuerpo, schedule: { at: new Date(Date.now() + 100) } }]
+      });
+    } catch (e) { /* sin permiso todavía, o el usuario lo negó */ }
+    return;
+  }
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(titulo, { body: cuerpo, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'bam-recordatorio' });
+    } else {
+      new Notification(titulo, { body: cuerpo, icon: 'icons/icon-192.png' });
+    }
+  } catch (e) { /* algunos navegadores bloquean esto en ciertos contextos */ }
+}
+
+// Hash simple y determinístico (uuid del recordatorio + qué momento) ->
+// entero, para poder programar Y CANCELAR notificaciones nativas del
+// mismo recordatorio (Android exige un id numérico por notificación).
+function hashIdNumerico(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+  return Math.abs(h) % 2147483647;
+}
+function idsNotifNativaRecordatorio(r) {
+  return {
+    noche: hashIdNumerico(r.id + '-noche'),
+    manana: hashIdNumerico(r.id + '-manana'),
+    treintaMin: hashIdNumerico(r.id + '-30min')
+  };
+}
+
+// Programa las 3 alarmas nativas de Android para que suenen aunque la
+// app esté cerrada (requiere el APK — @capacitor/local-notifications ya
+// viene compilado ahí, se usa el mismo plugin que las notificaciones de
+// chat). En la web/PWA no hay forma confiable de avisar con la app
+// cerrada; ahí el aviso corre por sondeo cada 5 min (revisarRecordatoriosBam),
+// que solo funciona mientras la app está abierta.
+async function programarNotificacionesNativasRecordatorio(r) {
+  if (!notifLocalNativaDisponible()) return;
+  const ids = idsNotifNativaRecordatorio(r);
+  const ahora = new Date();
+  const notificaciones = [];
+
+  const nocheAntes = fechaHoraLocal(r.fecha, BAM_HORA_AVISO_NOCHE, 0);
+  nocheAntes.setDate(nocheAntes.getDate() - 1);
+  if (nocheAntes > ahora) notificaciones.push({ id: ids.noche, title: '📅 BAM te recuerda (mañana)', body: r.texto, schedule: { at: nocheAntes } });
+
+  const mananaDia = fechaHoraLocal(r.fecha, BAM_HORA_AVISO_MANANA, 0);
+  if (mananaDia > ahora) notificaciones.push({ id: ids.manana, title: '📅 BAM te recuerda (hoy)', body: r.texto, schedule: { at: mananaDia } });
+
+  if (r.hora) {
+    const [hh, mm] = r.hora.split(':').map(Number);
+    const treintaMinAntes = new Date(fechaHoraLocal(r.fecha, hh, mm).getTime() - 30 * 60 * 1000);
+    if (treintaMinAntes > ahora) notificaciones.push({ id: ids.treintaMin, title: '📅 BAM te recuerda (en 30 min)', body: r.texto, schedule: { at: treintaMinAntes } });
+  }
+
+  if (notificaciones.length === 0) return;
+  try { await window.Capacitor.Plugins.LocalNotifications.schedule({ notifications: notificaciones }); }
+  catch (e) { /* sin permiso todavía, o el dispositivo lo rechazó */ }
+}
+
+async function cancelarNotificacionesNativasRecordatorio(r) {
+  if (!notifLocalNativaDisponible()) return;
+  const ids = idsNotifNativaRecordatorio(r);
+  try {
+    await window.Capacitor.Plugins.LocalNotifications.cancel({
+      notifications: [{ id: ids.noche }, { id: ids.manana }, { id: ids.treintaMin }]
+    });
+  } catch (e) { /* no estaba programada, no pasa nada */ }
+}
+
+// Revisa la agenda del usuario y dispara (cada uno una sola vez, con su
+// propio flag) los 3 avisos de cada recordatorio pendiente que ya
+// llegó a su momento: la noche anterior, la mañana del día acordado, y
+// 30 min antes de la hora puesta (si se cargó una). Esto es lo que
+// cubre la web/PWA (donde no se puede programar una alarma real a
+// futuro) y también sirve de respaldo en el APK si la notificación
+// nativa no llegó a dispararse (permiso denegado, etc).
+async function revisarRecordatoriosBam() {
   const { data: pendientes } = await sb.from('bam_recordatorios').select('*')
-    .eq('usuario_id', profile.id).eq('cumplido', false).eq('avisado', false).lte('fecha', hoyStr);
+    .eq('usuario_id', profile.id).eq('cumplido', false);
   if (!pendientes || pendientes.length === 0) return false;
 
+  const ahora = new Date();
+  const hoyStr = new Date().toISOString().slice(0, 10);
+  let huboAviso = false;
+
   for (const r of pendientes) {
-    await sb.from('bam_mensajes').insert({
-      usuario_id: profile.id, tipo: 'recordatorio',
-      contenido: `📅 <strong>Recordatorio</strong><br>${escapeHtml(r.texto)}`,
-      fecha: hoyStr
-    });
-    await sb.from('bam_recordatorios').update({ avisado: true }).eq('id', r.id);
+    const avisos = [];
+
+    if (!r.avisado_noche) {
+      const nocheAntes = fechaHoraLocal(r.fecha, BAM_HORA_AVISO_NOCHE, 0);
+      nocheAntes.setDate(nocheAntes.getDate() - 1);
+      if (ahora >= nocheAntes) avisos.push({ campo: 'avisado_noche', titulo: '📅 BAM te recuerda (mañana)' });
+    }
+    if (!r.avisado_manana) {
+      const mananaDia = fechaHoraLocal(r.fecha, BAM_HORA_AVISO_MANANA, 0);
+      if (ahora >= mananaDia) avisos.push({ campo: 'avisado_manana', titulo: '📅 BAM te recuerda (hoy)' });
+    }
+    if (r.hora && !r.avisado_30min) {
+      const [hh, mm] = r.hora.split(':').map(Number);
+      const treintaMinAntes = new Date(fechaHoraLocal(r.fecha, hh, mm).getTime() - 30 * 60 * 1000);
+      if (ahora >= treintaMinAntes) avisos.push({ campo: 'avisado_30min', titulo: '📅 BAM te recuerda (en 30 min)' });
+    }
+
+    for (const aviso of avisos) {
+      await sb.from('bam_mensajes').insert({
+        usuario_id: profile.id, tipo: 'recordatorio',
+        contenido: `${aviso.titulo}<br>${escapeHtml(r.texto)}`,
+        fecha: hoyStr
+      });
+      await sb.from('bam_recordatorios').update({ [aviso.campo]: true }).eq('id', r.id);
+      avisarNotificacionSistemaBam(aviso.titulo, r.texto);
+      huboAviso = true;
+    }
   }
-  return true;
+  return huboAviso;
 }
 
 async function cargarBamMensajes() {
@@ -5567,7 +5695,7 @@ async function renderChatBam() {
   $('#btn-agenda-bam').addEventListener('click', () => abrirAgendaBam());
 
   await asegurarInformeDiarioBam();
-  await avisarRecordatoriosPendientesBam();
+  await revisarRecordatoriosBam();
   await cargarBamMensajes();
 
   const msgCont = $('#chat-mensajes');
@@ -5587,11 +5715,15 @@ async function cargarRecordatoriosBam() {
 
 async function abrirAgendaBam() {
   await cargarRecordatoriosBam();
+  pedirPermisoNotifChat(); // por si el usuario nunca tocó el toggle de notificaciones del chat
   openModal(`
     <div class="sheet-head"><h3>📅 Agenda con BAM</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <p style="font-size:13px;color:var(--text-dim);margin-top:-6px">Cargá un recordatorio y BAM te avisa en el chat cuando llegue la fecha.</p>
+    <p style="font-size:13px;color:var(--text-dim);margin-top:-6px">Cargá un recordatorio y BAM te avisa: la noche anterior, a las 7am del día, y 30 min antes si cargás una hora.</p>
     <div class="field" style="margin-top:10px"><label>Recordatorio *</label><input id="f-agenda-texto" placeholder="Ej: Llamar a Juan Pérez por su cuota" /></div>
-    <div class="field" style="margin-top:10px"><label>Fecha *</label><input type="date" id="f-agenda-fecha" value="${new Date().toISOString().slice(0, 10)}" /></div>
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Fecha *</label><input type="date" id="f-agenda-fecha" value="${new Date().toISOString().slice(0, 10)}" /></div>
+      <div class="field"><label>Hora (opcional)<br><span style="font-weight:400;color:var(--text-faint)">para el aviso de 30 min antes</span></label><input type="time" id="f-agenda-hora" /></div>
+    </div>
     <div class="form-actions"><button class="btn btn-primary" id="btn-agregar-recordatorio">+ Agregar a la agenda</button></div>
     <div id="agenda-lista" style="margin-top:16px"></div>
   `);
@@ -5613,7 +5745,7 @@ async function abrirAgendaBam() {
           return `<tr>
             <td><input type="checkbox" data-cumplido-id="${r.id}" ${r.cumplido ? 'checked' : ''} title="Marcar cumplido" /></td>
             <td style="${r.cumplido ? 'text-decoration:line-through;color:var(--text-faint)' : ''}">${escapeHtml(r.texto)}</td>
-            <td style="white-space:nowrap">${fecha(r.fecha)} <span style="color:var(--text-faint);font-size:11px">(${cuando})</span></td>
+            <td style="white-space:nowrap">${fecha(r.fecha)}${r.hora ? ' ' + r.hora.slice(0, 5) : ''} <span style="color:var(--text-faint);font-size:11px">(${cuando})</span></td>
             <td><button class="icon-btn" data-eliminar-id="${r.id}" title="Eliminar">🗑</button></td>
           </tr>`;
         }).join('')}
@@ -5622,7 +5754,9 @@ async function abrirAgendaBam() {
 
     cont.querySelectorAll('[data-cumplido-id]').forEach(chk => {
       chk.addEventListener('change', async (e) => {
+        const r = bamRecordatoriosCache.find(x => x.id === chk.dataset.cumplidoId);
         await sb.from('bam_recordatorios').update({ cumplido: e.target.checked }).eq('id', chk.dataset.cumplidoId);
+        if (e.target.checked && r) await cancelarNotificacionesNativasRecordatorio(r);
         await cargarRecordatoriosBam();
         renderListaAgenda();
       });
@@ -5630,7 +5764,9 @@ async function abrirAgendaBam() {
     cont.querySelectorAll('[data-eliminar-id]').forEach(btn => {
       btn.addEventListener('click', async () => {
         if (!confirm('¿Eliminar este recordatorio?')) return;
+        const r = bamRecordatoriosCache.find(x => x.id === btn.dataset.eliminarId);
         await sb.from('bam_recordatorios').delete().eq('id', btn.dataset.eliminarId);
+        if (r) await cancelarNotificacionesNativasRecordatorio(r);
         await cargarRecordatoriosBam();
         renderListaAgenda();
       });
@@ -5641,10 +5777,13 @@ async function abrirAgendaBam() {
   $('#btn-agregar-recordatorio').addEventListener('click', async () => {
     const texto = $('#f-agenda-texto').value.trim();
     const fechaStr = $('#f-agenda-fecha').value;
+    const horaStr = $('#f-agenda-hora').value || null;
     if (!texto || !fechaStr) { toast('Completá el recordatorio y la fecha', 'error'); return; }
-    const { error } = await sb.from('bam_recordatorios').insert({ usuario_id: profile.id, texto, fecha: fechaStr });
+    const { data, error } = await sb.from('bam_recordatorios').insert({ usuario_id: profile.id, texto, fecha: fechaStr, hora: horaStr }).select().single();
     if (error) { toast('Error al guardar: ' + error.message, 'error'); return; }
+    if (data) await programarNotificacionesNativasRecordatorio(data);
     $('#f-agenda-texto').value = '';
+    $('#f-agenda-hora').value = '';
     await cargarRecordatoriosBam();
     renderListaAgenda();
     toast('Recordatorio agregado', 'success');

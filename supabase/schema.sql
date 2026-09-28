@@ -937,3 +937,25 @@ create policy "bam_mensajes_all" on public.bam_mensajes
 drop policy if exists "bam_recordatorios_all" on public.bam_recordatorios;
 create policy "bam_recordatorios_all" on public.bam_recordatorios
   for all using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+-- ============================================================
+-- ACTUALIZACIÓN: recordatorios de la agenda con BAM ahora avisan en
+-- 3 momentos (antes solo se avisaba una vez, al llegar la fecha):
+--   1) la noche anterior (20:00)
+--   2) la mañana del día acordado (07:00)
+--   3) 30 minutos antes de la hora puesta en la agenda (si se cargó
+--      una hora — el campo "hora" es opcional, así los recordatorios
+--      viejos sin hora siguen avisando los primeros dos momentos)
+-- Se reemplaza el único flag "avisado" por uno por momento, para que
+-- cada aviso se dispare una sola vez.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.bam_recordatorios add column if not exists hora time;
+alter table public.bam_recordatorios add column if not exists avisado_noche boolean not null default false;
+alter table public.bam_recordatorios add column if not exists avisado_manana boolean not null default false;
+alter table public.bam_recordatorios add column if not exists avisado_30min boolean not null default false;
+
+update public.bam_recordatorios set avisado_noche = true, avisado_manana = true, avisado_30min = true
+  where avisado = true;
+
+alter table public.bam_recordatorios drop column if exists avisado;

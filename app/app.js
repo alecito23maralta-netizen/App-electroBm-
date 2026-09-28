@@ -2880,16 +2880,28 @@ async function renderMiCaja() {
 async function eliminarMovimientoCaja(mov) {
   if (!mov) return;
 
-  let abono = null;
-  if (mov.comprobante_id) {
-    const { data: abonos } = await sb.from('venta_abonos').select('*').eq('caja_movimiento_id', mov.id);
-    abono = abonos && abonos[0];
-  }
+  // Se busca por la relación inversa (qué abonos/comprobantes apuntan A
+  // este movimiento) en vez de confiar en mov.comprobante_id — así se
+  // atrapa cualquier comprobante viejo que haya quedado enlazado a este
+  // movimiento sin que ese campo lo reflejara (si no, el borrado se
+  // topa con la restricción de clave foránea y queda a mitad de camino).
+  const [{ data: abonosLigados }, { data: comprobantesLigados }] = await Promise.all([
+    sb.from('venta_abonos').select('*').eq('caja_movimiento_id', mov.id),
+    sb.from('comprobantes').select('id').eq('caja_movimiento_id', mov.id)
+  ]);
+  const abono = abonosLigados && abonosLigados[0];
+  // Unión de las dos direcciones: el comprobante que mov.comprobante_id
+  // dice que tiene, más cualquier comprobante que a SU VEZ apunte a este
+  // movimiento por caja_movimiento_id — pueden haber quedado
+  // desincronizados en algún momento.
+  const idsComprobantes = new Set((comprobantesLigados || []).map(c => c.id));
+  if (mov.comprobante_id) idsComprobantes.add(mov.comprobante_id);
+  const tieneComprobante = idsComprobantes.size > 0;
 
   let mensaje = '¿Seguro que querés eliminar este movimiento de caja? Esta acción no se puede deshacer.';
   if (abono) {
     mensaje = 'Este movimiento tiene un comprobante y un abono de venta a crédito enlazados — se van a borrar los tres juntos. Si la venta había quedado marcada como cobrada por este abono, se revierte y se devuelve el stock descontado. Esta acción no se puede deshacer. ¿Continuar?';
-  } else if (mov.comprobante_id) {
+  } else if (tieneComprobante) {
     mensaje = 'Este movimiento tiene un comprobante generado — se va a borrar junto con el movimiento. Esta acción no se puede deshacer. ¿Continuar?';
   }
   if (!confirm(mensaje)) return;
@@ -2912,14 +2924,14 @@ async function eliminarMovimientoCaja(mov) {
     }
   }
 
-  if (mov.comprobante_id) {
-    const { error: eComp } = await sb.from('comprobantes').delete().eq('id', mov.comprobante_id);
+  if (tieneComprobante) {
+    const { error: eComp } = await sb.from('comprobantes').delete().in('id', Array.from(idsComprobantes));
     if (eComp) { toast('Error al borrar el comprobante: ' + eComp.message, 'error'); return; }
   }
 
   const { error } = await sb.from('caja_movimientos').delete().eq('id', mov.id);
   if (error) { toast('Error al eliminar: ' + error.message, 'error'); return; }
-  toast('Movimiento eliminado' + (abono ? ' junto con su abono y comprobante' : (mov.comprobante_id ? ' junto con su comprobante' : '')));
+  toast('Movimiento eliminado' + (abono ? ' junto con su abono y comprobante' : (tieneComprobante ? ' junto con su comprobante' : '')));
   renderCaja();
 }
 

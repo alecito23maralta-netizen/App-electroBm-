@@ -844,3 +844,46 @@ create policy "lotes_costos_all" on public.lotes_costos
 drop policy if exists "items_costos_all" on public.items_costos;
 create policy "items_costos_all" on public.items_costos
   for all using (public.is_admin()) with check (public.is_admin());
+
+-- ============================================================
+-- ACTUALIZACIÓN: subgrupo "Rotación" dentro de Inventario — vas
+-- subiendo las planchas de pedido (u otra planilla con Código y
+-- Cantidad) una por una y quedan en un historial acumulado, para ver
+-- qué mercadería sale más y cuándo. Cada importación queda en
+-- importaciones_rotacion; cada línea (código + cantidad + fecha) en
+-- rotacion_items, con producto_id enlazado cuando el código coincide
+-- con un producto ya cargado en Inventario (en ese caso la
+-- descripción que se muestra es la del producto real, no la del
+-- archivo).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.importaciones_rotacion (
+  id uuid primary key default gen_random_uuid(),
+  nombre_archivo text not null,
+  mes text not null,
+  lineas integer not null default 0,
+  usuario_id uuid references public.profiles (id),
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.rotacion_items (
+  id uuid primary key default gen_random_uuid(),
+  importacion_id uuid not null references public.importaciones_rotacion (id) on delete cascade,
+  codigo text not null,
+  descripcion text not null default '',
+  cantidad numeric(12,2) not null default 0,
+  fecha date not null,
+  producto_id uuid references public.productos (id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.importaciones_rotacion enable row level security;
+alter table public.rotacion_items enable row level security;
+
+drop policy if exists "importaciones_rotacion_all" on public.importaciones_rotacion;
+create policy "importaciones_rotacion_all" on public.importaciones_rotacion
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "rotacion_items_all" on public.rotacion_items;
+create policy "rotacion_items_all" on public.rotacion_items
+  for all using (public.is_admin()) with check (public.is_admin());

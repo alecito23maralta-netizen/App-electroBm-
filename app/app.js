@@ -1264,6 +1264,9 @@ let loteCostosAbierto = null;
 let itemsCostosCache = [];
 let catalogoBusqueda = '';
 let catalogoCategoria = 'todas';
+let importacionesRotacionCache = [];
+let rotacionItemsCache = [];
+let rotacionMesFiltro = 'todos';
 
 async function renderInventario() {
   await cargarProductos();
@@ -1284,7 +1287,8 @@ async function renderInventario() {
       <button class="tab-btn ${tabInventario === 'catalogo' ? 'active' : ''}" id="tab-catalogo">Catálogo</button>
       <button class="tab-btn ${tabInventario === 'movimientos' ? 'active' : ''}" id="tab-movimientos">Movimientos</button>
       ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>
-      <button class="tab-btn ${tabInventario === 'costos' ? 'active' : ''}" id="tab-costos">💰 Costos</button>` : ''}
+      <button class="tab-btn ${tabInventario === 'costos' ? 'active' : ''}" id="tab-costos">💰 Costos</button>
+      <button class="tab-btn ${tabInventario === 'rotacion' ? 'active' : ''}" id="tab-rotacion">🔄 Rotación</button>` : ''}
     </div>
     <div id="inv-content"></div>
   `;
@@ -1293,6 +1297,7 @@ async function renderInventario() {
     $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
     $('#tab-rentabilidad').addEventListener('click', () => { tabInventario = 'rentabilidad'; renderInventario(); });
     $('#tab-costos').addEventListener('click', () => { tabInventario = 'costos'; renderInventario(); });
+    $('#tab-rotacion').addEventListener('click', () => { tabInventario = 'rotacion'; renderInventario(); });
   }
   $('#tab-catalogo').addEventListener('click', () => { tabInventario = 'catalogo'; renderInventario(); });
   $('#tab-movimientos').addEventListener('click', () => { tabInventario = 'movimientos'; renderInventario(); });
@@ -1301,6 +1306,7 @@ async function renderInventario() {
   else if (tabInventario === 'movimientos') renderMovimientosInventario();
   else if (tabInventario === 'rentabilidad' && profile.rol === 'admin') renderRentabilidad();
   else if (tabInventario === 'costos' && profile.rol === 'admin') renderCostos();
+  else if (tabInventario === 'rotacion' && profile.rol === 'admin') renderRotacion();
 }
 
 function celdaMargenHtml(p) {
@@ -1783,6 +1789,265 @@ function abrirFormItemCosto(existing) {
     else itemsCostosCache.push(resp.data);
     renderCostos();
   });
+}
+
+// ------------------------------------------------------------
+// ROTACIÓN: historial acumulado de "planchas de pedido" (o cualquier
+// planilla con columnas Código y Cantidad) — cada archivo que se sube
+// se SUMA al histórico (no lo reemplaza), para ver qué mercadería
+// rota más y cuándo. Cuando el código de una fila coincide con el
+// código de fábrica/interno de un producto ya cargado en Inventario,
+// esa fila se "autodescribe": se usa la descripción real del
+// producto en vez de la que traiga el archivo (que puede venir vacía
+// o inconsistente entre planillas).
+// ------------------------------------------------------------
+async function cargarRotacion() {
+  const [{ data: importaciones }, { data: items }] = await Promise.all([
+    sb.from('importaciones_rotacion').select('*').order('created_at', { ascending: false }),
+    sb.from('rotacion_items').select('*')
+  ]);
+  importacionesRotacionCache = importaciones || [];
+  rotacionItemsCache = items || [];
+}
+
+function nombreMesRotacion(m) {
+  const [anio, mes] = m.split('-');
+  const nombres = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  return `${nombres[Number(mes) - 1] || mes} ${anio}`;
+}
+
+async function importarPlanchaRotacion(archivo, mesFallback) {
+  await cargarXLSX();
+  const buf = await archivo.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
+  if (filas.length < 2) throw new Error('El archivo no tiene filas de datos.');
+
+  const encabezados = filas[0].map(normalizarTextoImport);
+  const idx = {
+    codigo: encabezados.indexOf('codigo'),
+    cantidad: encabezados.indexOf('cantidad'),
+    descripcion: encabezados.indexOf('descripcion'),
+    fecha: encabezados.indexOf('fecha')
+  };
+  if (idx.codigo === -1 || idx.cantidad === -1) {
+    throw new Error('No encontré las columnas "Código" y/o "Cantidad" — revisá los encabezados del archivo.');
+  }
+
+  const filasValidas = [];
+  for (let i = 1; i < filas.length; i++) {
+    const fila = filas[i];
+    if (fila.every(c => c === '' || c == null)) continue;
+    const codigo = String(fila[idx.codigo] || '').trim();
+    const cantidad = Number(fila[idx.cantidad]);
+    if (!codigo || isNaN(cantidad) || cantidad <= 0) continue;
+
+    const fechaCelda = idx.fecha > -1 ? fila[idx.fecha] : null;
+    const fechaIso = (fechaCelda instanceof Date && !isNaN(fechaCelda)) ? fechaCelda.toISOString().slice(0, 10) : `${mesFallback}-01`;
+
+    const match = productosCache.find(p =>
+      (p.codigo_fabrica && normalizarTextoImport(p.codigo_fabrica) === normalizarTextoImport(codigo)) ||
+      (p.codigo_interno && normalizarTextoImport(p.codigo_interno) === normalizarTextoImport(codigo))
+    );
+    const descripcionArchivo = idx.descripcion > -1 ? String(fila[idx.descripcion] || '').trim() : '';
+
+    filasValidas.push({
+      codigo, cantidad, fecha: fechaIso,
+      descripcion: match ? match.descripcion : (descripcionArchivo || '(sin coincidencia en Inventario)'),
+      producto_id: match ? match.id : null
+    });
+  }
+  if (filasValidas.length === 0) throw new Error('No encontré filas válidas (con Código y Cantidad) para importar.');
+
+  const { data: importacion, error: eImp } = await sb.from('importaciones_rotacion').insert({
+    nombre_archivo: archivo.name, mes: mesFallback, lineas: filasValidas.length, usuario_id: profile.id
+  }).select().single();
+  if (eImp) throw new Error(eImp.message);
+
+  const { error: eItems } = await sb.from('rotacion_items').insert(filasValidas.map(f => ({ ...f, importacion_id: importacion.id })));
+  if (eItems) throw new Error(eItems.message);
+}
+
+// Agrupa por código (dentro del mes filtrado): cantidad total vendida,
+// en cuántas importaciones distintas apareció ("N° de pedidos") y la
+// fecha más reciente. Si alguna fila coincidió con un producto de
+// Inventario, esa descripción "gana" sobre la del archivo.
+function agruparRotacionPorCodigo() {
+  const items = rotacionMesFiltro === 'todos' ? rotacionItemsCache : rotacionItemsCache.filter(i => i.fecha.slice(0, 7) === rotacionMesFiltro);
+  const porCodigo = {};
+  items.forEach(i => {
+    if (!porCodigo[i.codigo]) porCodigo[i.codigo] = { codigo: i.codigo, descripcion: i.descripcion, producto_id: i.producto_id, cantidad: 0, pedidos: new Set(), ultimaVenta: i.fecha };
+    const g = porCodigo[i.codigo];
+    g.cantidad += Number(i.cantidad);
+    g.pedidos.add(i.importacion_id);
+    if (i.fecha > g.ultimaVenta) g.ultimaVenta = i.fecha;
+    if (i.producto_id || !g.producto_id) { g.descripcion = i.descripcion; g.producto_id = i.producto_id || g.producto_id; }
+  });
+  return Object.values(porCodigo).map(g => ({ ...g, pedidos: g.pedidos.size })).sort((a, b) => b.cantidad - a.cantidad);
+}
+
+function barraHorizontalRotacionHtml(filas, variante) {
+  if (filas.length === 0) return `<div class="empty-state">Sin datos.</div>`;
+  const max = Math.max(...filas.map(f => f.valor), 1);
+  return `<div class="rot-bars">
+    ${filas.map((f, i) => `
+      <div class="rot-bar-row">
+        <span class="rot-bar-label">${i + 1}. ${escapeHtml(f.label)}</span>
+        <div class="rot-bar-track"><div class="rot-bar-fill${variante ? ' ' + variante : ''}" style="width:${(f.valor / max) * 100}%"></div></div>
+        <span class="rot-bar-valor">${f.valor}${f.sufijo || ''}</span>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+// Evolución mensual del top 3 (cantidad vendida por mes) como un
+// gráfico de líneas armado a mano en SVG — la app no usa ninguna
+// librería de gráficos.
+function evolucionMensualRotacionHtml(top3) {
+  if (top3.length === 0) return `<div class="empty-state">Sin datos.</div>`;
+  const codigos = top3.map(t => t.codigo);
+  const meses = [...new Set(rotacionItemsCache.filter(i => codigos.includes(i.codigo)).map(i => i.fecha.slice(0, 7)))].sort();
+  if (meses.length === 0) return `<div class="empty-state">Sin datos.</div>`;
+
+  const colores = ['#00e5a0', '#4c8cff', '#ff6a3d'];
+  const series = top3.map((t, idx) => {
+    const porMes = {};
+    rotacionItemsCache.filter(i => i.codigo === t.codigo).forEach(i => {
+      const m = i.fecha.slice(0, 7);
+      porMes[m] = (porMes[m] || 0) + Number(i.cantidad);
+    });
+    return { codigo: t.codigo, descripcion: t.descripcion, color: colores[idx % colores.length], valores: meses.map(m => porMes[m] || 0) };
+  });
+
+  const maxValor = Math.max(...series.flatMap(s => s.valores), 1);
+  const W = 600, H = 220, padL = 34, padB = 26, padT = 10, padR = 10;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const puntoX = (i) => padL + (meses.length === 1 ? plotW / 2 : (plotW * i) / (meses.length - 1));
+  const puntoY = (v) => padT + plotH - (v / maxValor) * plotH;
+
+  const lineasSvg = series.map(s => `
+    <polyline points="${s.valores.map((v, i) => `${puntoX(i)},${puntoY(v)}`).join(' ')}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
+    ${s.valores.map((v, i) => `<circle cx="${puntoX(i)}" cy="${puntoY(v)}" r="3.5" fill="${s.color}" />`).join('')}
+  `).join('');
+  const ejeXsvg = meses.map((m, i) => `<text x="${puntoX(i)}" y="${H - 6}" font-size="9" fill="#676e80" text-anchor="middle">${m.slice(2)}</text>`).join('');
+  const ejeYsvg = `<text x="${padL - 6}" y="${padT + 4}" font-size="9" fill="#676e80" text-anchor="end">${maxValor}</text><text x="${padL - 6}" y="${H - padB}" font-size="9" fill="#676e80" text-anchor="end">0</text>`;
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-height:240px">
+      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H - padB}" stroke="rgba(255,255,255,0.12)" />
+      <line x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="rgba(255,255,255,0.12)" />
+      ${ejeXsvg}${ejeYsvg}${lineasSvg}
+    </svg>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px">
+      ${series.map(s => `<span style="font-size:12px;color:var(--text-dim)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${s.color};margin-right:5px"></span>${escapeHtml(s.codigo)} - ${escapeHtml(s.descripcion)}</span>`).join('')}
+    </div>
+  `;
+}
+
+function renderTablaYGraficosRotacion() {
+  const agrupado = agruparRotacionPorCodigo();
+
+  $('#rot-tabla').innerHTML = agrupado.length === 0 ? `<div class="empty-state">Sin datos para este mes.</div>` : `
+    <div class="table-wrap"><table>
+      <thead><tr><th>Código</th><th>Descripción</th><th>Cantidad vendida</th><th>N° de pedidos</th><th>Última venta</th></tr></thead>
+      <tbody>${agrupado.map(g => `
+        <tr>
+          <td>${escapeHtml(g.codigo)}</td>
+          <td>${escapeHtml(g.descripcion || '—')}${g.producto_id ? ' <span class="badge badge-ok" style="margin-left:4px">En inventario</span>' : ''}</td>
+          <td>${g.cantidad}</td>
+          <td>${g.pedidos}</td>
+          <td>${fecha(g.ultimaVenta)}</td>
+        </tr>
+      `).join('')}</tbody>
+    </table></div>
+  `;
+
+  const topCantidad = agrupado.slice(0, 10);
+  const topPedidos = [...agrupado].sort((a, b) => b.pedidos - a.pedidos || b.cantidad - a.cantidad).slice(0, 10);
+
+  $('#rot-chart-top').innerHTML = barraHorizontalRotacionHtml(topCantidad.map(g => ({ label: `${g.codigo} - ${g.descripcion}`, valor: g.cantidad })));
+  $('#rot-chart-repiten').innerHTML = barraHorizontalRotacionHtml(topPedidos.map(g => ({ label: `${g.codigo} - ${g.descripcion}`, valor: g.pedidos, sufijo: ` pedido${g.pedidos === 1 ? '' : 's'} · ${g.cantidad} unidad${g.cantidad === 1 ? '' : 'es'}` })), 'accent-2');
+  $('#rot-chart-evolucion').innerHTML = evolucionMensualRotacionHtml(agrupado.slice(0, 3));
+}
+
+// BAM resume los productos que más rotan — se muestra solo al terminar
+// de importar un archivo nuevo, y también bajo pedido con el botón
+// "Preguntale a BAM" (BAM no entiende texto libre, así que esto se
+// resuelve con un botón en vez de una consulta escrita).
+function mostrarBotResumenRotacion() {
+  const top = agruparRotacionPorCodigo().slice(0, 5);
+  if (top.length === 0) { toast('Todavía no hay datos de rotación para resumir', 'error'); return; }
+  const lineas = top.map((g, i) => `${i + 1}. ${escapeHtml(g.descripcion)} — ${g.cantidad} u.`).join('<br>');
+  mostrarBotBurbuja('🤖 BAM te cuenta:', `Lo que más está rotando:<br>${lineas}`, {
+    botones: [{ label: 'Ver Rotación →', onClick: () => { tabInventario = 'rotacion'; switchView('inventario'); } }]
+  });
+}
+
+async function renderRotacion() {
+  const cont = $('#inv-content');
+  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  await cargarRotacion();
+
+  const totalLineas = rotacionItemsCache.length;
+  const mesesDisponibles = [...new Set(rotacionItemsCache.map(i => i.fecha.slice(0, 7)))].sort().reverse();
+  const hayDatos = rotacionItemsCache.length > 0;
+
+  cont.innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Importar Excel</div>
+      <p style="color:var(--text-dim);font-size:13px;margin:-6px 0 12px">Subí las planchas de pedido (u otra planilla con Código y Cantidad) una por una — cada una se agrega al historial para ver qué se vendió, cuándo, y qué productos se repiten más.</p>
+      <div class="grid-2">
+        <div class="field"><label>Archivo Excel (.xlsx)</label><input type="file" id="f-rot-archivo" accept=".xlsx" /></div>
+        <div class="field"><label>Mes a usar si no se encuentra fecha</label><input type="month" id="f-rot-mes-fallback" value="${new Date().toISOString().slice(0, 7)}" /></div>
+      </div>
+      <p style="color:var(--text-faint);font-size:12px;margin-top:10px">📄 ${importacionesRotacionCache.length} archivo${importacionesRotacionCache.length === 1 ? '' : 's'} importado${importacionesRotacionCache.length === 1 ? '' : 's'} hasta ahora · ${totalLineas} línea${totalLineas === 1 ? '' : 's'} en total</p>
+    </div>
+
+    ${!hayDatos ? `<div class="empty-state">Todavía no subiste ninguna plancha de pedido.</div>` : `
+    <div class="section-head" style="margin-bottom:10px">
+      <div><div class="card-title" style="margin:0">Qué se vendió y cuándo (por código)</div></div>
+      <div class="field" style="max-width:170px;margin:0">
+        <select id="f-rot-mes-filtro">
+          <option value="todos" ${rotacionMesFiltro === 'todos' ? 'selected' : ''}>Todos</option>
+          ${mesesDisponibles.map(m => `<option value="${m}" ${rotacionMesFiltro === m ? 'selected' : ''}>${nombreMesRotacion(m)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div id="rot-tabla"></div>
+    <div class="grid-2" style="margin-top:16px;gap:16px">
+      <div class="card"><div class="card-title">Top productos por cantidad vendida</div><div id="rot-chart-top"></div></div>
+      <div class="card"><div class="card-title">Productos que más se repiten</div><div id="rot-chart-repiten"></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">Evolución mensual (top 3 productos)</div>
+      <div id="rot-chart-evolucion"></div>
+    </div>
+    <button class="btn btn-secondary" id="btn-preguntar-bam" style="margin-top:16px">🤖 Preguntale a BAM</button>
+    `}
+  `;
+
+  $('#f-rot-archivo').addEventListener('change', async (e) => {
+    const archivo = e.target.files[0];
+    if (!archivo) return;
+    const mesFallback = $('#f-rot-mes-fallback').value || new Date().toISOString().slice(0, 7);
+    e.target.disabled = true;
+    try {
+      await importarPlanchaRotacion(archivo, mesFallback);
+      toast('Archivo importado');
+      await renderRotacion();
+      mostrarBotResumenRotacion();
+    } catch (err) {
+      toast('No se pudo leer el archivo: ' + err.message, 'error');
+      e.target.disabled = false;
+    }
+  });
+
+  if (hayDatos) {
+    $('#f-rot-mes-filtro').addEventListener('change', (e) => { rotacionMesFiltro = e.target.value; renderTablaYGraficosRotacion(); });
+    $('#btn-preguntar-bam').addEventListener('click', () => mostrarBotResumenRotacion());
+    renderTablaYGraficosRotacion();
+  }
 }
 
 function abrirFormProducto(existing) {

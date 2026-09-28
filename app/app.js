@@ -5514,7 +5514,7 @@ async function abrirFormComprobante(opts = {}) {
         <option value="mixto">Mixto (Efectivo + Transferencia)</option>
       </select>
     </div>
-    <div class="field" style="margin-top:10px"><label>Total a pagar (Bs) *</label><input type="number" id="f-comp-total" min="0" step="0.01" value="${movimientoExistente ? movimientoExistente.monto : ''}" required /></div>
+    <div class="field" style="margin-top:10px"><label>Total a pagar (Bs) *<br><span style="font-weight:400;color:var(--text-faint)">se completa solo con lo recibido — solo cambia si elegís arriba una venta a crédito</span></label><input type="number" id="f-comp-total" min="0" step="0.01" value="${movimientoExistente ? movimientoExistente.monto : '0'}" disabled required /></div>
     <div class="grid-2" style="margin-top:10px">
       <div class="field"><label>Recibido en efectivo (Bs)</label><input type="number" id="f-comp-efectivo" min="0" step="0.01" value="${(movimientoExistente && movimientoExistente.metodo_pago === 'efectivo') ? movimientoExistente.monto : 0}" /></div>
       <div class="field"><label>Recibido por transferencia (Bs)</label><input type="number" id="f-comp-transferido" min="0" step="0.01" value="${(movimientoExistente && movimientoExistente.metodo_pago !== 'efectivo') ? movimientoExistente.monto : 0}" /></div>
@@ -5547,16 +5547,14 @@ async function abrirFormComprobante(opts = {}) {
   $('#f-comp-venta-credito')?.addEventListener('change', (e) => {
     const id = e.target.value;
     ventaSeleccionada = id ? ventasCredito.find(x => x.venta.id === id) : null;
-    const campoCliente = $('#f-comp-cliente'), campoVenta = $('#f-comp-venta'), campoTotal = $('#f-comp-total');
+    const campoCliente = $('#f-comp-cliente'), campoVenta = $('#f-comp-venta');
     if (ventaSeleccionada) {
       const { venta } = ventaSeleccionada;
       campoCliente.value = venta.cliente_nombre; campoCliente.disabled = true;
       campoVenta.value = `#${venta.numero}`; campoVenta.disabled = true;
-      campoTotal.value = venta.total; campoTotal.disabled = true;
     } else {
       campoCliente.value = ''; campoCliente.disabled = false;
       campoVenta.value = ''; campoVenta.disabled = false;
-      campoTotal.value = ''; campoTotal.disabled = false;
     }
     actualizarSaldo();
   });
@@ -5616,15 +5614,24 @@ async function abrirFormComprobante(opts = {}) {
     $('#f-comp-transferido').closest('.field').style.display = (forma === 'efectivo') ? 'none' : '';
   }
   function actualizarSaldo() {
+    // Mismo criterio que al guardar: el campo oculto (ej. "Efectivo" cuando
+    // la forma de pago es Transferencia) no cuenta, aunque le haya quedado
+    // un valor viejo cargado de antes de cambiar la forma de pago.
+    const forma = $('#f-comp-forma').value;
+    const ef = (forma === 'transferencia' || forma === 'qr') ? 0 : Number($('#f-comp-efectivo').value || 0);
+    const tr = forma === 'efectivo' ? 0 : Number($('#f-comp-transferido').value || 0);
+    // "Total a pagar" se completa solo — nunca se escribe a mano — con lo
+    // recibido, o con el total real de la venta cuando hay una enlazada.
+    // Así el "Saldo pendiente" nunca puede aparecer por accidente en un
+    // comprobante libre; solo existe cuando de verdad se está abonando una
+    // venta a crédito.
+    $('#f-comp-total').value = ventaSeleccionada ? ventaSeleccionada.venta.total : ef + tr;
     const total = Number($('#f-comp-total').value || 0);
-    const ef = Number($('#f-comp-efectivo').value || 0);
-    const tr = Number($('#f-comp-transferido').value || 0);
     const abonadoPrevio = ventaSeleccionada ? ventaSeleccionada.abonadoPrevio : 0;
     const saldo = Math.max(0, total - abonadoPrevio - ef - tr);
     $('#comp-saldo-preview').textContent = money(saldo);
   }
   $('#f-comp-forma').addEventListener('change', () => { actualizarVisibilidadForma(); actualizarSaldo(); });
-  $('#f-comp-total').addEventListener('input', actualizarSaldo);
   $('#f-comp-efectivo').addEventListener('input', actualizarSaldo);
   $('#f-comp-transferido').addEventListener('input', actualizarSaldo);
   actualizarVisibilidadForma();

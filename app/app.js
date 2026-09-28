@@ -38,8 +38,10 @@ let ventaOrigenCotizacion = null;
 let garantiasCache = [];
 let ventasParaGarantiaCache = [];
 let vendedoresCache = [];       // usado por el admin para elegir con quién chatear
-let chatModo = 'general';       // 'general' | 'individual'
+let chatModo = 'general';       // 'general' | 'individual' | 'bam'
 let chatHiloVendedorId = null;  // hilo elegido por el admin en modo individual (null = lista)
+let bamMensajesCache = [];      // historial de BAM (informes + recordatorios avisados) del usuario
+let bamRecordatoriosCache = []; // agenda de recordatorios propios (cumplidos y pendientes)
 
 // ------------------------------------------------------------
 // Utilidades
@@ -198,6 +200,10 @@ async function iniciarApp() {
   setTimeout(mostrarBotCambiosPrecio, 2600);
   setTimeout(mostrarBotGarantiasPorVencer, 3800);
   setTimeout(mostrarBotCobranzaProxima, 5000);
+  // Genera el informe diario y revisa la agenda de recordatorios ya al
+  // entrar (silencioso, sin burbuja) para que estén listos en la
+  // pestaña BAM del Chat apenas el usuario la abra.
+  setTimeout(() => { asegurarInformeDiarioBam(); avisarRecordatoriosPendientesBam(); }, 6000);
 
   // BAM vuelve a revisar autorizaciones/cobros pendientes, cambios de
   // precio, garantías por vencer y cobranzas de crédito cada 20 min
@@ -5246,6 +5252,7 @@ async function renderChat() {
     <div class="tabs" id="chat-tabs">
       <button class="tab-btn ${chatModo === 'general' ? 'active' : ''}" data-modo="general">General</button>
       <button class="tab-btn ${chatModo === 'individual' ? 'active' : ''}" data-modo="individual">${soyAdmin ? 'Individuales' : 'Con administración'}</button>
+      <button class="tab-btn ${chatModo === 'bam' ? 'active' : ''}" data-modo="bam">🤖 BAM${!bamInformeVistoHoy() ? '<span class="badge-dot"></span>' : ''}</button>
     </div>
     <div id="chat-cuerpo"></div>
   `;
@@ -5268,6 +5275,10 @@ async function renderChat() {
 async function renderChatCuerpo() {
   $$('#chat-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.modo === chatModo));
 
+  if (chatModo === 'bam') {
+    await renderChatBam();
+    return;
+  }
   if (chatModo === 'individual' && profile.rol === 'admin' && !chatHiloVendedorId) {
     await renderListaVendedoresChat();
     return;
@@ -5409,6 +5420,235 @@ async function enviarMensajeChat(hilo) {
   chatImagenPendiente = null;
   $('#chat-file').value = '';
   $('#chat-preview-img').hidden = true;
+}
+
+// ============================================================
+// MÓDULO: BAM EN EL CHAT — pestaña propia con informe diario
+// (ventas/cobranzas/cotizaciones/créditos por vencer) y agenda de
+// recordatorios personales. Sin cron en el servidor, el informe del
+// día se genera del lado del cliente la primera vez que alguien abre
+// esta pestaña (o entra a la app) ese día — bam_mensajes.fecha evita
+// que se duplique aunque se abra varias veces.
+// ============================================================
+function claveBamVistoHoy() {
+  return `bm_bam_visto_${new Date().toISOString().slice(0, 10)}_${profile.id}`;
+}
+function bamInformeVistoHoy() {
+  try { return localStorage.getItem(claveBamVistoHoy()) === '1'; } catch (e) { return false; }
+}
+function marcarBamVistoHoy() {
+  try { localStorage.setItem(claveBamVistoHoy(), '1'); } catch (e) {}
+}
+
+// Días que faltan para una fecha 'YYYY-MM-DD' (negativo = ya pasó).
+function diasHastaFecha(fechaStr) {
+  const limite = new Date(fechaStr + 'T00:00:00');
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  return Math.round((limite - hoy) / (24 * 60 * 60 * 1000));
+}
+
+// Arma el texto (HTML) del informe diario: para el admin, un resumen
+// de TODO el equipo (ventas, cobrado en caja, cotizaciones y créditos
+// por vencer de todos los vendedores); para cada vendedor, solo lo suyo.
+async function construirInformeDiarioBam() {
+  const hoyInicio = new Date(); hoyInicio.setHours(0, 0, 0, 0);
+  const hoyISO = hoyInicio.toISOString();
+
+  function formatearCreditos(lista) {
+    return lista.slice(0, 5).map(v => {
+      const cuando = v.dias < 0 ? `vencida hace ${Math.abs(v.dias)}d` : v.dias === 0 ? 'vence hoy' : `vence en ${v.dias}d`;
+      return `#${v.numero} ${escapeHtml(v.cliente_nombre)} — ${cuando}`;
+    }).join('<br>') + (lista.length > 5 ? `<br>y ${lista.length - 5} más...` : '');
+  }
+
+  if (profile.rol === 'admin') {
+    const [{ data: ventasHoy }, { count: nCotizPend }, { data: creditos }, { data: cobrosHoy }] = await Promise.all([
+      sb.from('ventas').select('id, total').gte('created_at', hoyISO),
+      sb.from('cotizaciones').select('*', { count: 'exact', head: true }).eq('estado', 'pendiente'),
+      sb.from('ventas').select('id, numero, cliente_nombre, created_at, cuota1_dias, cuota2_dias').eq('condicion_pago', 'credito').eq('autorizada', true).eq('cobrado', false),
+      sb.from('caja_movimientos').select('monto').eq('tipo', 'ingreso').gte('created_at', hoyISO)
+    ]);
+    const totalVentasHoy = (ventasHoy || []).reduce((s, v) => s + Number(v.total), 0);
+    const totalCobradoHoy = (cobrosHoy || []).reduce((s, m) => s + Number(m.monto), 0);
+    const creditosPorVencer = (creditos || []).map(v => ({ ...v, dias: diasRestantesCuota(v) })).filter(v => v.dias <= 3).sort((a, b) => a.dias - b.dias);
+
+    return `📊 <strong>Informe del día — ${fecha(new Date())}</strong><br><br>` +
+      `🧾 Ventas de hoy (todo el equipo): ${ventasHoy?.length || 0} (${money(totalVentasHoy)})<br>` +
+      `💰 Cobrado hoy en caja: ${money(totalCobradoHoy)}<br>` +
+      `📋 Cotizaciones pendientes de autorizar: ${nCotizPend || 0}<br>` +
+      `⏰ Créditos por vencer (≤3 días) o vencidos: ${creditosPorVencer.length}` +
+      (creditosPorVencer.length ? `<br>${formatearCreditos(creditosPorVencer)}` : '');
+  } else {
+    const [{ data: ventasHoy }, { count: nCotizPend }, { data: creditos }] = await Promise.all([
+      sb.from('ventas').select('id, total').eq('vendedor_id', profile.id).gte('created_at', hoyISO),
+      sb.from('cotizaciones').select('*', { count: 'exact', head: true }).eq('vendedor_id', profile.id).eq('estado', 'pendiente'),
+      sb.from('ventas').select('id, numero, cliente_nombre, created_at, cuota1_dias, cuota2_dias').eq('vendedor_id', profile.id).eq('condicion_pago', 'credito').eq('autorizada', true).eq('cobrado', false)
+    ]);
+    const totalVentasHoy = (ventasHoy || []).reduce((s, v) => s + Number(v.total), 0);
+    const creditosPorVencer = (creditos || []).map(v => ({ ...v, dias: diasRestantesCuota(v) })).filter(v => v.dias <= 3).sort((a, b) => a.dias - b.dias);
+
+    return `📊 <strong>Tu informe del día — ${fecha(new Date())}</strong><br><br>` +
+      `🧾 Tus ventas de hoy: ${ventasHoy?.length || 0} (${money(totalVentasHoy)})<br>` +
+      `📋 Tus cotizaciones pendientes: ${nCotizPend || 0}<br>` +
+      `⏰ Tus créditos por vencer (≤3 días) o vencidos: ${creditosPorVencer.length}` +
+      (creditosPorVencer.length ? `<br>${formatearCreditos(creditosPorVencer)}` : '');
+  }
+}
+
+// Se fija si ya se posteó el informe de hoy para este usuario; si no,
+// lo genera y lo inserta — así aunque se llame varias veces (al entrar
+// a la app y también al abrir la pestaña BAM) nunca se duplica.
+async function asegurarInformeDiarioBam() {
+  const hoyStr = new Date().toISOString().slice(0, 10);
+  const { data: existente } = await sb.from('bam_mensajes').select('id')
+    .eq('usuario_id', profile.id).eq('tipo', 'informe').eq('fecha', hoyStr).limit(1);
+  if (existente && existente.length > 0) return false;
+
+  const contenido = await construirInformeDiarioBam();
+  const { error } = await sb.from('bam_mensajes').insert({
+    usuario_id: profile.id, tipo: 'informe', contenido, fecha: hoyStr
+  });
+  return !error;
+}
+
+// Revisa la agenda del usuario y postea (una sola vez, marcando
+// avisado=true) un mensaje de BAM por cada recordatorio cuya fecha ya
+// llegó o pasó y todavía no se avisó.
+async function avisarRecordatoriosPendientesBam() {
+  const hoyStr = new Date().toISOString().slice(0, 10);
+  const { data: pendientes } = await sb.from('bam_recordatorios').select('*')
+    .eq('usuario_id', profile.id).eq('cumplido', false).eq('avisado', false).lte('fecha', hoyStr);
+  if (!pendientes || pendientes.length === 0) return false;
+
+  for (const r of pendientes) {
+    await sb.from('bam_mensajes').insert({
+      usuario_id: profile.id, tipo: 'recordatorio',
+      contenido: `📅 <strong>Recordatorio</strong><br>${escapeHtml(r.texto)}`,
+      fecha: hoyStr
+    });
+    await sb.from('bam_recordatorios').update({ avisado: true }).eq('id', r.id);
+  }
+  return true;
+}
+
+async function cargarBamMensajes() {
+  const { data } = await sb.from('bam_mensajes').select('*').eq('usuario_id', profile.id)
+    .order('created_at', { ascending: true }).limit(200);
+  bamMensajesCache = data || [];
+}
+
+function agregarMensajeBamAlDOM(m) {
+  const cont = $('#chat-mensajes');
+  if (!cont) return;
+  if (cont.querySelector('.empty-state')) cont.innerHTML = '';
+  const hora = new Date(m.created_at).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' });
+  const div = document.createElement('div');
+  div.className = 'chat-msg';
+  div.innerHTML = `
+    <div class="chat-msg-remitente">🤖 BAM</div>
+    <div class="chat-msg-bubble chat-msg-bam">
+      <div class="chat-msg-texto">${m.contenido}</div>
+      <div class="chat-msg-hora">${hora}</div>
+    </div>
+  `;
+  cont.appendChild(div);
+}
+
+async function renderChatBam() {
+  const cont = $('#chat-cuerpo');
+  cont.innerHTML = `
+    <div class="chat-box">
+      <div class="chat-mensajes" id="chat-mensajes"><div class="empty-state">Cargando…</div></div>
+      <div class="chat-input-row" style="justify-content:center">
+        <button class="btn btn-secondary btn-sm" id="btn-agenda-bam">📅 Agenda con BAM</button>
+      </div>
+    </div>
+  `;
+  $('#btn-agenda-bam').addEventListener('click', () => abrirAgendaBam());
+
+  await asegurarInformeDiarioBam();
+  await avisarRecordatoriosPendientesBam();
+  await cargarBamMensajes();
+
+  const msgCont = $('#chat-mensajes');
+  msgCont.innerHTML = bamMensajesCache.length === 0 ? `<div class="empty-state">BAM todavía no tiene novedades para vos.</div>` : '';
+  bamMensajesCache.forEach(m => agregarMensajeBamAlDOM(m));
+  msgCont.scrollTop = msgCont.scrollHeight;
+
+  marcarBamVistoHoy();
+  $('.tab-btn[data-modo="bam"] .badge-dot')?.remove();
+}
+
+async function cargarRecordatoriosBam() {
+  const { data } = await sb.from('bam_recordatorios').select('*').eq('usuario_id', profile.id)
+    .order('fecha', { ascending: true });
+  bamRecordatoriosCache = data || [];
+}
+
+async function abrirAgendaBam() {
+  await cargarRecordatoriosBam();
+  openModal(`
+    <div class="sheet-head"><h3>📅 Agenda con BAM</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <p style="font-size:13px;color:var(--text-dim);margin-top:-6px">Cargá un recordatorio y BAM te avisa en el chat cuando llegue la fecha.</p>
+    <div class="field" style="margin-top:10px"><label>Recordatorio *</label><input id="f-agenda-texto" placeholder="Ej: Llamar a Juan Pérez por su cuota" /></div>
+    <div class="field" style="margin-top:10px"><label>Fecha *</label><input type="date" id="f-agenda-fecha" value="${new Date().toISOString().slice(0, 10)}" /></div>
+    <div class="form-actions"><button class="btn btn-primary" id="btn-agregar-recordatorio">+ Agregar a la agenda</button></div>
+    <div id="agenda-lista" style="margin-top:16px"></div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+
+  function renderListaAgenda() {
+    const cont = $('#agenda-lista');
+    if (!cont) return;
+    if (bamRecordatoriosCache.length === 0) {
+      cont.innerHTML = `<div class="empty-state">Todavía no cargaste recordatorios.</div>`;
+      return;
+    }
+    cont.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th></th><th>Recordatorio</th><th>Fecha</th><th></th></tr></thead>
+      <tbody>
+        ${bamRecordatoriosCache.map(r => {
+          const dias = diasHastaFecha(r.fecha);
+          const cuando = r.cumplido ? '✔ Cumplido' : dias < 0 ? `vencido hace ${Math.abs(dias)}d` : dias === 0 ? 'hoy' : `en ${dias}d`;
+          return `<tr>
+            <td><input type="checkbox" data-cumplido-id="${r.id}" ${r.cumplido ? 'checked' : ''} title="Marcar cumplido" /></td>
+            <td style="${r.cumplido ? 'text-decoration:line-through;color:var(--text-faint)' : ''}">${escapeHtml(r.texto)}</td>
+            <td style="white-space:nowrap">${fecha(r.fecha)} <span style="color:var(--text-faint);font-size:11px">(${cuando})</span></td>
+            <td><button class="icon-btn" data-eliminar-id="${r.id}" title="Eliminar">🗑</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table></div>`;
+
+    cont.querySelectorAll('[data-cumplido-id]').forEach(chk => {
+      chk.addEventListener('change', async (e) => {
+        await sb.from('bam_recordatorios').update({ cumplido: e.target.checked }).eq('id', chk.dataset.cumplidoId);
+        await cargarRecordatoriosBam();
+        renderListaAgenda();
+      });
+    });
+    cont.querySelectorAll('[data-eliminar-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('¿Eliminar este recordatorio?')) return;
+        await sb.from('bam_recordatorios').delete().eq('id', btn.dataset.eliminarId);
+        await cargarRecordatoriosBam();
+        renderListaAgenda();
+      });
+    });
+  }
+  renderListaAgenda();
+
+  $('#btn-agregar-recordatorio').addEventListener('click', async () => {
+    const texto = $('#f-agenda-texto').value.trim();
+    const fechaStr = $('#f-agenda-fecha').value;
+    if (!texto || !fechaStr) { toast('Completá el recordatorio y la fecha', 'error'); return; }
+    const { error } = await sb.from('bam_recordatorios').insert({ usuario_id: profile.id, texto, fecha: fechaStr });
+    if (error) { toast('Error al guardar: ' + error.message, 'error'); return; }
+    $('#f-agenda-texto').value = '';
+    await cargarRecordatoriosBam();
+    renderListaAgenda();
+    toast('Recordatorio agregado', 'success');
+  });
 }
 
 // ============================================================

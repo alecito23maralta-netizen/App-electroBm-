@@ -899,3 +899,41 @@ create policy "rotacion_items_all" on public.rotacion_items
 drop policy if exists "venta_abonos_delete" on public.venta_abonos;
 create policy "venta_abonos_delete" on public.venta_abonos
   for delete using (public.is_admin());
+
+-- ============================================================
+-- ACTUALIZACIÓN: BAM en el Chat — pestaña propia con informe diario
+-- (ventas/cobranzas/cotizaciones/créditos por vencer) y agenda de
+-- recordatorios personales. Cada usuario solo ve sus propios mensajes
+-- de BAM y sus propios recordatorios (aunque el CONTENIDO del informe
+-- del admin resuma a todo el equipo, el registro en sí es privado).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.bam_mensajes (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.profiles (id) on delete cascade,
+  tipo text not null default 'informe' check (tipo in ('informe', 'recordatorio')),
+  contenido text not null,
+  fecha date not null default current_date,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.bam_recordatorios (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.profiles (id) on delete cascade,
+  texto text not null,
+  fecha date not null,
+  cumplido boolean not null default false,
+  avisado boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+alter table public.bam_mensajes enable row level security;
+alter table public.bam_recordatorios enable row level security;
+
+drop policy if exists "bam_mensajes_all" on public.bam_mensajes;
+create policy "bam_mensajes_all" on public.bam_mensajes
+  for all using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+drop policy if exists "bam_recordatorios_all" on public.bam_recordatorios;
+create policy "bam_recordatorios_all" on public.bam_recordatorios
+  for all using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());

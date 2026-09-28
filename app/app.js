@@ -3651,9 +3651,29 @@ async function abrirFormAbonarVenta(venta, abonadoPrevio) {
       renderCaja();
       if (comprobante) abrirVistaPreviaComprobante(comprobante);
     } else {
+      // Abono parcial: igual se genera un comprobante (por lo que se
+      // recibió en esta pasada, con el saldo que queda pendiente), para
+      // que el cliente se lleve constancia de cada pago a cuenta y no
+      // solo del último que salda la venta por completo.
+      const formaComprobante = metodo === 'efectivo' ? 'efectivo' : (metodo === 'qr' ? 'qr' : 'transferencia');
+      const { data: comprobante } = await sb.from('comprobantes').insert({
+        cliente_nombre: venta.cliente_nombre,
+        venta_numero: `#${venta.numero}`,
+        forma_pago: formaComprobante,
+        monto_total: venta.total,
+        monto_efectivo: metodo === 'efectivo' ? monto : 0,
+        monto_transferido: metodo !== 'efectivo' ? monto : 0,
+        saldo_pendiente: saldoRestante,
+        cajero_id: profile.id,
+        cajero_nombre: profile.nombre || profile.usuario,
+        caja_movimiento_id: movimiento.id
+      }).select().single();
+      if (comprobante) await sb.from('caja_movimientos').update({ comprobante_id: comprobante.id }).eq('id', movimiento.id);
+
       toast(`Abono de ${money(monto)} registrado — saldo pendiente: ${money(saldoRestante)}`);
       closeModal();
       renderAutorizaciones();
+      if (comprobante) abrirVistaPreviaComprobante(comprobante);
     }
   });
 }

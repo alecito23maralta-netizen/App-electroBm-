@@ -2829,7 +2829,7 @@ async function renderMiCaja() {
   if (!movs || movs.length === 0) { movCont.innerHTML = `<div class="empty-state">Sin movimientos todavía en esta caja.</div>`; }
   else {
     movCont.innerHTML = `<div class="table-wrap"><table>
-      <thead><tr><th>Tipo</th><th>Concepto</th><th>Monto</th><th>Pago</th><th>Hora</th><th>Recibo</th></tr></thead>
+      <thead><tr><th>Tipo</th><th>Concepto</th><th>Monto</th><th>Pago</th><th>Hora</th><th>Acciones</th></tr></thead>
       <tbody>
         ${movs.map(m => `
           <tr>
@@ -2838,9 +2838,12 @@ async function renderMiCaja() {
             <td>${money(m.monto)}</td>
             <td>${metodoLabel(m.metodo_pago)}</td>
             <td>${fechaHora(m.created_at)}</td>
-            <td>${m.comprobante_id
-              ? `<button class="icon-btn" data-ver-recibo="${m.comprobante_id}" title="Ver recibo">🧾</button>`
-              : (m.tipo === 'ingreso' ? `<button class="icon-btn" data-generar-recibo="${m.id}" title="Generar recibo para este cobro">🧾+</button>` : '—')}</td>
+            <td><div class="row-actions">
+              ${m.comprobante_id
+                ? `<button class="icon-btn" data-ver-recibo="${m.comprobante_id}" title="Ver recibo">🧾</button>`
+                : (m.tipo === 'ingreso' ? `<button class="icon-btn" data-generar-recibo="${m.id}" title="Generar recibo para este cobro">🧾+</button>` : '')}
+              <button class="icon-btn" data-eliminar-mov="${m.id}" title="Eliminar movimiento">🗑</button>
+            </div></td>
           </tr>
         `).join('')}
       </tbody>
@@ -2850,6 +2853,25 @@ async function renderMiCaja() {
       btn.addEventListener('click', async () => {
         const { data: comp } = await sb.from('comprobantes').select('*').eq('id', btn.dataset.verRecibo).single();
         if (comp) abrirVistaPreviaComprobante(comp);
+      });
+    });
+    movCont.querySelectorAll('[data-eliminar-mov]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const mov = movs.find(x => x.id === btn.dataset.eliminarMov);
+        if (mov?.comprobante_id) {
+          toast('Este movimiento tiene un comprobante generado — borrá primero el comprobante desde Comprobantes', 'error');
+          return;
+        }
+        if (!confirm('¿Seguro que querés eliminar este movimiento de caja? Esta acción no se puede deshacer.')) return;
+        const { error } = await sb.from('caja_movimientos').delete().eq('id', mov.id);
+        if (error) {
+          toast(error.message.includes('foreign key')
+            ? 'No se puede eliminar: este movimiento está enlazado a un abono de una venta a crédito'
+            : 'Error al eliminar: ' + error.message, 'error');
+          return;
+        }
+        toast('Movimiento eliminado');
+        renderCaja();
       });
     });
     movCont.querySelectorAll('[data-generar-recibo]').forEach(btn => {

@@ -887,3 +887,15 @@ create policy "importaciones_rotacion_all" on public.importaciones_rotacion
 drop policy if exists "rotacion_items_all" on public.rotacion_items;
 create policy "rotacion_items_all" on public.rotacion_items
   for all using (public.is_admin()) with check (public.is_admin());
+
+-- ============================================================
+-- ACTUALIZACIÓN: permite borrar un abono de venta a crédito. Hacía
+-- falta para poder deshacer del todo un cobro mal cargado desde Caja
+-- (movimiento + comprobante + abono, los tres juntos) — sin esta
+-- política, el borrado del abono quedaba silenciosamente bloqueado
+-- por RLS aunque el usuario fuera admin.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+drop policy if exists "venta_abonos_delete" on public.venta_abonos;
+create policy "venta_abonos_delete" on public.venta_abonos
+  for delete using (public.is_admin());

@@ -2856,23 +2856,7 @@ async function renderMiCaja() {
       });
     });
     movCont.querySelectorAll('[data-eliminar-mov]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const mov = movs.find(x => x.id === btn.dataset.eliminarMov);
-        if (mov?.comprobante_id) {
-          toast('Este movimiento tiene un comprobante generado — borrá primero el comprobante desde Comprobantes', 'error');
-          return;
-        }
-        if (!confirm('¿Seguro que querés eliminar este movimiento de caja? Esta acción no se puede deshacer.')) return;
-        const { error } = await sb.from('caja_movimientos').delete().eq('id', mov.id);
-        if (error) {
-          toast(error.message.includes('foreign key')
-            ? 'No se puede eliminar: este movimiento está enlazado a un abono de una venta a crédito'
-            : 'Error al eliminar: ' + error.message, 'error');
-          return;
-        }
-        toast('Movimiento eliminado');
-        renderCaja();
-      });
+      btn.addEventListener('click', () => eliminarMovimientoCaja(movs.find(x => x.id === btn.dataset.eliminarMov)));
     });
     movCont.querySelectorAll('[data-generar-recibo]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -2885,6 +2869,58 @@ async function renderMiCaja() {
   await cargarComprobantes();
   renderPanelRecibos();
   $('#recibos-buscar').addEventListener('input', () => renderPanelRecibos());
+}
+
+// Borra un movimiento de caja. Si tiene un comprobante (y, si ese
+// comprobante venía de abonar una venta a crédito, su abono) enlazado,
+// deshace todo junto en vez de bloquear el borrado: elimina el abono,
+// recalcula si la venta sigue saldada o no (si dejó de estarlo, la
+// vuelve a marcar pendiente y devuelve el stock que se había
+// descontado), borra el comprobante y por último el movimiento.
+async function eliminarMovimientoCaja(mov) {
+  if (!mov) return;
+
+  let abono = null;
+  if (mov.comprobante_id) {
+    const { data: abonos } = await sb.from('venta_abonos').select('*').eq('caja_movimiento_id', mov.id);
+    abono = abonos && abonos[0];
+  }
+
+  let mensaje = '¿Seguro que querés eliminar este movimiento de caja? Esta acción no se puede deshacer.';
+  if (abono) {
+    mensaje = 'Este movimiento tiene un comprobante y un abono de venta a crédito enlazados — se van a borrar los tres juntos. Si la venta había quedado marcada como cobrada por este abono, se revierte y se devuelve el stock descontado. Esta acción no se puede deshacer. ¿Continuar?';
+  } else if (mov.comprobante_id) {
+    mensaje = 'Este movimiento tiene un comprobante generado — se va a borrar junto con el movimiento. Esta acción no se puede deshacer. ¿Continuar?';
+  }
+  if (!confirm(mensaje)) return;
+
+  if (abono) {
+    const { data: venta } = await sb.from('ventas').select('*').eq('id', abono.venta_id).single();
+    const { error: eAbono } = await sb.from('venta_abonos').delete().eq('id', abono.id);
+    if (eAbono) { toast('Error al borrar el abono: ' + eAbono.message, 'error'); return; }
+
+    if (venta && venta.cobrado) {
+      const { data: abonosRestantes } = await sb.from('venta_abonos').select('monto').eq('venta_id', venta.id);
+      const totalAbonado = (abonosRestantes || []).reduce((s, a) => s + Number(a.monto), 0);
+      if (totalAbonado < Number(venta.total) - 0.01) {
+        await sb.from('ventas').update({ cobrado: false }).eq('id', venta.id);
+        await Promise.all((venta.items || [])
+          .filter(it => it.producto_id)
+          .map(it => ajustarStock(it.producto_id, it.cantidad, `Venta #${venta.numero} (revertida al borrar un abono)`)));
+        await cargarProductos();
+      }
+    }
+  }
+
+  if (mov.comprobante_id) {
+    const { error: eComp } = await sb.from('comprobantes').delete().eq('id', mov.comprobante_id);
+    if (eComp) { toast('Error al borrar el comprobante: ' + eComp.message, 'error'); return; }
+  }
+
+  const { error } = await sb.from('caja_movimientos').delete().eq('id', mov.id);
+  if (error) { toast('Error al eliminar: ' + error.message, 'error'); return; }
+  toast('Movimiento eliminado' + (abono ? ' junto con su abono y comprobante' : (mov.comprobante_id ? ' junto con su comprobante' : '')));
+  renderCaja();
 }
 
 function renderPanelRecibos() {

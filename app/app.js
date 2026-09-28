@@ -2810,12 +2810,17 @@ async function renderMiCaja() {
         <div id="caja-movs"></div>
       </div>
       <aside class="caja-col-recibos">
-        <div class="card-title" style="margin-bottom:10px">🧾 Recibos — reenviar rápido</div>
+        <div class="section-head" style="margin-bottom:10px">
+          <div class="card-title" style="margin:0">🧾 Recibos — reenviar rápido</div>
+          <button class="btn btn-primary btn-sm" id="btn-nuevo-comprobante-caja">+ Nuevo</button>
+        </div>
+        <p style="color:var(--text-faint);font-size:11.5px;margin:-6px 0 10px">Cargá el comprobante de una venta al contado, a crédito o de un abono a cuenta.</p>
         <div class="field" style="margin-bottom:10px"><input id="recibos-buscar" placeholder="🔍 Buscar cliente o N°…" /></div>
         <div id="recibos-lista"></div>
       </aside>
     </div>
   `;
+  $('#btn-nuevo-comprobante-caja').addEventListener('click', () => abrirFormComprobante(true));
   $('#btn-ingreso').addEventListener('click', () => abrirFormMovimientoCaja('ingreso'));
   $('#btn-egreso').addEventListener('click', () => abrirFormMovimientoCaja('egreso'));
   $('#btn-cerrar-caja').addEventListener('click', () => abrirFormCierreCaja(saldo));
@@ -5450,7 +5455,7 @@ async function cargarVentasCreditoPendientes() {
   return pendientes.map(venta => ({ venta, abonadoPrevio: abonadoPorVenta[venta.id] || 0 }));
 }
 
-async function abrirFormComprobante() {
+async function abrirFormComprobante(origenCaja) {
   const numeroSiguiente = comprobantesCache.length > 0 ? Math.max(...comprobantesCache.map(c => c.numero)) + 1 : 1;
   const ventasCredito = await cargarVentasCreditoPendientes();
   openModal(`
@@ -5670,7 +5675,7 @@ async function abrirFormComprobante() {
     toast(ventaSeleccionada ? 'Abono registrado y comprobante generado' : 'Comprobante generado y enlazado a tu caja');
     closeModal();
     await cargarComprobantes();
-    switchView('comprobantes');
+    if (origenCaja) renderCaja(); else switchView('comprobantes');
     abrirVistaPreviaComprobante(data);
   });
 }

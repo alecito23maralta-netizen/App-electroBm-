@@ -5944,7 +5944,10 @@ async function generarYCompartirComprobanteImagen(c) {
     await cargarHtml2Canvas();
     const canvas = await html2canvas(elPapel, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-    const texto = `*Comprobante de pago N° ${String(c.numero).padStart(5, '0')} — Electrodomésticos BM*\nRecibimos de: ${c.cliente_nombre}\nMonto: ${money(c.monto_total)}`;
+    const encabezado = `*Comprobante de pago N° ${String(c.numero).padStart(5, '0')} — Electrodomésticos BM*\nRecibimos de: ${c.cliente_nombre}`;
+    const texto = Number(c.saldo_pendiente) > 0
+      ? `${encabezado}\nMonto Credito: ${money(c.monto_total)}\nMonto Abonado: ${money(Number(c.monto_efectivo) + Number(c.monto_transferido))}\nMonto Saldo: ${money(c.saldo_pendiente)}`
+      : `${encabezado}\nMonto: ${money(c.monto_total)}`;
     if (blob) {
       const file = new File([blob], `comprobante_${c.numero}.png`, { type: 'image/png' });
       await compartirArchivosWhatsapp({ files: [file], texto, titulo: 'Comprobante de pago' });

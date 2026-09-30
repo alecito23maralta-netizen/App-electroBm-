@@ -959,3 +959,57 @@ update public.bam_recordatorios set avisado_noche = true, avisado_manana = true,
   where avisado = true;
 
 alter table public.bam_recordatorios drop column if exists avisado;
+
+-- ============================================================
+-- ACTUALIZACIÓN: Control Físico de Inventario — nueva pestaña dentro
+-- de Inventario para hacer un conteo físico (stock real contado a
+-- mano/con cámara) contra el stock del sistema. Queda compartido en
+-- Supabase (una "sesión" de conteo que cualquier admin puede seguir
+-- cargando desde otro celular) en vez de guardarse solo en el
+-- dispositivo. Por ahora es solo informe/comparación: NO ajusta
+-- productos.stock ni categoria/subcategoria automáticamente — eso
+-- se hace aparte, a mano, en Catálogo, si hace falta corregir algo.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.control_fisico_sesiones (
+  id uuid primary key default gen_random_uuid(),
+  nombre text not null,
+  estado text not null default 'abierta' check (estado in ('abierta', 'cerrada')),
+  usuario_id uuid references public.profiles (id),
+  created_at timestamptz not null default now(),
+  cerrada_at timestamptz
+);
+
+create table if not exists public.control_fisico_items (
+  id uuid primary key default gen_random_uuid(),
+  sesion_id uuid not null references public.control_fisico_sesiones (id) on delete cascade,
+  producto_id uuid references public.productos (id),
+  codigo text not null default '',
+  descripcion text not null default '',
+  categoria text not null default '',
+  subcategoria text not null default '',
+  categoria_editada boolean not null default false,
+  stock_sistema integer not null default 0,
+  stock_fisico integer not null default 0,
+  adiciones jsonb not null default '[]'::jsonb,
+  es_nuevo boolean not null default false,
+  foto_base64 text,
+  usuario_id uuid references public.profiles (id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  -- único por producto real dentro de la sesión (evita contarlo 2 veces);
+  -- los ítems "nuevos" (producto_id null, no están en el catálogo) no
+  -- chocan entre sí — Postgres no aplica unicidad entre NULLs.
+  unique (sesion_id, producto_id)
+);
+
+alter table public.control_fisico_sesiones enable row level security;
+alter table public.control_fisico_items enable row level security;
+
+drop policy if exists "control_fisico_sesiones_all" on public.control_fisico_sesiones;
+create policy "control_fisico_sesiones_all" on public.control_fisico_sesiones
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "control_fisico_items_all" on public.control_fisico_items;
+create policy "control_fisico_items_all" on public.control_fisico_items
+  for all using (public.is_admin()) with check (public.is_admin());

@@ -2667,11 +2667,20 @@ async function toggleCamaraCF() {
   setStatusCamCF('Iniciando cámara...');
   try {
     await cargarZXing();
+    if (!window.ZXing || !ZXing.BrowserMultiFormatReader) throw new Error('La librería del lector no cargó bien (ZXing no disponible)');
     controlFisicoCodeReader = new ZXing.BrowserMultiFormatReader();
-    const devices = await ZXing.BrowserMultiFormatReader.listVideoInputDevices();
-    let deviceId = devices[0]?.deviceId;
-    const trasera = devices.find(d => /back|rear|environment/i.test(d.label));
-    if (trasera) deviceId = trasera.deviceId;
+
+    // Elegir la cámara trasera es un plus, no algo de lo que dependa
+    // poder escanear — si listar dispositivos falla (varía según la
+    // versión/navegador), seguimos sin deviceId: decodeFromVideoDevice
+    // ya cae solo a la cámara trasera (facingMode: 'environment').
+    let deviceId;
+    try {
+      const devices = await controlFisicoCodeReader.listVideoInputDevices();
+      const trasera = devices.find(d => /back|rear|environment/i.test(d.label));
+      deviceId = (trasera || devices[0])?.deviceId;
+    } catch (e) { /* sin device list, decodeFromVideoDevice elige sola */ }
+
     setStatusCamCF('Apuntá al código de barras...');
     await controlFisicoCodeReader.decodeFromVideoDevice(deviceId, 'cf-cam-video', (result) => {
       if (result) manejarCodigoBarraCF(result.getText());
@@ -2680,7 +2689,7 @@ async function toggleCamaraCF() {
   } catch (err) {
     const msg = err.name === 'NotAllowedError' ? 'Permití el acceso a la cámara en tu navegador'
       : err.name === 'NotFoundError' ? 'No se encontró cámara'
-      : 'No se pudo abrir la cámara (' + (err.name || err.message || 'error desconocido') + ')';
+      : 'No se pudo abrir la cámara (' + [err.name, err.message].filter(Boolean).join(': ') + ')';
     setStatusCamCF('⚠ ' + msg);
     toast(msg, 'error');
     console.error('toggleCamaraCF:', err);

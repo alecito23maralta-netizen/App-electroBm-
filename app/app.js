@@ -1299,6 +1299,7 @@ async function renderInventario() {
       ${profile.rol === 'admin' ? `
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-secondary" id="btn-ir-importar">📥 Importar / Actualizar Excel</button>
+          <button class="btn btn-secondary" id="btn-cargar-compra">📦 Cargar compra</button>
           <button class="btn btn-primary" id="btn-nuevo-producto">+ Agregar producto</button>
         </div>
       ` : ''}
@@ -1317,6 +1318,7 @@ async function renderInventario() {
   if (profile.rol === 'admin') {
     $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
     $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
+    $('#btn-cargar-compra').addEventListener('click', () => abrirImportadorCompra());
     $('#tab-rentabilidad').addEventListener('click', () => { tabInventario = 'rentabilidad'; renderInventario(); });
     $('#tab-costos').addEventListener('click', () => { tabInventario = 'costos'; renderInventario(); });
     $('#tab-rotacion').addEventListener('click', () => { tabInventario = 'rotacion'; renderInventario(); });
@@ -3375,6 +3377,190 @@ async function confirmarImportacionProductos() {
   }
 
   toast(`Importación terminada: ${ok} ok${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
+  closeModal();
+  await cargarProductos();
+  renderInventario();
+}
+
+// ============================================================
+// MÓDULO: CARGAR COMPRA — subís el Excel de una factura/pedido de
+// proveedor (código, descripción, cantidad, costo) y se procesa solo:
+// los productos que ya coinciden (por código o descripción exacta,
+// mismo criterio que el importador de precios) SUMAN el stock
+// comprado vía ajustarStock (deja su movimiento de inventario, igual
+// que cargar una entrada a mano); los que no coinciden con nada se
+// crean como producto nuevo con ese stock inicial.
+// ============================================================
+let importCompraPreview = [];
+
+function descargarPlantillaCompra() {
+  const filas = [
+    ['Codigo', 'Descripcion', 'Cantidad', 'Costo Unitario'],
+    ['JDCC8395', 'Taladro Percutor 1/2', 10, 250],
+    ['', 'Termotanque Rheem 80L', 5, 900]
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(filas);
+  ws['!cols'] = [{ wch: 16 }, { wch: 40 }, { wch: 12 }, { wch: 16 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Compra');
+  XLSX.writeFile(wb, 'Plantilla_compra_BM.xlsx');
+}
+
+async function abrirImportadorCompra() {
+  await cargarProductos();
+  importCompraPreview = [];
+  openModal(`
+    <div class="sheet-head"><h3>📦 Cargar compra</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <p style="color:var(--text-dim);font-size:13px;margin-top:-6px">
+      Subí el Excel de la factura/pedido del proveedor (Código, Descripción, Cantidad, Costo Unitario).
+      Los productos que ya tenés cargados (por código o por descripción exacta) suman el stock comprado; el resto se crea como producto nuevo.
+    </p>
+    <div style="margin-top:10px"><button class="btn btn-secondary" id="btn-descargar-plantilla-compra">⬇ Plantilla vacía</button></div>
+    <div class="field" style="margin-top:14px"><label>Archivo Excel (.xlsx)</label><input type="file" id="f-import-compra" accept=".xlsx" /></div>
+    <div id="compra-preview"></div>
+    <div class="form-actions" id="compra-acciones" style="display:none">
+      <button class="btn btn-secondary" id="btn-cancelar">Cerrar</button>
+      <button class="btn btn-primary" id="btn-confirmar-compra">💾 Confirmar carga</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-descargar-plantilla-compra').addEventListener('click', async () => { await cargarXLSX(); descargarPlantillaCompra(); });
+  $('#btn-confirmar-compra').addEventListener('click', confirmarImportacionCompra);
+  $('#f-import-compra').addEventListener('change', async (e) => {
+    const archivo = e.target.files[0];
+    if (!archivo) return;
+    $('#compra-preview').innerHTML = `<p style="margin-top:14px;color:var(--text-dim);font-size:13px">Analizando…</p>`;
+    $('#compra-acciones').style.display = 'none';
+    try { await analizarArchivoCompra(archivo); }
+    catch (err) { $('#compra-preview').innerHTML = `<p style="margin-top:14px;color:var(--accent-2);font-size:13px">No se pudo leer el archivo: ${escapeHtml(err.message)}</p>`; }
+  });
+}
+
+async function analizarArchivoCompra(archivo) {
+  await cargarXLSX();
+  const buf = await archivo.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
+  if (filas.length < 2) throw new Error('El archivo no tiene filas de datos.');
+
+  const buscarCol = (encabezados, patrones) => encabezados.findIndex(h => patrones.some(p => h.includes(p)));
+  const encabezados = filas[0].map(normalizarTextoImport);
+  const idx = {
+    codigo: buscarCol(encabezados, ['codigo', 'cod barra', 'barras']),
+    descripcion: buscarCol(encabezados, ['descripcion', 'nombre', 'producto', 'articulo', 'item']),
+    cantidad: buscarCol(encabezados, ['cantidad', 'cant', 'unidades']),
+    costo: buscarCol(encabezados, ['costo', 'precio compra', 'precio unitario', 'precio costo'])
+  };
+  if (idx.descripcion === -1 || idx.cantidad === -1) {
+    throw new Error('No encontré las columnas "Descripcion" y/o "Cantidad" — usá la plantilla sin cambiar los encabezados.');
+  }
+
+  const filasProcesadas = [];
+  for (let i = 1; i < filas.length; i++) {
+    const fila = filas[i];
+    if (fila.every(c => c === '' || c == null)) continue;
+
+    const descripcion = String(fila[idx.descripcion] || '').trim();
+    const codigo = idx.codigo > -1 ? String(fila[idx.codigo] || '').trim() : '';
+    const cantidad = Math.round(Number(fila[idx.cantidad]) || 0);
+    const costoRaw = idx.costo > -1 ? fila[idx.costo] : '';
+    const costo = costoRaw !== '' ? Number(costoRaw) : null;
+
+    const errores = [];
+    if (!descripcion) errores.push('Sin descripción');
+    if (!cantidad || cantidad <= 0) errores.push('Cantidad inválida');
+    const existente = descripcion ? encontrarProductoExistente(codigo, descripcion) : null;
+    const avisos = [];
+    if (!existente) avisos.push('Producto nuevo — quedará con precio de venta en 0, completalo en Catálogo');
+
+    filasProcesadas.push({ fila: i, codigo, descripcion, cantidad, costo, existente, errores, avisos });
+  }
+
+  importCompraPreview = filasProcesadas;
+  renderPreviewCompra();
+}
+
+function renderPreviewCompra() {
+  const cont = $('#compra-preview');
+  const acciones = $('#compra-acciones');
+  if (importCompraPreview.length === 0) {
+    cont.innerHTML = `<p style="margin-top:14px;color:var(--text-dim);font-size:13px">No encontré filas con datos para cargar.</p>`;
+    acciones.style.display = 'none';
+    return;
+  }
+
+  const nuevos = importCompraPreview.filter(f => !f.existente && f.errores.length === 0);
+  const suman = importCompraPreview.filter(f => f.existente && f.errores.length === 0);
+  const conError = importCompraPreview.filter(f => f.errores.length > 0);
+
+  cont.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <span class="badge badge-pendiente">${suman.length} suma${suman.length !== 1 ? 'n' : ''} stock</span>
+      <span class="badge badge-ok">${nuevos.length} nuevo${nuevos.length !== 1 ? 's' : ''}</span>
+      ${conError.length > 0 ? `<span class="badge badge-rechazada">${conError.length} con error</span>` : ''}
+    </div>
+    ${nuevos.length > 0 ? `
+    <div class="grid-2" style="margin-top:12px">
+      <div class="field"><label>Categoría para los ${nuevos.length} nuevo${nuevos.length !== 1 ? 's' : ''}</label>
+        <select id="f-cat-compra">${CATEGORIAS_PRODUCTO.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Subcategoría (opcional)</label><input id="f-subcat-compra" placeholder="Ej: Gas, Eléctrico" /></div>
+    </div>` : ''}
+    <div class="import-lista" style="margin-top:10px;max-height:340px;overflow-y:auto">
+      ${importCompraPreview.map(f => `
+        <div class="import-fila">
+          <div class="import-fila-info">
+            <div class="import-fila-titulo">
+              <span>${escapeHtml(f.descripcion || '(sin descripción)')}</span>
+              ${f.errores.length ? '<span class="badge badge-rechazada">Error</span>' : f.existente ? '<span class="badge badge-pendiente">Suma stock</span>' : '<span class="badge badge-ok">Nuevo</span>'}
+            </div>
+            <div class="import-fila-precio">+${f.cantidad || 0} uds${f.costo != null ? ' · ' + money(f.costo) : ''}</div>
+            ${f.avisos.length ? `<div class="import-fila-aviso">${f.avisos.map(escapeHtml).join(' · ')}</div>` : ''}
+            ${f.errores.length ? `<div class="import-fila-error">${f.errores.map(escapeHtml).join(' · ')}</div>` : ''}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  acciones.style.display = (nuevos.length + suman.length > 0) ? 'flex' : 'none';
+}
+
+async function confirmarImportacionCompra() {
+  const validas = importCompraPreview.filter(f => f.errores.length === 0);
+  if (validas.length === 0) { toast('No hay filas válidas para cargar', 'error'); return; }
+  const categoria = $('#f-cat-compra')?.value || CATEGORIAS_PRODUCTO[CATEGORIAS_PRODUCTO.length - 1];
+  const subcategoria = $('#f-subcat-compra')?.value.trim() || '';
+
+  const btn = $('#btn-confirmar-compra');
+  btn.disabled = true;
+  btn.textContent = 'Cargando…';
+
+  let ok = 0, fallidas = 0;
+  for (const f of validas) {
+    if (f.existente) {
+      await ajustarStock(f.existente.id, f.cantidad, 'Compra: ' + (f.codigo || f.descripcion));
+      if (f.costo != null && f.costo !== Number(f.existente.costo)) {
+        await sb.from('productos').update({ costo: f.costo }).eq('id', f.existente.id);
+      }
+      ok++;
+    } else {
+      const resp = await sb.from('productos').insert({
+        descripcion: f.descripcion,
+        categoria, subcategoria,
+        codigo_fabrica: categoria === 'Herramientas' ? f.codigo : '',
+        costo: f.costo || 0,
+        precio_venta: 0,
+        stock: f.cantidad,
+        stock_minimo: 5,
+        visible_catalogo: true
+      });
+      if (resp.error) fallidas++; else ok++;
+    }
+  }
+
+  toast(`Compra cargada: ${ok} ok${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
   closeModal();
   await cargarProductos();
   renderInventario();

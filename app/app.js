@@ -2668,7 +2668,23 @@ async function toggleCamaraCF() {
   try {
     await cargarZXing();
     if (!window.ZXing || !ZXing.BrowserMultiFormatReader) throw new Error('La librería del lector no cargó bien (ZXing no disponible)');
-    controlFisicoCodeReader = new ZXing.BrowserMultiFormatReader();
+
+    // TRY_HARDER + formatos explícitos: sin esto, el lector por defecto
+    // prioriza velocidad sobre precisión y en algunos códigos de barras
+    // 1D reales (borrosos, con poca luz, en ángulo) directamente nunca
+    // llega a decodificar nada, aunque la cámara funcione perfecto.
+    let hints;
+    try {
+      hints = new Map();
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39, ZXing.BarcodeFormat.CODE_93,
+        ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+        ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
+        ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.DATA_MATRIX
+      ]);
+    } catch (e) { hints = undefined; /* si algo de esto no existe en esta build, seguimos sin hints */ }
+    controlFisicoCodeReader = new ZXing.BrowserMultiFormatReader(hints);
 
     // Elegir la cámara trasera es un plus, no algo de lo que dependa
     // poder escanear — si listar dispositivos falla (varía según la
@@ -2681,7 +2697,7 @@ async function toggleCamaraCF() {
       deviceId = (trasera || devices[0])?.deviceId;
     } catch (e) { /* sin device list, decodeFromVideoDevice elige sola */ }
 
-    setStatusCamCF('Apuntá al código de barras...');
+    setStatusCamCF('Apuntá al código, a unos 10-15cm, con buena luz');
     await controlFisicoCodeReader.decodeFromVideoDevice(deviceId, 'cf-cam-video', (result) => {
       if (result) manejarCodigoBarraCF(result.getText());
     });

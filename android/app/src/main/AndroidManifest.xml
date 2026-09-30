@@ -32,4 +32,20 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Sin estos 4 permisos, @capacitor/local-notifications NO PUEDE
+         mostrar ninguna notificación real en la barra del sistema, sin
+         importar lo que se programe desde el JS — faltaban acá y por
+         eso ni el chat ni los recordatorios de BAM avisaban con la app
+         cerrada (solo dentro de la app, vía el timbre/burbuja de JS). -->
+    <!-- Android 13+: obligatorio para poder mostrar CUALQUIER notificación. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 12+: para que los recordatorios de la agenda suenen a la
+         hora exacta programada (noche antes / 7am / 30 min antes) en vez
+         de con demoras de varios minutos u horas por el ahorro de batería. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Para que los recordatorios ya programados se vuelvan a armar solos
+         si el celular se reinicia (si no, un reinicio los borra). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 </manifest>

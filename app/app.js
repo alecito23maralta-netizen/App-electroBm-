@@ -87,7 +87,7 @@ function cargarXLSX() {
   return typeof XLSX !== 'undefined' ? Promise.resolve() : cargarScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
 }
 function cargarZXing() {
-  return window.ZXing ? Promise.resolve() : cargarScript('https://cdn.jsdelivr.net/npm/@zxing/library@0.18.6/umd/index.min.js');
+  return window.ZXing ? Promise.resolve() : cargarScript('https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js');
 }
 
 function metodoLabel(m) {
@@ -2677,9 +2677,11 @@ async function toggleCamaraCF() {
     controlFisicoCamStream = $('#cf-cam-video').srcObject;
   } catch (err) {
     const msg = err.name === 'NotAllowedError' ? 'Permití el acceso a la cámara en tu navegador'
-      : err.name === 'NotFoundError' ? 'No se encontró cámara' : 'No se pudo abrir la cámara';
+      : err.name === 'NotFoundError' ? 'No se encontró cámara'
+      : 'No se pudo abrir la cámara (' + (err.name || err.message || 'error desconocido') + ')';
     setStatusCamCF('⚠ ' + msg);
     toast(msg, 'error');
+    console.error('toggleCamaraCF:', err);
   }
 }
 function detenerCamaraCF() {

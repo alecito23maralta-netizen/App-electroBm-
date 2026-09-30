@@ -48,4 +48,11 @@
          si el celular se reinicia (si no, un reinicio los borra). -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Sin esto, el WebView bloquea getUserMedia() en seco (sin mostrar
+         ni siquiera el cartel de permiso) — es lo que hacía fallar la
+         cámara del lector de código de barras en Control Físico dentro
+         del APK, aunque funcione bien en un navegador de escritorio. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 </manifest>

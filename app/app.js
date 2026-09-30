@@ -86,6 +86,9 @@ function cargarJSZip() {
 function cargarXLSX() {
   return typeof XLSX !== 'undefined' ? Promise.resolve() : cargarScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
 }
+function cargarZXing() {
+  return window.ZXing ? Promise.resolve() : cargarScript('https://unpkg.com/@zxing/library@0.18.6/umd/index.min.js');
+}
 
 function metodoLabel(m) {
   return m === 'qr' ? 'QR' : (m ? m[0].toUpperCase() + m.slice(1) : '—');
@@ -1263,6 +1266,13 @@ function sameMonth(dateStr) {
 // ============================================================
 let tabInventario = 'catalogo';
 let filtroCategoriaInventario = 'todas';
+// Control Físico de Inventario (conteo real vs. stock del sistema)
+let controlFisicoSesiones = [];
+let controlFisicoSesionActual = null;
+let controlFisicoItems = [];
+let controlFisicoProdActual = null;   // producto cargado en la tarjeta de conteo
+let controlFisicoCamStream = null;
+let controlFisicoCodeReader = null;
 let busquedaInventario = '';
 // Categorías que el usuario abrió a mano en el Catálogo — antes la
 // primera categoría se auto-abría en cada render (incluso al sólo
@@ -1299,7 +1309,8 @@ async function renderInventario() {
       <button class="tab-btn ${tabInventario === 'movimientos' ? 'active' : ''}" id="tab-movimientos">Movimientos</button>
       ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>
       <button class="tab-btn ${tabInventario === 'costos' ? 'active' : ''}" id="tab-costos">💰 Costos</button>
-      <button class="tab-btn ${tabInventario === 'rotacion' ? 'active' : ''}" id="tab-rotacion">🔄 Rotación</button>` : ''}
+      <button class="tab-btn ${tabInventario === 'rotacion' ? 'active' : ''}" id="tab-rotacion">🔄 Rotación</button>
+      <button class="tab-btn ${tabInventario === 'control' ? 'active' : ''}" id="tab-control">📋 Control Físico</button>` : ''}
     </div>
     <div id="inv-content"></div>
   `;
@@ -1309,6 +1320,7 @@ async function renderInventario() {
     $('#tab-rentabilidad').addEventListener('click', () => { tabInventario = 'rentabilidad'; renderInventario(); });
     $('#tab-costos').addEventListener('click', () => { tabInventario = 'costos'; renderInventario(); });
     $('#tab-rotacion').addEventListener('click', () => { tabInventario = 'rotacion'; renderInventario(); });
+    $('#tab-control').addEventListener('click', () => { tabInventario = 'control'; renderInventario(); });
   }
   $('#tab-catalogo').addEventListener('click', () => { tabInventario = 'catalogo'; renderInventario(); });
   $('#tab-movimientos').addEventListener('click', () => { tabInventario = 'movimientos'; renderInventario(); });
@@ -1318,6 +1330,7 @@ async function renderInventario() {
   else if (tabInventario === 'rentabilidad' && profile.rol === 'admin') renderRentabilidad();
   else if (tabInventario === 'costos' && profile.rol === 'admin') renderCostos();
   else if (tabInventario === 'rotacion' && profile.rol === 'admin') renderRotacion();
+  else if (tabInventario === 'control' && profile.rol === 'admin') renderControlFisico();
 }
 
 function celdaMargenHtml(p) {
@@ -2061,11 +2074,11 @@ async function renderRotacion() {
   }
 }
 
-function abrirFormProducto(existing) {
-  const catInicial = existing?.categoria || CATEGORIAS_PRODUCTO[0];
+function abrirFormProducto(existing, prefill) {
+  const catInicial = existing?.categoria || prefill?.categoria || CATEGORIAS_PRODUCTO[0];
   openModal(`
     <div class="sheet-head"><h3>${existing ? 'Editar producto' : 'Agregar producto'}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <div class="field"><label>Descripción *</label><input id="f-desc" value="${existing ? escapeHtml(existing.descripcion) : ''}" required /></div>
+    <div class="field"><label>Descripción *</label><input id="f-desc" value="${existing ? escapeHtml(existing.descripcion) : escapeHtml(prefill?.descripcion || '')}" required /></div>
     <div class="grid-2" style="margin-top:10px">
       <div class="field"><label>Categoría</label>
         <select id="f-cat">
@@ -2075,18 +2088,18 @@ function abrirFormProducto(existing) {
       <div class="field"><label>Subcategoría</label><input id="f-subcat" placeholder="Ej: Gas, Eléctrico" value="${existing ? escapeHtml(existing.subcategoria || '') : ''}" /></div>
     </div>
     <div class="grid-2" id="campos-codigos" style="margin-top:10px; ${catInicial === 'Herramientas' ? '' : 'display:none'}">
-      <div class="field"><label>Código de fábrica</label><input id="f-codfab" value="${existing ? escapeHtml(existing.codigo_fabrica || '') : ''}" placeholder="Ej: JDCC8395" /></div>
+      <div class="field"><label>Código de fábrica</label><input id="f-codfab" value="${existing ? escapeHtml(existing.codigo_fabrica || '') : escapeHtml(prefill?.codigo_fabrica || '')}" placeholder="Ej: JDCC8395" /></div>
       <div class="field"><label>Código interno</label><input id="f-codint" value="${existing ? escapeHtml(existing.codigo_interno || '') : ''}" placeholder="Ej: H0001" /></div>
     </div>
     <div class="field" style="margin-top:10px"><label>Precio Mayorista<br><span style="font-weight:400;color:var(--text-faint)">lo que te cobra tu proveedor</span></label><input type="number" id="f-costo" value="${existing ? existing.costo : 0}" min="0" step="0.01" /></div>
     <div class="field" style="margin-top:10px"><label>Precio Venta<br><span style="font-weight:400;color:var(--text-faint)">lo que le cobrás al cliente</span></label><input type="number" id="f-precio" value="${existing ? existing.precio_venta : 0}" min="0" step="0.01" /></div>
     <div class="field" style="margin-top:10px"><label>Descuento máximo al cliente (%)<br><span style="font-weight:400;color:var(--text-faint)">tope al armar una cotización/venta — vacío = sin límite</span></label><input type="number" id="f-desc-max" value="${existing?.descuento_maximo_pct ?? ''}" min="0" max="100" step="0.01" placeholder="Sin límite" /></div>
     <div class="grid-2" style="margin-top:10px">
-      <div class="field"><label>Stock inicial</label><input type="number" id="f-stock" value="${existing ? existing.stock : 0}" min="0" ${existing ? 'disabled' : ''} /></div>
+      <div class="field"><label>Stock inicial</label><input type="number" id="f-stock" value="${existing ? existing.stock : (prefill?.stock ?? 0)}" min="0" ${existing ? 'disabled' : ''} /></div>
       <div class="field"><label>Stock mínimo (alerta)</label><input type="number" id="f-stockmin" value="${existing ? existing.stock_minimo : 5}" min="0" /></div>
     </div>
     <div class="field" style="margin-top:10px"><label>Foto (para el catálogo de clientes)</label><input type="file" id="f-imagen-producto" accept="image/*" /></div>
-    <div id="preview-imagen-producto">${existing?.imagen_base64 ? `<img src="${existing.imagen_base64}" style="width:100%;max-width:200px;border-radius:8px;margin-top:8px" />` : ''}</div>
+    <div id="preview-imagen-producto">${(existing?.imagen_base64 || prefill?.imagen_base64) ? `<img src="${existing?.imagen_base64 || prefill.imagen_base64}" style="width:100%;max-width:200px;border-radius:8px;margin-top:8px" />` : ''}</div>
     <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:var(--text-dim)">
       <input type="checkbox" id="f-visible-catalogo" ${(existing ? existing.visible_catalogo !== false : true) ? 'checked' : ''} style="width:16px;height:16px" />
       Mostrar este producto en el Catálogo para clientes
@@ -2116,7 +2129,7 @@ function abrirFormProducto(existing) {
 
   $('#btn-guardar').addEventListener('click', async () => {
     const esHerramienta = $('#f-cat').value === 'Herramientas';
-    const imagen_base64 = imagenNuevaBase64 || existing?.imagen_base64 || null;
+    const imagen_base64 = imagenNuevaBase64 || existing?.imagen_base64 || prefill?.imagen_base64 || null;
     const nuevoPrecioVenta = Number($('#f-precio').value || 0);
     const payload = {
       descripcion: $('#f-desc').value.trim(),
@@ -2183,6 +2196,663 @@ async function ajustarStock(productoId, delta, motivo) {
     motivo,
     usuario_id: profile.id
   });
+}
+
+// ============================================================
+// MÓDULO: CONTROL FÍSICO DE INVENTARIO — conteo real (a mano o con
+// cámara) contra el stock del sistema. Queda en Supabase como una
+// "sesión" compartida: cualquier admin puede seguir cargando conteos
+// desde otro celular y ve el mismo avance. Es solo informe/comparación
+// — NO ajusta productos.stock ni categoría/subcategoría automáticamente.
+//
+// El código de barras/fábrica solo existe hoy para productos de la
+// categoría Herramientas (es el único campo "código" del catálogo) —
+// para el resto (termotanques, calefones, etc.) la búsqueda es por
+// descripción, igual que en el resto de la app.
+// ============================================================
+function codigoVisibleProducto(p) {
+  return p.codigo_fabrica || p.codigo_interno || '';
+}
+
+async function cargarSesionesControlFisico() {
+  const { data } = await sb.from('control_fisico_sesiones').select('*').order('created_at', { ascending: false });
+  controlFisicoSesiones = data || [];
+}
+
+async function cargarItemsControlFisico(sesionId) {
+  const { data } = await sb.from('control_fisico_items').select('*').eq('sesion_id', sesionId).order('created_at', { ascending: true });
+  controlFisicoItems = data || [];
+}
+
+async function renderControlFisico() {
+  await cargarSesionesControlFisico();
+  if (!controlFisicoSesionActual) {
+    controlFisicoSesionActual = controlFisicoSesiones.find(s => s.estado === 'abierta') || null;
+  } else {
+    // refrescar por si cambió de estado desde otro dispositivo
+    controlFisicoSesionActual = controlFisicoSesiones.find(s => s.id === controlFisicoSesionActual.id) || null;
+  }
+  if (!controlFisicoSesionActual) { renderSelectorSesionCF(); return; }
+  await cargarItemsControlFisico(controlFisicoSesionActual.id);
+  renderCuerpoCF();
+}
+
+function renderSelectorSesionCF() {
+  const cont = $('#inv-content');
+  cont.innerHTML = `
+    <div class="card">
+      <div class="card-title">Nueva sesión de conteo</div>
+      <div class="field"><label>Nombre</label><input id="cf-nombre-sesion" placeholder="Ej: Conteo General Septiembre" /></div>
+      <div class="form-actions" style="margin-top:10px"><button class="btn btn-primary" id="cf-crear-sesion">+ Crear sesión</button></div>
+    </div>
+    <div id="cf-lista-sesiones"></div>
+  `;
+  $('#cf-crear-sesion').addEventListener('click', crearSesionCF);
+  $('#cf-nombre-sesion').addEventListener('keydown', (e) => { if (e.key === 'Enter') crearSesionCF(); });
+
+  const lista = $('#cf-lista-sesiones');
+  if (controlFisicoSesiones.length === 0) {
+    lista.innerHTML = `<div class="empty-state">Todavía no hay sesiones de control físico.</div>`;
+    return;
+  }
+  lista.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Sesión</th><th>Estado</th><th>Creada</th><th></th></tr></thead>
+    <tbody>
+      ${controlFisicoSesiones.map(s => `
+        <tr class="cf-sesion-row" data-cf-sesion="${s.id}" style="cursor:pointer">
+          <td>${escapeHtml(s.nombre)}</td>
+          <td><span class="badge ${s.estado === 'abierta' ? 'badge-pendiente' : ''}">${s.estado === 'abierta' ? 'Abierta' : 'Cerrada'}</span></td>
+          <td>${fecha(s.created_at)}</td>
+          <td style="color:var(--text-faint)">Abrir →</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table></div>`;
+  lista.querySelectorAll('[data-cf-sesion]').forEach(row => {
+    row.addEventListener('click', () => { elegirSesionCF(row.dataset.cfSesion); });
+  });
+}
+
+async function crearSesionCF() {
+  const nombre = $('#cf-nombre-sesion').value.trim();
+  if (!nombre) { toast('Ingresá un nombre para la sesión', 'error'); return; }
+  const { data, error } = await sb.from('control_fisico_sesiones').insert({ nombre, usuario_id: profile.id }).select().single();
+  if (error) { toast('Error: ' + error.message, 'error'); return; }
+  controlFisicoSesionActual = data;
+  toast('Sesión creada ✓');
+  await renderControlFisico();
+}
+
+async function elegirSesionCF(id) {
+  controlFisicoSesionActual = controlFisicoSesiones.find(s => s.id === id) || null;
+  await renderControlFisico();
+}
+
+async function cerrarSesionCF() {
+  if (!controlFisicoSesionActual) return;
+  if (!confirm('¿Cerrar esta sesión de control físico?\nVa a seguir disponible para ver/exportar, pero no va a aparecer como la sesión activa la próxima vez.')) return;
+  await sb.from('control_fisico_sesiones').update({ estado: 'cerrada', cerrada_at: new Date().toISOString() }).eq('id', controlFisicoSesionActual.id);
+  toast('Sesión cerrada');
+  controlFisicoSesionActual = null;
+  await renderControlFisico();
+}
+
+function cerrarTarjetaCF() {
+  controlFisicoProdActual = null;
+  const card = $('#cf-prod-card');
+  if (card) card.hidden = true;
+  const input = $('#cf-scan-input');
+  if (input) { input.value = ''; input.focus(); }
+  cerrarDropdownCF();
+}
+
+function renderCuerpoCF() {
+  const cont = $('#inv-content');
+  const s = controlFisicoSesionActual;
+  const stats = calcularStatsCF();
+  cont.innerHTML = `
+    <div class="card" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
+        <strong>${escapeHtml(s.nombre)}</strong>
+        <span class="badge ${s.estado === 'abierta' ? 'badge-pendiente' : ''}" style="margin-left:8px">${s.estado === 'abierta' ? 'Abierta' : 'Cerrada'}</span>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="cf-cambiar-sesion">↔ Cambiar sesión</button>
+      ${s.estado === 'abierta' ? `<button class="btn btn-secondary btn-sm" id="cf-cerrar-sesion">✓ Cerrar sesión</button>` : ''}
+      <button class="btn btn-secondary btn-sm" id="cf-exportar">⬇ Exportar Excel</button>
+    </div>
+
+    <div class="cf-scan-zone">
+      <div class="cf-scan-row">
+        <div class="cf-scan-wrap">
+          <input type="text" id="cf-scan-input" autocomplete="off" placeholder="Código o nombre del producto..." />
+        </div>
+        <button class="btn btn-secondary" id="cf-btn-cam" title="Escanear con cámara">📷</button>
+      </div>
+      <div class="cf-dd-wrap"><div class="cf-dd" id="cf-dropdown"></div></div>
+    </div>
+
+    <div class="cf-cam-panel" id="cf-cam-panel" hidden>
+      <video id="cf-cam-video" autoplay playsinline muted></video>
+      <button class="cf-cam-close" id="cf-cam-close" title="Cerrar cámara">✕</button>
+      <div class="cf-cam-status" id="cf-cam-status">Iniciando cámara...</div>
+    </div>
+
+    <div class="cf-stats">
+      <div class="cf-sc"><div class="cf-sc-n" style="color:var(--accent)">${stats.iguales}</div><div class="cf-sc-l">Iguales</div></div>
+      <div class="cf-sc"><div class="cf-sc-n" style="color:var(--accent-2)">${stats.excedentes}</div><div class="cf-sc-l">Excedentes</div></div>
+      <div class="cf-sc"><div class="cf-sc-n" style="color:var(--danger)">${stats.faltantes}</div><div class="cf-sc-l">Faltantes</div></div>
+      <div class="cf-sc"><div class="cf-sc-n" style="color:var(--text-faint)">${stats.pendientes}</div><div class="cf-sc-l">Pendientes</div></div>
+    </div>
+
+    <div class="cf-prod-card" id="cf-prod-card" hidden>
+      <div class="cf-pc-code" id="cf-pc-code"></div>
+      <div class="cf-pc-name" id="cf-pc-name"></div>
+      <div id="cf-pc-badge"></div>
+      <div class="cf-pc-stocks">
+        <div class="cf-pc-box"><div class="cf-pc-lbl">Stock sistema</div><div class="cf-pc-sn" id="cf-pc-sistema">–</div></div>
+        <div class="cf-pc-box">
+          <div class="cf-pc-lbl">Stock físico</div>
+          <div class="cf-pc-spin">
+            <button class="btn btn-secondary" id="cf-menos" type="button">−</button>
+            <input type="number" id="cf-stock-fisico" value="0" min="0" inputmode="numeric" />
+            <button class="btn btn-secondary" id="cf-mas" type="button">+</button>
+          </div>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-secondary" id="cf-cancelar-conteo">Cancelar</button>
+        <button class="btn btn-primary" id="cf-registrar">✓ Registrar conteo</button>
+      </div>
+    </div>
+
+    <div id="cf-reg-list" class="cf-reg-list"></div>
+  `;
+
+  $('#cf-cambiar-sesion').addEventListener('click', () => { controlFisicoSesionActual = null; renderControlFisico(); });
+  $('#cf-cerrar-sesion')?.addEventListener('click', cerrarSesionCF);
+  $('#cf-exportar').addEventListener('click', exportarExcelCF);
+  $('#cf-btn-cam').addEventListener('click', toggleCamaraCF);
+  $('#cf-cam-close').addEventListener('click', detenerCamaraCF);
+
+  const $scan = $('#cf-scan-input');
+  $scan.addEventListener('input', () => {
+    const v = $scan.value;
+    if (!v.trim()) { cerrarDropdownCF(); return; }
+    renderDropdownCF(v);
+  });
+  $scan.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') buscarDirectoCF();
+    if (e.key === 'Escape') { cerrarDropdownCF(); $scan.value = ''; }
+  });
+  document.addEventListener('click', cerrarDropdownCFSiAfuera);
+
+  $('#cf-menos').addEventListener('click', () => cambiarStockFisicoCF(-1));
+  $('#cf-mas').addEventListener('click', () => cambiarStockFisicoCF(1));
+  $('#cf-stock-fisico').addEventListener('input', (e) => {
+    const v = Math.max(0, parseInt(e.target.value) || 0);
+    if (String(v) !== e.target.value) e.target.value = v;
+    actualizarBadgeCF();
+  });
+  $('#cf-cancelar-conteo').addEventListener('click', cerrarTarjetaCF);
+  $('#cf-registrar').addEventListener('click', registrarConteoCF);
+
+  renderListaCF();
+}
+
+function cerrarDropdownCFSiAfuera(e) {
+  if (!e.target.closest('.cf-scan-zone')) cerrarDropdownCF();
+}
+function cerrarDropdownCF() {
+  const $dd = $('#cf-dropdown');
+  if ($dd) { $dd.classList.remove('open'); $dd.innerHTML = ''; }
+}
+
+function buscarProductosCF(q) {
+  const qn = normalizarTextoImport(q);
+  if (!qn) return [];
+  const yaContados = new Set(controlFisicoItems.filter(i => i.producto_id).map(i => i.producto_id));
+  const candidatos = productosCache.filter(p => !yaContados.has(p.id));
+  const porCodigo = candidatos.filter(p => {
+    const c = codigoVisibleProducto(p);
+    return c && normalizarTextoImport(c).includes(qn);
+  });
+  const enCodigo = new Set(porCodigo.map(p => p.id));
+  const porDescInicio = candidatos.filter(p => !enCodigo.has(p.id) && normalizarTextoImport(p.descripcion).startsWith(qn));
+  const enInicio = new Set([...enCodigo, ...porDescInicio.map(p => p.id)]);
+  const porDescParcial = candidatos.filter(p => !enInicio.has(p.id) && normalizarTextoImport(p.descripcion).includes(qn));
+  return [...porCodigo, ...porDescInicio, ...porDescParcial].slice(0, 50);
+}
+
+function renderDropdownCF(q) {
+  const $dd = $('#cf-dropdown');
+  const resultados = buscarProductosCF(q);
+  const itemsHtml = resultados.map(p => `
+    <div class="cf-dd-item" data-cf-prod="${p.id}">
+      <span class="cf-dd-code">${escapeHtml(codigoVisibleProducto(p) || '—')}</span>
+      <span class="cf-dd-name">${escapeHtml(p.descripcion)}</span>
+      <span class="cf-dd-tag">${p.stock}</span>
+    </div>`).join('');
+  const sinResultados = resultados.length === 0
+    ? `<div style="padding:10px 12px;font-size:12px;color:var(--text-faint)">Sin resultados en el catálogo</div>` : '';
+  const addHtml = `<div class="cf-dd-add" data-cf-nuevo="${escapeHtml(q)}"><span style="font-size:16px">＋</span> Agregar "${escapeHtml(q)}" como producto nuevo</div>`;
+  $dd.innerHTML = sinResultados + itemsHtml + addHtml;
+  $dd.classList.add('open');
+  $dd.querySelectorAll('[data-cf-prod]').forEach(el => el.addEventListener('click', () => seleccionarProductoCF(el.dataset.cfProd)));
+  $dd.querySelector('[data-cf-nuevo]').addEventListener('click', (e) => abrirNuevoItemCF(e.currentTarget.dataset.cfNuevo));
+}
+
+function buscarDirectoCF() {
+  const $scan = $('#cf-scan-input');
+  const q = $scan.value.trim();
+  if (!q) return;
+  // Coincidencia EXACTA de código primero (tipeado o con pistola lectora
+  // USB) — el buscador en vivo excluye lo ya contado para ayudar a ver
+  // qué falta, así que esta es la única vía para volver a tocar un
+  // producto ya registrado escribiendo/escaneando su código de nuevo.
+  const qn = normalizarTextoImport(q);
+  const exacto = productosCache.find(p => {
+    const c = codigoVisibleProducto(p);
+    return c && normalizarTextoImport(c) === qn;
+  });
+  if (exacto) { seleccionarProductoCF(exacto.id); return; }
+
+  const resultados = buscarProductosCF(q);
+  if (resultados.length === 1) { seleccionarProductoCF(resultados[0].id); return; }
+  renderDropdownCF(q);
+}
+
+function verificarYaContadoCF(productoId) {
+  return controlFisicoItems.find(i => i.producto_id === productoId) || null;
+}
+
+function seleccionarProductoCF(productoId) {
+  cerrarDropdownCF();
+  $('#cf-scan-input').value = '';
+  const p = productosCache.find(x => x.id === productoId);
+  if (!p) return;
+  const existente = verificarYaContadoCF(productoId);
+  if (existente) { abrirModalDuplicadoCF(existente); return; }
+  cargarProductoEnTarjetaCF(p);
+}
+
+function cargarProductoEnTarjetaCF(p) {
+  controlFisicoProdActual = p;
+  $('#cf-prod-card').hidden = false;
+  $('#cf-pc-code').textContent = codigoVisibleProducto(p) || '—';
+  $('#cf-pc-name').textContent = p.descripcion;
+  $('#cf-pc-sistema').textContent = p.stock;
+  $('#cf-stock-fisico').value = p.stock;
+  actualizarBadgeCF();
+  setTimeout(() => $('#cf-prod-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+}
+
+function actualizarBadgeCF() {
+  if (!controlFisicoProdActual) return;
+  const f = Math.max(0, parseInt($('#cf-stock-fisico').value) || 0);
+  const s = controlFisicoProdActual.stock;
+  const el = $('#cf-pc-badge');
+  if (f === s) el.innerHTML = `<span class="badge" style="background:var(--accent-dim);color:var(--accent)">✓ Igual</span>`;
+  else if (f > s) el.innerHTML = `<span class="badge" style="background:var(--accent-2-dim);color:var(--accent-2)">▲ Excedente +${f - s}</span>`;
+  else el.innerHTML = `<span class="badge" style="background:var(--danger-dim);color:var(--danger)">▼ Faltante −${s - f}</span>`;
+}
+
+function cambiarStockFisicoCF(delta) {
+  const input = $('#cf-stock-fisico');
+  input.value = Math.max(0, (parseInt(input.value) || 0) + delta);
+  actualizarBadgeCF();
+}
+
+async function registrarConteoCF() {
+  if (!controlFisicoProdActual) return;
+  const p = controlFisicoProdActual;
+  const fisico = Math.max(0, parseInt($('#cf-stock-fisico').value) || 0);
+  const payload = {
+    sesion_id: controlFisicoSesionActual.id,
+    producto_id: p.id,
+    codigo: codigoVisibleProducto(p),
+    descripcion: p.descripcion,
+    categoria: p.categoria || '',
+    subcategoria: p.subcategoria || '',
+    stock_sistema: p.stock,
+    stock_fisico: fisico,
+    es_nuevo: false,
+    usuario_id: profile.id
+  };
+  const { error } = await sb.from('control_fisico_items').insert(payload);
+  if (error) { toast('Error al registrar: ' + error.message, 'error'); return; }
+  if (fisico === p.stock) beepOkCF(); else beepErrorCF();
+  toast('Registrado ✓ ' + p.descripcion.substring(0, 35));
+  cerrarTarjetaCF();
+  await renderControlFisico();
+}
+
+function abrirModalDuplicadoCF(item) {
+  const totalAdic = (item.adiciones || []).reduce((a, x) => a + x.qty, 0);
+  openModal(`
+    <div class="sheet-head"><h3>⚠ Producto ya inventariado</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <p style="color:var(--text-dim);font-size:13px;margin-top:-6px">Este producto ya tiene un conteo registrado en esta sesión.</p>
+    <div class="card" style="margin-top:10px;padding:14px">
+      <strong>${escapeHtml(item.descripcion)}</strong><br>
+      <span style="color:var(--text-faint);font-size:12px">${escapeHtml(item.codigo || '—')}</span>
+      <p style="margin-top:8px;font-size:13px">Cantidad registrada: <strong style="color:var(--accent-2)">${item.stock_fisico}${totalAdic ? ' + ' + totalAdic + ' = ' + (item.stock_fisico + totalAdic) : ''}</strong></p>
+    </div>
+    <div class="field" style="margin-top:10px">
+      <label>Adicionar existencia</label>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+        <button class="btn btn-secondary" id="cf-dup-menos" type="button">−</button>
+        <input type="number" id="cf-dup-qty" value="1" min="1" style="text-align:center;max-width:90px" />
+        <button class="btn btn-secondary" id="cf-dup-mas" type="button">+</button>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="cf-dup-cancelar">Cerrar</button>
+      <button class="btn btn-primary" id="cf-dup-adicionar">＋ Adicionar</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#cf-dup-cancelar').addEventListener('click', closeModal);
+  $('#cf-dup-menos').addEventListener('click', () => { const i = $('#cf-dup-qty'); i.value = Math.max(1, (parseInt(i.value) || 1) - 1); });
+  $('#cf-dup-mas').addEventListener('click', () => { const i = $('#cf-dup-qty'); i.value = Math.max(1, (parseInt(i.value) || 1) + 1); });
+  $('#cf-dup-adicionar').addEventListener('click', () => confirmarAdicionCF(item));
+}
+
+async function confirmarAdicionCF(item) {
+  const qty = Math.max(1, parseInt($('#cf-dup-qty').value) || 1);
+  const nuevasAdiciones = [...(item.adiciones || []), { qty, ts: new Date().toLocaleString('es-BO') }];
+  const { error } = await sb.from('control_fisico_items').update({ adiciones: nuevasAdiciones, updated_at: new Date().toISOString() }).eq('id', item.id);
+  if (error) { toast('Error: ' + error.message, 'error'); return; }
+  beepOkCF();
+  toast('+ ' + qty + ' unidades adicionadas');
+  closeModal();
+  await renderControlFisico();
+}
+
+async function eliminarItemCF(id) {
+  const item = controlFisicoItems.find(i => i.id === id);
+  if (!item) return;
+  if (!confirm('¿Eliminar el conteo de:\n' + item.descripcion + '?')) return;
+  await sb.from('control_fisico_items').delete().eq('id', id);
+  toast('Conteo eliminado');
+  await renderControlFisico();
+}
+
+// ------------------------------------------------------------
+// NUEVO PRODUCTO durante el conteo — alta rápida (nombre/código/
+// cantidad/foto) SIN abrir el formulario completo de Catálogo
+// (categoría, precio, etc.), para no frenar el ritmo de escaneo.
+// Queda marcado como "nuevo" en la sesión; desde la lista se puede
+// mandar al catálogo real con el botón "＋Catálogo".
+// ------------------------------------------------------------
+let cfNuevoFotoBase64 = null;
+
+function abrirNuevoItemCF(query) {
+  cerrarDropdownCF();
+  cfNuevoFotoBase64 = null;
+  const q = (query || '').trim();
+  const esNumerico = /^\d+$/.test(q);
+  openModal(`
+    <div class="sheet-head"><h3>✦ Producto nuevo (no está en el catálogo)</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <div class="field"><label>Nombre / Descripción *</label><input id="cf-nv-nombre" value="${esNumerico ? '' : escapeHtml(q)}" placeholder="Ej: TERMOCUPLA CALEFON 20CM" /></div>
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Código</label><input id="cf-nv-codigo" value="${esNumerico ? escapeHtml(q) : ''}" placeholder="Opcional" /></div>
+      <div class="field"><label>Cantidad física</label><input type="number" id="cf-nv-cant" value="1" min="0" /></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Foto (opcional)</label><input type="file" id="cf-nv-foto" accept="image/*" capture="environment" /></div>
+    <div id="cf-nv-preview"></div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
+      <button class="btn btn-primary" id="cf-nv-guardar">✓ Registrar</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#cf-nv-foto').addEventListener('change', async (e) => {
+    const archivo = e.target.files[0];
+    if (!archivo) return;
+    try {
+      cfNuevoFotoBase64 = await fileToResizedBase64(archivo, 640, 0.8);
+      $('#cf-nv-preview').innerHTML = `<img src="${cfNuevoFotoBase64}" style="width:100%;max-width:200px;border-radius:8px;margin-top:8px" />`;
+    } catch (err) { toast('No se pudo procesar la foto', 'error'); }
+  });
+  $('#cf-nv-guardar').addEventListener('click', guardarNuevoItemCF);
+  setTimeout(() => $('#cf-nv-nombre').focus(), 150);
+}
+
+async function guardarNuevoItemCF() {
+  const nombre = $('#cf-nv-nombre').value.trim();
+  const codigo = $('#cf-nv-codigo').value.trim();
+  const cantidad = Math.max(0, parseInt($('#cf-nv-cant').value) || 0);
+  if (!nombre) { toast('Escribí el nombre del producto', 'error'); return; }
+  const { error } = await sb.from('control_fisico_items').insert({
+    sesion_id: controlFisicoSesionActual.id,
+    producto_id: null,
+    codigo,
+    descripcion: nombre.toUpperCase(),
+    stock_sistema: 0,
+    stock_fisico: cantidad,
+    es_nuevo: true,
+    foto_base64: cfNuevoFotoBase64,
+    usuario_id: profile.id
+  });
+  if (error) { toast('Error: ' + error.message, 'error'); return; }
+  beepOkCF();
+  toast('✦ Producto nuevo registrado: ' + nombre.substring(0, 35));
+  closeModal();
+  await renderControlFisico();
+}
+
+// Abre el alta real en el Catálogo, prellenada con lo que se cargó
+// durante el conteo — el admin completa categoría/precio y guarda.
+function catalogarNuevoCF(itemId) {
+  const item = controlFisicoItems.find(i => i.id === itemId);
+  if (!item) return;
+  abrirFormProducto(undefined, {
+    descripcion: item.descripcion,
+    codigo_fabrica: item.codigo,
+    stock: item.stock_fisico,
+    imagen_base64: item.foto_base64
+  });
+}
+
+// ------------------------------------------------------------
+// CÁMARA (ZXing) — lee código de barras y lo busca contra
+// codigo_fabrica/codigo_interno (hoy solo cargados en Herramientas).
+// ------------------------------------------------------------
+async function toggleCamaraCF() {
+  if (controlFisicoCamStream) { detenerCamaraCF(); return; }
+  const panel = $('#cf-cam-panel');
+  panel.hidden = false;
+  setStatusCamCF('Iniciando cámara...');
+  try {
+    await cargarZXing();
+    controlFisicoCodeReader = new ZXing.BrowserMultiFormatReader();
+    const devices = await ZXing.BrowserMultiFormatReader.listVideoInputDevices();
+    let deviceId = devices[0]?.deviceId;
+    const trasera = devices.find(d => /back|rear|environment/i.test(d.label));
+    if (trasera) deviceId = trasera.deviceId;
+    setStatusCamCF('Apuntá al código de barras...');
+    await controlFisicoCodeReader.decodeFromVideoDevice(deviceId, 'cf-cam-video', (result) => {
+      if (result) manejarCodigoBarraCF(result.getText());
+    });
+    controlFisicoCamStream = $('#cf-cam-video').srcObject;
+  } catch (err) {
+    const msg = err.name === 'NotAllowedError' ? 'Permití el acceso a la cámara en tu navegador'
+      : err.name === 'NotFoundError' ? 'No se encontró cámara'
+      : 'No se pudo abrir la cámara (' + (err.name || err.message || 'error desconocido') + ')';
+    setStatusCamCF('⚠ ' + msg);
+    toast(msg, 'error');
+    console.error('toggleCamaraCF:', err);
+  }
+}
+function detenerCamaraCF() {
+  if (controlFisicoCodeReader) { try { controlFisicoCodeReader.reset(); } catch (e) {} controlFisicoCodeReader = null; }
+  if (controlFisicoCamStream) { controlFisicoCamStream.getTracks().forEach(t => t.stop()); controlFisicoCamStream = null; }
+  const v = $('#cf-cam-video');
+  if (v && v.srcObject) { v.srcObject.getTracks().forEach(t => t.stop()); v.srcObject = null; }
+  const panel = $('#cf-cam-panel');
+  if (panel) panel.hidden = true;
+}
+function setStatusCamCF(msg) {
+  const el = $('#cf-cam-status');
+  if (el) el.textContent = msg;
+}
+function manejarCodigoBarraCF(codigo) {
+  codigo = String(codigo).trim();
+  setStatusCamCF('✓ Código: ' + codigo);
+  detenerCamaraCF();
+  const p = productosCache.find(x => normalizarTextoImport(codigoVisibleProducto(x)) === normalizarTextoImport(codigo) && codigoVisibleProducto(x));
+  if (p) { seleccionarProductoCF(p.id); toast('✓ Detectado: ' + p.descripcion.substring(0, 35)); return; }
+  beepErrorCF();
+  toast('Código no encontrado: ' + codigo, 'error');
+  $('#cf-scan-input').value = codigo;
+  renderDropdownCF(codigo);
+}
+
+// ------------------------------------------------------------
+// SONIDOS — mismo mecanismo que sonarNotificacion() (Web Audio, sin
+// archivos externos): timbre agudo para "coincide", grave para "no
+// coincide", así el conteo se puede seguir sin mirar la pantalla.
+// ------------------------------------------------------------
+function beepOkCF() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.type = 'sine'; osc.frequency.value = 1100;
+    gain.gain.setValueAtTime(0.18, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + 0.18);
+  } catch (e) {}
+}
+function beepErrorCF() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(380, ctx.currentTime);
+    osc.frequency.linearRampToValueAtTime(180, ctx.currentTime + 0.3);
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.32);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + 0.32);
+  } catch (e) {}
+}
+
+// ------------------------------------------------------------
+// STATS + LISTA
+// ------------------------------------------------------------
+function totalConAdicionesCF(item) {
+  return item.stock_fisico + (item.adiciones || []).reduce((a, x) => a + x.qty, 0);
+}
+function calcularStatsCF() {
+  const existentes = controlFisicoItems.filter(i => !i.es_nuevo);
+  const iguales = existentes.filter(i => totalConAdicionesCF(i) === i.stock_sistema).length;
+  const excedentes = existentes.filter(i => totalConAdicionesCF(i) > i.stock_sistema).length;
+  const faltantes = existentes.filter(i => totalConAdicionesCF(i) < i.stock_sistema).length;
+  const contadosIds = new Set(controlFisicoItems.filter(i => i.producto_id).map(i => i.producto_id));
+  const pendientes = Math.max(0, productosCache.length - contadosIds.size);
+  return { iguales, excedentes, faltantes, pendientes };
+}
+
+function renderListaCF() {
+  const cont = $('#cf-reg-list');
+  if (controlFisicoItems.length === 0) { cont.innerHTML = `<div class="empty-state">Los productos registrados van a aparecer acá.</div>`; return; }
+
+  const nuevos = controlFisicoItems.filter(i => i.es_nuevo);
+  const existentes = controlFisicoItems.filter(i => !i.es_nuevo);
+  const faltantes = existentes.filter(i => totalConAdicionesCF(i) < i.stock_sistema)
+    .sort((a, b) => (totalConAdicionesCF(a) - a.stock_sistema) - (totalConAdicionesCF(b) - b.stock_sistema));
+  const excedentes = existentes.filter(i => totalConAdicionesCF(i) > i.stock_sistema)
+    .sort((a, b) => (totalConAdicionesCF(b) - b.stock_sistema) - (totalConAdicionesCF(a) - a.stock_sistema));
+  const iguales = existentes.filter(i => totalConAdicionesCF(i) === i.stock_sistema);
+
+  let html = '';
+  const sec = (lbl, color, items) => {
+    if (!items.length) return;
+    html += `<div class="cf-reg-sec" style="color:${color}">${lbl} (${items.length})</div>`;
+    items.forEach(i => {
+      const tot = totalConAdicionesCF(i);
+      const d = i.es_nuevo ? null : tot - i.stock_sistema;
+      const ds = i.es_nuevo ? 'NUEVO' : (d === 0 ? '=' : d > 0 ? '+' + d : String(d));
+      const dc = i.es_nuevo ? 'var(--info)' : (d === 0 ? 'var(--accent)' : d > 0 ? 'var(--accent-2)' : 'var(--danger)');
+      html += `<div class="cf-reg-item" style="border-left-color:${dc}" data-cf-item="${i.id}">
+        <span class="cf-ri-code">${escapeHtml(i.codigo || '—')}</span>
+        <span class="cf-ri-name">${escapeHtml(i.descripcion)}</span>
+        <span class="cf-ri-nums">${i.es_nuevo ? '' : `<span style="color:var(--accent)">${i.stock_sistema}</span>/`}<span>${tot}</span><br><span style="color:${dc};font-weight:700">${ds}</span></span>
+        ${i.es_nuevo ? `<button class="icon-btn" data-cf-catalogar="${i.id}" title="Agregar al catálogo">＋</button>` : ''}
+        <button class="icon-btn" data-cf-del="${i.id}" title="Eliminar">🗑</button>
+      </div>`;
+    });
+  };
+  sec('🔴 Faltantes', 'var(--danger)', faltantes);
+  sec('🟡 Excedentes', 'var(--accent-2)', excedentes);
+  sec('🟢 Iguales', 'var(--accent)', iguales);
+  sec('✦ Nuevos', 'var(--info)', nuevos);
+  cont.innerHTML = html;
+
+  cont.querySelectorAll('[data-cf-del]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); eliminarItemCF(b.dataset.cfDel); }));
+  cont.querySelectorAll('[data-cf-catalogar]').forEach(b => b.addEventListener('click', (e) => { e.stopPropagation(); catalogarNuevoCF(b.dataset.cfCatalogar); }));
+  cont.querySelectorAll('[data-cf-item]').forEach(row => row.addEventListener('click', () => {
+    const item = controlFisicoItems.find(i => i.id === row.dataset.cfItem);
+    if (item && !item.es_nuevo) abrirModalDuplicadoCF(item);
+  }));
+}
+
+// ------------------------------------------------------------
+// EXPORTAR EXCEL — resumen + detalle agrupado por estado. Sin
+// coloreado de celdas: SheetJS (edición gratuita) ignora los estilos
+// al escribir un archivo nuevo, así que en vez de prometer colores
+// que no se ven, el detalle se separa con títulos de sección bien
+// visibles (mismo criterio que ya se usó para la importación de
+// productos agrupada por categoría).
+// ------------------------------------------------------------
+async function exportarExcelCF() {
+  if (controlFisicoItems.length === 0) { toast('Todavía no hay conteos para exportar', 'error'); return; }
+  await cargarXLSX();
+  const stats = calcularStatsCF();
+  const nuevos = controlFisicoItems.filter(i => i.es_nuevo);
+  const existentes = controlFisicoItems.filter(i => !i.es_nuevo);
+  const faltantes = existentes.filter(i => totalConAdicionesCF(i) < i.stock_sistema);
+  const excedentes = existentes.filter(i => totalConAdicionesCF(i) > i.stock_sistema);
+  const iguales = existentes.filter(i => totalConAdicionesCF(i) === i.stock_sistema);
+
+  const wb = XLSX.utils.book_new();
+  const wsR = XLSX.utils.aoa_to_sheet([
+    ['INFORME DE CONTROL FÍSICO DE INVENTARIO — Electrodomésticos BM'],
+    ['Sesión:', controlFisicoSesionActual.nombre],
+    ['Fecha:', new Date().toLocaleString('es-BO')],
+    [''],
+    ['CATEGORÍA', 'CANTIDAD'],
+    ['🟢 Iguales', stats.iguales],
+    ['🟡 Excedentes', stats.excedentes],
+    ['🔴 Faltantes', stats.faltantes],
+    ['⚫ Pendientes (sin contar)', stats.pendientes],
+    ['✦ Productos nuevos', nuevos.length]
+  ]);
+  wsR['!cols'] = [{ wch: 30 }, { wch: 16 }];
+  XLSX.utils.book_append_sheet(wb, wsR, 'RESUMEN');
+
+  const HDR = ['CÓDIGO', 'DESCRIPCIÓN', 'CATEGORÍA', 'SUBCATEGORÍA', 'STOCK SISTEMA', 'STOCK FÍSICO', 'DIFERENCIA', 'ESTADO'];
+  const det = [HDR];
+  const addS = (lbl, items, est) => {
+    det.push([lbl, '', '', '', '', '', '', '']);
+    if (!items.length) { det.push(['(sin registros)', '', '', '', '', '', '', '']); return; }
+    items.forEach(i => {
+      const tot = totalConAdicionesCF(i);
+      det.push([i.codigo || '', i.descripcion, i.categoria || '', i.subcategoria || '',
+        est === 'NUEVO' ? '' : i.stock_sistema, tot, est === 'NUEVO' ? '' : (tot - i.stock_sistema), est]);
+    });
+  };
+  addS('🟢 IGUALES', iguales, 'IGUAL');
+  addS('🟡 EXCEDENTES', excedentes, 'EXCEDENTE');
+  addS('🔴 FALTANTES', faltantes, 'FALTANTE');
+  addS('✦ PRODUCTOS NUEVOS', nuevos, 'NUEVO');
+  const wsD = XLSX.utils.aoa_to_sheet(det);
+  wsD['!cols'] = [{ wch: 16 }, { wch: 48 }, { wch: 18 }, { wch: 18 }, { wch: 13 }, { wch: 12 }, { wch: 11 }, { wch: 12 }];
+  XLSX.utils.book_append_sheet(wb, wsD, 'DETALLE');
+
+  XLSX.writeFile(wb, 'control_fisico_' + controlFisicoSesionActual.nombre.replace(/[^\w]+/g, '_') + '_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+  toast('Excel exportado ✓');
 }
 
 // ============================================================

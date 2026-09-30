@@ -802,3 +802,160 @@ create policy "venta_abonos_insert" on public.venta_abonos
 -- Ejecutar en el proyecto que ya tenías creado
 -- ============================================================
 alter table public.profiles add column if not exists permisos text[] not null default '{}';
+
+-- ============================================================
+-- ACTUALIZACIÓN: subgrupo "Costos" dentro de Inventario — réplica
+-- del libro de costos que se llevaba en Excel. Un lote_costos agrupa
+-- una compra con su flete total y % de ganancia; cada items_costos
+-- es un ítem de esa compra (descripción, cantidad, monto total
+-- pagado). El costo unitario, el envío repartido, el costo final y
+-- el precio de venta se calculan en la app (no se guardan, para que
+-- siempre reflejen los parámetros actuales del lote). Cuando un ítem
+-- se sube a Inventario como producto nuevo, queda linkeado en
+-- items_costos.producto_id.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.lotes_costos (
+  id uuid primary key default gen_random_uuid(),
+  nombre text not null,
+  flete_total numeric(12,2) not null default 0,
+  ganancia_pct numeric(6,2) not null default 100,
+  usuario_id uuid references public.profiles (id),
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.items_costos (
+  id uuid primary key default gen_random_uuid(),
+  lote_id uuid not null references public.lotes_costos (id) on delete cascade,
+  descripcion text not null,
+  cantidad integer not null check (cantidad > 0),
+  monto_compra numeric(12,2) not null default 0,
+  producto_id uuid references public.productos (id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.lotes_costos enable row level security;
+alter table public.items_costos enable row level security;
+
+drop policy if exists "lotes_costos_all" on public.lotes_costos;
+create policy "lotes_costos_all" on public.lotes_costos
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "items_costos_all" on public.items_costos;
+create policy "items_costos_all" on public.items_costos
+  for all using (public.is_admin()) with check (public.is_admin());
+
+-- ============================================================
+-- ACTUALIZACIÓN: subgrupo "Rotación" dentro de Inventario — vas
+-- subiendo las planchas de pedido (u otra planilla con Código y
+-- Cantidad) una por una y quedan en un historial acumulado, para ver
+-- qué mercadería sale más y cuándo. Cada importación queda en
+-- importaciones_rotacion; cada línea (código + cantidad + fecha) en
+-- rotacion_items, con producto_id enlazado cuando el código coincide
+-- con un producto ya cargado en Inventario (en ese caso la
+-- descripción que se muestra es la del producto real, no la del
+-- archivo).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.importaciones_rotacion (
+  id uuid primary key default gen_random_uuid(),
+  nombre_archivo text not null,
+  mes text not null,
+  lineas integer not null default 0,
+  usuario_id uuid references public.profiles (id),
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.rotacion_items (
+  id uuid primary key default gen_random_uuid(),
+  importacion_id uuid not null references public.importaciones_rotacion (id) on delete cascade,
+  codigo text not null,
+  descripcion text not null default '',
+  cantidad numeric(12,2) not null default 0,
+  fecha date not null,
+  producto_id uuid references public.productos (id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.importaciones_rotacion enable row level security;
+alter table public.rotacion_items enable row level security;
+
+drop policy if exists "importaciones_rotacion_all" on public.importaciones_rotacion;
+create policy "importaciones_rotacion_all" on public.importaciones_rotacion
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "rotacion_items_all" on public.rotacion_items;
+create policy "rotacion_items_all" on public.rotacion_items
+  for all using (public.is_admin()) with check (public.is_admin());
+
+-- ============================================================
+-- ACTUALIZACIÓN: permite borrar un abono de venta a crédito. Hacía
+-- falta para poder deshacer del todo un cobro mal cargado desde Caja
+-- (movimiento + comprobante + abono, los tres juntos) — sin esta
+-- política, el borrado del abono quedaba silenciosamente bloqueado
+-- por RLS aunque el usuario fuera admin.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+drop policy if exists "venta_abonos_delete" on public.venta_abonos;
+create policy "venta_abonos_delete" on public.venta_abonos
+  for delete using (public.is_admin());
+
+-- ============================================================
+-- ACTUALIZACIÓN: BAM en el Chat — pestaña propia con informe diario
+-- (ventas/cobranzas/cotizaciones/créditos por vencer) y agenda de
+-- recordatorios personales. Cada usuario solo ve sus propios mensajes
+-- de BAM y sus propios recordatorios (aunque el CONTENIDO del informe
+-- del admin resuma a todo el equipo, el registro en sí es privado).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.bam_mensajes (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.profiles (id) on delete cascade,
+  tipo text not null default 'informe' check (tipo in ('informe', 'recordatorio')),
+  contenido text not null,
+  fecha date not null default current_date,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.bam_recordatorios (
+  id uuid primary key default gen_random_uuid(),
+  usuario_id uuid not null references public.profiles (id) on delete cascade,
+  texto text not null,
+  fecha date not null,
+  cumplido boolean not null default false,
+  avisado boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+alter table public.bam_mensajes enable row level security;
+alter table public.bam_recordatorios enable row level security;
+
+drop policy if exists "bam_mensajes_all" on public.bam_mensajes;
+create policy "bam_mensajes_all" on public.bam_mensajes
+  for all using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+drop policy if exists "bam_recordatorios_all" on public.bam_recordatorios;
+create policy "bam_recordatorios_all" on public.bam_recordatorios
+  for all using (usuario_id = auth.uid()) with check (usuario_id = auth.uid());
+
+-- ============================================================
+-- ACTUALIZACIÓN: recordatorios de la agenda con BAM ahora avisan en
+-- 3 momentos (antes solo se avisaba una vez, al llegar la fecha):
+--   1) la noche anterior (20:00)
+--   2) la mañana del día acordado (07:00)
+--   3) 30 minutos antes de la hora puesta en la agenda (si se cargó
+--      una hora — el campo "hora" es opcional, así los recordatorios
+--      viejos sin hora siguen avisando los primeros dos momentos)
+-- Se reemplaza el único flag "avisado" por uno por momento, para que
+-- cada aviso se dispare una sola vez.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.bam_recordatorios add column if not exists hora time;
+alter table public.bam_recordatorios add column if not exists avisado_noche boolean not null default false;
+alter table public.bam_recordatorios add column if not exists avisado_manana boolean not null default false;
+alter table public.bam_recordatorios add column if not exists avisado_30min boolean not null default false;
+
+update public.bam_recordatorios set avisado_noche = true, avisado_manana = true, avisado_30min = true
+  where avisado = true;
+
+alter table public.bam_recordatorios drop column if exists avisado;

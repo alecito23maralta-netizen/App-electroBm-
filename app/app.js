@@ -18,6 +18,7 @@ let intervaloBotPendientes = null;  // BAM re-revisa autorizaciones/cobros pendi
 let intervaloBotPrecios = null;     // BAM re-revisa cambios de precio (admin y vendedores)
 let intervaloBotGarantias = null;   // BAM re-revisa garantías por vencer (solo admin)
 let intervaloBotCobranza = null;    // BAM re-revisa ventas a crédito por cobrar (solo admin)
+let intervaloBamRecordatorios = null; // BAM re-revisa la agenda de recordatorios (cada usuario, cada 5 min)
 let vistaActual = 'cotizaciones';
 let canalChatGlobal = null;
 let sesionCajaActual = null;
@@ -38,8 +39,10 @@ let ventaOrigenCotizacion = null;
 let garantiasCache = [];
 let ventasParaGarantiaCache = [];
 let vendedoresCache = [];       // usado por el admin para elegir con quién chatear
-let chatModo = 'general';       // 'general' | 'individual'
+let chatModo = 'general';       // 'general' | 'individual' | 'bam'
 let chatHiloVendedorId = null;  // hilo elegido por el admin en modo individual (null = lista)
+let bamMensajesCache = [];      // historial de BAM (informes + recordatorios avisados) del usuario
+let bamRecordatoriosCache = []; // agenda de recordatorios propios (cumplidos y pendientes)
 
 // ------------------------------------------------------------
 // Utilidades
@@ -198,6 +201,10 @@ async function iniciarApp() {
   setTimeout(mostrarBotCambiosPrecio, 2600);
   setTimeout(mostrarBotGarantiasPorVencer, 3800);
   setTimeout(mostrarBotCobranzaProxima, 5000);
+  // Genera el informe diario y revisa la agenda de recordatorios ya al
+  // entrar (silencioso, sin burbuja) para que estén listos en la
+  // pestaña BAM del Chat apenas el usuario la abra.
+  setTimeout(() => { asegurarInformeDiarioBam(); revisarRecordatoriosBam(); }, 6000);
 
   // BAM vuelve a revisar autorizaciones/cobros pendientes, cambios de
   // precio, garantías por vencer y cobranzas de crédito cada 20 min
@@ -210,6 +217,10 @@ async function iniciarApp() {
   intervaloBotGarantias = setInterval(mostrarBotGarantiasPorVencer, 20 * 60 * 1000);
   clearInterval(intervaloBotCobranza);
   intervaloBotCobranza = setInterval(mostrarBotCobranzaProxima, 20 * 60 * 1000);
+  // Los recordatorios de la agenda se revisan más seguido (cada 5 min)
+  // porque el aviso "30 min antes" necesita más precisión que el resto.
+  clearInterval(intervaloBamRecordatorios);
+  intervaloBamRecordatorios = setInterval(revisarRecordatoriosBam, 5 * 60 * 1000);
 
   if (profile.rol !== 'admin') {
     mostrarPopupPromosVendedor();
@@ -1253,8 +1264,20 @@ function sameMonth(dateStr) {
 let tabInventario = 'catalogo';
 let filtroCategoriaInventario = 'todas';
 let busquedaInventario = '';
+// Categorías que el usuario abrió a mano en el Catálogo — antes la
+// primera categoría se auto-abría en cada render (incluso al sólo
+// modificar un precio), lo que hacía "saltar" la pantalla porque se
+// volvía a expandir sola. Ahora ninguna se abre sola: solo la que el
+// usuario haya tocado se mantiene abierta entre renders.
+let categoriasInventarioAbiertas = new Set();
+let lotesCostosCache = [];
+let loteCostosAbierto = null;
+let itemsCostosCache = [];
 let catalogoBusqueda = '';
 let catalogoCategoria = 'todas';
+let importacionesRotacionCache = [];
+let rotacionItemsCache = [];
+let rotacionMesFiltro = 'todos';
 
 async function renderInventario() {
   await cargarProductos();
@@ -1274,7 +1297,9 @@ async function renderInventario() {
     <div class="tabs">
       <button class="tab-btn ${tabInventario === 'catalogo' ? 'active' : ''}" id="tab-catalogo">Catálogo</button>
       <button class="tab-btn ${tabInventario === 'movimientos' ? 'active' : ''}" id="tab-movimientos">Movimientos</button>
-      ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>` : ''}
+      ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>
+      <button class="tab-btn ${tabInventario === 'costos' ? 'active' : ''}" id="tab-costos">💰 Costos</button>
+      <button class="tab-btn ${tabInventario === 'rotacion' ? 'active' : ''}" id="tab-rotacion">🔄 Rotación</button>` : ''}
     </div>
     <div id="inv-content"></div>
   `;
@@ -1282,6 +1307,8 @@ async function renderInventario() {
     $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
     $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
     $('#tab-rentabilidad').addEventListener('click', () => { tabInventario = 'rentabilidad'; renderInventario(); });
+    $('#tab-costos').addEventListener('click', () => { tabInventario = 'costos'; renderInventario(); });
+    $('#tab-rotacion').addEventListener('click', () => { tabInventario = 'rotacion'; renderInventario(); });
   }
   $('#tab-catalogo').addEventListener('click', () => { tabInventario = 'catalogo'; renderInventario(); });
   $('#tab-movimientos').addEventListener('click', () => { tabInventario = 'movimientos'; renderInventario(); });
@@ -1289,6 +1316,8 @@ async function renderInventario() {
   if (tabInventario === 'catalogo') renderCatalogoProductos();
   else if (tabInventario === 'movimientos') renderMovimientosInventario();
   else if (tabInventario === 'rentabilidad' && profile.rol === 'admin') renderRentabilidad();
+  else if (tabInventario === 'costos' && profile.rol === 'admin') renderCostos();
+  else if (tabInventario === 'rotacion' && profile.rol === 'admin') renderRotacion();
 }
 
 function celdaMargenHtml(p) {
@@ -1365,10 +1394,10 @@ function renderCatalogoProductos() {
   const otrasCategorias = [...new Set(productosCache.map(p => p.categoria).filter(c => !CATEGORIAS_PRODUCTO.includes(c)))];
   const ordenFinal = [...categoriasPresentes, ...otrasCategorias];
 
-  cont.innerHTML = buscadorHtml + ordenFinal.map((cat, idx) => {
+  cont.innerHTML = buscadorHtml + ordenFinal.map((cat) => {
     const items = productosCache.filter(p => p.categoria === cat);
     return `
-      <details class="cat-section" ${(idx === 0 && items.length <= 30) ? 'open' : ''}>
+      <details class="cat-section" data-cat="${escapeHtml(cat)}" ${categoriasInventarioAbiertas.has(cat) ? 'open' : ''}>
         <summary class="cat-header">${escapeHtml(cat)} <span class="cat-count">${items.length}</span></summary>
         <div class="table-wrap">
           <table>
@@ -1389,6 +1418,12 @@ function renderCatalogoProductos() {
   }).join('');
 
   $('#inv-buscar').addEventListener('input', (e) => { busquedaInventario = e.target.value; renderCatalogoProductos(); });
+  cont.querySelectorAll('.cat-section').forEach((det) => {
+    det.addEventListener('toggle', () => {
+      if (det.open) categoriasInventarioAbiertas.add(det.dataset.cat);
+      else categoriasInventarioAbiertas.delete(det.dataset.cat);
+    });
+  });
   wireFilaAcciones(cont, productosCache);
 }
 
@@ -1476,6 +1511,554 @@ async function renderRentabilidad() {
     toast('Margen mínimo actualizado');
     renderRentabilidad();
   });
+}
+
+// ------------------------------------------------------------
+// COSTOS: réplica del "libro de costos" que se llevaba en Excel —
+// un lote de compra con flete total repartido entre todos sus ítems
+// y un % de ganancia único, que calcula el costo final y precio de
+// venta de cada ítem. Cada ítem se puede subir a Inventario como
+// producto nuevo, ya con el costo y precio de venta calculados.
+// ------------------------------------------------------------
+function calcularItemCosto(item, lote, totalCantidadLote) {
+  const cantidad = Number(item.cantidad) || 0;
+  const costoUnitario = cantidad > 0 ? Number(item.monto_compra) / cantidad : 0;
+  const envioUnitario = totalCantidadLote > 0 ? Number(lote.flete_total) / totalCantidadLote : 0;
+  const costoUnitarioFinal = costoUnitario + envioUnitario;
+  const costoTotal = costoUnitarioFinal * cantidad;
+  const precioVentaUnitario = costoUnitarioFinal * (1 + Number(lote.ganancia_pct) / 100);
+  const utilidadUnitaria = precioVentaUnitario - costoUnitarioFinal;
+  const utilidadTotal = utilidadUnitaria * cantidad;
+  return { costoUnitario, envioUnitario, costoUnitarioFinal, costoTotal, precioVentaUnitario, utilidadUnitaria, utilidadTotal };
+}
+
+async function cargarLotesCostos() {
+  const { data } = await sb.from('lotes_costos').select('*').order('created_at', { ascending: false });
+  lotesCostosCache = data || [];
+}
+
+async function cargarItemsCostos(loteId) {
+  const { data } = await sb.from('items_costos').select('*').eq('lote_id', loteId).order('created_at');
+  itemsCostosCache = data || [];
+}
+
+async function renderCostos() {
+  const cont = $('#inv-content');
+  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  if (!loteCostosAbierto) {
+    await cargarLotesCostos();
+    renderListaLotesCostos(cont);
+  } else {
+    await cargarItemsCostos(loteCostosAbierto.id);
+    renderDetalleLoteCostos(cont);
+  }
+}
+
+function renderListaLotesCostos(cont) {
+  cont.innerHTML = `
+    <div class="section-head" style="margin-bottom:14px">
+      <div><p class="sub">Calculá el costo final y precio de venta de un lote de compra (con el flete repartido entre los ítems) y subilo directo a Inventario.</p></div>
+      <button class="btn btn-primary" id="btn-nuevo-lote-costos">+ Nuevo lote</button>
+    </div>
+    ${lotesCostosCache.length === 0 ? `<div class="empty-state">Todavía no creaste ningún lote de costos.</div>` : `
+      <div class="table-wrap"><table>
+        <thead><tr><th>Lote</th><th>Fecha</th><th>Flete total</th><th>% Ganancia</th><th>Acciones</th></tr></thead>
+        <tbody>${lotesCostosCache.map(l => `
+          <tr>
+            <td>${escapeHtml(l.nombre)}</td>
+            <td>${fecha(l.created_at)}</td>
+            <td>${money(l.flete_total)}</td>
+            <td>${Number(l.ganancia_pct).toFixed(0)}%</td>
+            <td><div class="row-actions">
+              <button class="icon-btn" data-act="abrir" data-id="${l.id}" title="Abrir">📂</button>
+              <button class="icon-btn" data-act="editar" data-id="${l.id}" title="Editar parámetros">✎</button>
+              <button class="icon-btn" data-act="eliminar" data-id="${l.id}" title="Eliminar">🗑</button>
+            </div></td>
+          </tr>
+        `).join('')}</tbody>
+      </table></div>
+    `}
+  `;
+  $('#btn-nuevo-lote-costos').addEventListener('click', () => abrirFormLoteCostos());
+  cont.querySelectorAll('[data-act]').forEach(btn => {
+    const lote = lotesCostosCache.find(l => l.id === btn.dataset.id);
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if (act === 'abrir') { loteCostosAbierto = lote; renderCostos(); }
+      if (act === 'editar') abrirFormLoteCostos(lote);
+      if (act === 'eliminar') eliminarRegistro('lotes_costos', lote.id, () => {
+        lotesCostosCache = lotesCostosCache.filter(x => x.id !== lote.id);
+        renderCostos();
+      });
+    });
+  });
+}
+
+function renderDetalleLoteCostos(cont) {
+  const lote = loteCostosAbierto;
+  const totalCantidad = itemsCostosCache.reduce((s, i) => s + Number(i.cantidad), 0);
+  const calculados = itemsCostosCache.map(item => ({ item, ...calcularItemCosto(item, lote, totalCantidad) }));
+  const inversionTotal = calculados.reduce((s, c) => s + c.costoTotal, 0);
+  const utilidadTotal = calculados.reduce((s, c) => s + c.utilidadTotal, 0);
+  const ventaTotal = inversionTotal + utilidadTotal;
+  const margenReal = ventaTotal > 0 ? (utilidadTotal / ventaTotal) * 100 : 0;
+
+  cont.innerHTML = `
+    <button class="btn btn-secondary" id="btn-volver-lotes" style="margin-bottom:12px">← Volver a lotes</button>
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-title">${escapeHtml(lote.nombre)}</div>
+      <div class="grid-2" style="margin-top:10px">
+        <div><span style="color:var(--text-faint);font-size:12px">Flete total</span><br>${money(lote.flete_total)}</div>
+        <div><span style="color:var(--text-faint);font-size:12px">% de ganancia sobre el costo</span><br>${Number(lote.ganancia_pct).toFixed(0)}%</div>
+      </div>
+      <button class="btn btn-secondary" id="btn-editar-params-lote" style="margin-top:10px">✎ Editar parámetros</button>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Inversión total</div><div class="value">${money(inversionTotal)}</div></div>
+      <div class="stat-chip accent"><div class="label">Utilidad total</div><div class="value">${money(utilidadTotal)}</div></div>
+      <div class="stat-chip"><div class="label">Venta total estimada</div><div class="value">${money(ventaTotal)}</div></div>
+      <div class="stat-chip"><div class="label">Margen real</div><div class="value">${margenReal.toFixed(1)}%</div></div>
+    </div>
+
+    <div class="section-head" style="margin:14px 0">
+      <div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary" id="btn-agregar-item-costo">+ Agregar ítem</button>
+        ${itemsCostosCache.some(i => !i.producto_id) ? `<button class="btn btn-primary" id="btn-subir-lote-inventario">✅ Finalizar y subir a Inventario</button>` : ''}
+      </div>
+    </div>
+
+    ${calculados.length === 0 ? `<div class="empty-state">Todavía no agregaste ítems a este lote.</div>` : `
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Descripción</th><th>Cant.</th><th>Compra total</th><th>Costo unit.</th><th>Envío/u</th><th>Costo final</th><th>Precio venta</th><th>Utilidad</th><th>Acciones</th>
+      </tr></thead>
+      <tbody>${calculados.map(({ item, costoUnitario, envioUnitario, costoUnitarioFinal, precioVentaUnitario, utilidadUnitaria, utilidadTotal }) => `
+        <tr>
+          <td>${escapeHtml(item.descripcion)}${item.producto_id ? '<br><span class="badge badge-ok" style="margin-top:4px;display:inline-block">✓ En inventario</span>' : ''}</td>
+          <td>${item.cantidad}</td>
+          <td>${money(item.monto_compra)}</td>
+          <td>${money(costoUnitario)}</td>
+          <td>${money(envioUnitario)}</td>
+          <td>${money(costoUnitarioFinal)}</td>
+          <td>${money(precioVentaUnitario)}</td>
+          <td>${money(utilidadUnitaria)}<br><span style="color:var(--text-faint);font-size:11px">${money(utilidadTotal)} total</span></td>
+          <td><div class="row-actions">
+            ${!item.producto_id ? `<button class="icon-btn" data-act="editar-item" data-id="${item.id}" title="Editar">✎</button>` : ''}
+            <button class="icon-btn" data-act="eliminar-item" data-id="${item.id}" title="Eliminar">🗑</button>
+          </div></td>
+        </tr>
+      `).join('')}</tbody>
+    </table></div>
+    `}
+  `;
+
+  $('#btn-volver-lotes').addEventListener('click', () => { loteCostosAbierto = null; renderCostos(); });
+  $('#btn-editar-params-lote').addEventListener('click', () => abrirFormLoteCostos(lote));
+  $('#btn-agregar-item-costo').addEventListener('click', () => abrirFormItemCosto());
+  $('#btn-subir-lote-inventario')?.addEventListener('click', () => abrirFormSubirLoteInventario());
+  cont.querySelectorAll('[data-act]').forEach(btn => {
+    const item = itemsCostosCache.find(i => i.id === btn.dataset.id);
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if (act === 'editar-item') abrirFormItemCosto(item);
+      if (act === 'eliminar-item') eliminarRegistro('items_costos', item.id, () => {
+        itemsCostosCache = itemsCostosCache.filter(x => x.id !== item.id);
+        renderCostos();
+      });
+    });
+  });
+}
+
+// Sube TODOS los ítems pendientes del lote a Inventario de una sola vez
+// (un solo click, sin revisar producto por producto) — la categoría y
+// subcategoría elegidas acá se aplican a todos los ítems del lote; se
+// pueden corregir individualmente después desde Catálogo si hace falta.
+function abrirFormSubirLoteInventario() {
+  const lote = loteCostosAbierto;
+  const pendientes = itemsCostosCache.filter(i => !i.producto_id);
+  if (pendientes.length === 0) { toast('No hay ítems pendientes de subir', 'error'); return; }
+  openModal(`
+    <div class="sheet-head"><h3>Subir a Inventario</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <p style="color:var(--text-dim);font-size:13.5px;margin:-8px 0 14px">Se van a crear <strong style="color:var(--text)">${pendientes.length}</strong> producto${pendientes.length === 1 ? '' : 's'} nuevo${pendientes.length === 1 ? '' : 's'} en Inventario, con el costo y precio de venta ya calculados de este lote.</p>
+    <div class="field"><label>Categoría (para todos los ítems)</label>
+      <select id="f-cat-lote">
+        ${CATEGORIAS_PRODUCTO.map(cat => `<option value="${cat}">${cat}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Subcategoría (opcional, para todos los ítems)</label><input id="f-subcat-lote" placeholder="Ej: Gas, Eléctrico" /></div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:var(--text-dim)">
+      <input type="checkbox" id="f-visible-lote" checked style="width:16px;height:16px" />
+      Mostrar estos productos en el Catálogo para clientes
+    </label>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
+      <button class="btn btn-primary" id="btn-confirmar-subir-lote">💾 Subir ${pendientes.length} ítem${pendientes.length === 1 ? '' : 's'}</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-confirmar-subir-lote').addEventListener('click', async () => {
+    const btn = $('#btn-confirmar-subir-lote');
+    btn.disabled = true; btn.textContent = 'Subiendo…';
+    const categoria = $('#f-cat-lote').value;
+    const subcategoria = $('#f-subcat-lote').value.trim();
+    const visible_catalogo = $('#f-visible-lote').checked;
+    const totalCantidad = itemsCostosCache.reduce((s, i) => s + Number(i.cantidad), 0);
+
+    let ok = 0, fallidas = 0;
+    for (const item of pendientes) {
+      const calc = calcularItemCosto(item, lote, totalCantidad);
+      const resp = await sb.from('productos').insert({
+        descripcion: item.descripcion,
+        categoria,
+        subcategoria,
+        costo: Number(calc.costoUnitarioFinal.toFixed(2)),
+        precio_venta: Number(calc.precioVentaUnitario.toFixed(2)),
+        stock: item.cantidad,
+        stock_minimo: 5,
+        visible_catalogo
+      }).select().single();
+      if (resp.error || !resp.data) { fallidas++; continue; }
+      await sb.from('items_costos').update({ producto_id: resp.data.id }).eq('id', item.id);
+      item.producto_id = resp.data.id;
+      ok++;
+    }
+
+    toast(`Subida terminada: ${ok} producto${ok === 1 ? '' : 's'} creado${ok === 1 ? '' : 's'}${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
+    closeModal();
+    await cargarProductos();
+    renderInventario();
+  });
+}
+
+function abrirFormLoteCostos(existing) {
+  openModal(`
+    <div class="sheet-head"><h3>${existing ? 'Editar lote de costos' : 'Nuevo lote de costos'}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <div class="field"><label>Nombre del lote *</label><input id="f-lote-nombre" value="${existing ? escapeHtml(existing.nombre) : ''}" placeholder="Ej: Compra Herramientas Octubre" required /></div>
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Flete total (Bs)<br><span style="font-weight:400;color:var(--text-faint)">se reparte entre todos los ítems del lote</span></label><input type="number" id="f-lote-flete" value="${existing ? existing.flete_total : 0}" min="0" step="0.01" /></div>
+      <div class="field"><label>% de ganancia sobre el costo</label><input type="number" id="f-lote-ganancia" value="${existing ? existing.ganancia_pct : 100}" min="0" step="1" /></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
+      <button class="btn btn-primary" id="btn-guardar">💾 Guardar</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-guardar').addEventListener('click', async () => {
+    const nombre = $('#f-lote-nombre').value.trim();
+    if (!nombre) { toast('Ingresá un nombre para el lote', 'error'); return; }
+    const payload = {
+      nombre,
+      flete_total: Number($('#f-lote-flete').value || 0),
+      ganancia_pct: Number($('#f-lote-ganancia').value || 0)
+    };
+    let resp;
+    if (existing) resp = await sb.from('lotes_costos').update(payload).eq('id', existing.id).select().single();
+    else resp = await sb.from('lotes_costos').insert({ ...payload, usuario_id: profile.id }).select().single();
+    if (resp.error) { toast('Error: ' + resp.error.message, 'error'); return; }
+    toast('Lote guardado');
+    closeModal();
+    if (existing) Object.assign(loteCostosAbierto, resp.data);
+    else loteCostosAbierto = resp.data;
+    renderCostos();
+  });
+}
+
+function abrirFormItemCosto(existing) {
+  openModal(`
+    <div class="sheet-head"><h3>${existing ? 'Editar ítem' : 'Agregar ítem'}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <div class="field"><label>Descripción *</label><input id="f-item-desc" value="${existing ? escapeHtml(existing.descripcion) : ''}" required /></div>
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Cantidad *</label><input type="number" id="f-item-cant" value="${existing ? existing.cantidad : 1}" min="1" step="1" /></div>
+      <div class="field"><label>Monto total de compra (Bs) *<br><span style="font-weight:400;color:var(--text-faint)">lo que pagaste por esa cantidad</span></label><input type="number" id="f-item-monto" value="${existing ? existing.monto_compra : 0}" min="0" step="0.01" /></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
+      <button class="btn btn-primary" id="btn-guardar">💾 Guardar</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-guardar').addEventListener('click', async () => {
+    const descripcion = $('#f-item-desc').value.trim();
+    const cantidad = Number($('#f-item-cant').value || 0);
+    const monto_compra = Number($('#f-item-monto').value || 0);
+    if (!descripcion) { toast('Ingresá una descripción', 'error'); return; }
+    if (cantidad <= 0) { toast('Ingresá una cantidad válida', 'error'); return; }
+    const payload = { descripcion, cantidad, monto_compra };
+    let resp;
+    if (existing) resp = await sb.from('items_costos').update(payload).eq('id', existing.id).select().single();
+    else resp = await sb.from('items_costos').insert({ ...payload, lote_id: loteCostosAbierto.id }).select().single();
+    if (resp.error) { toast('Error: ' + resp.error.message, 'error'); return; }
+    toast('Ítem guardado');
+    closeModal();
+    if (existing) Object.assign(existing, resp.data);
+    else itemsCostosCache.push(resp.data);
+    renderCostos();
+  });
+}
+
+// ------------------------------------------------------------
+// ROTACIÓN: historial acumulado de "planchas de pedido" (o cualquier
+// planilla con columnas Código y Cantidad) — cada archivo que se sube
+// se SUMA al histórico (no lo reemplaza), para ver qué mercadería
+// rota más y cuándo. Cuando el código de una fila coincide con el
+// código de fábrica/interno de un producto ya cargado en Inventario,
+// esa fila se "autodescribe": se usa la descripción real del
+// producto en vez de la que traiga el archivo (que puede venir vacía
+// o inconsistente entre planillas).
+// ------------------------------------------------------------
+async function cargarRotacion() {
+  const [{ data: importaciones }, { data: items }] = await Promise.all([
+    sb.from('importaciones_rotacion').select('*').order('created_at', { ascending: false }),
+    sb.from('rotacion_items').select('*')
+  ]);
+  importacionesRotacionCache = importaciones || [];
+  rotacionItemsCache = items || [];
+}
+
+function nombreMesRotacion(m) {
+  const [anio, mes] = m.split('-');
+  const nombres = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  return `${nombres[Number(mes) - 1] || mes} ${anio}`;
+}
+
+async function importarPlanchaRotacion(archivo, mesFallback) {
+  await cargarXLSX();
+  const buf = await archivo.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
+  if (filas.length < 2) throw new Error('El archivo no tiene filas de datos.');
+
+  const encabezados = filas[0].map(normalizarTextoImport);
+  const idx = {
+    codigo: encabezados.indexOf('codigo'),
+    cantidad: encabezados.indexOf('cantidad'),
+    descripcion: encabezados.indexOf('descripcion'),
+    fecha: encabezados.indexOf('fecha')
+  };
+  if (idx.codigo === -1 || idx.cantidad === -1) {
+    throw new Error('No encontré las columnas "Código" y/o "Cantidad" — revisá los encabezados del archivo.');
+  }
+
+  const filasValidas = [];
+  for (let i = 1; i < filas.length; i++) {
+    const fila = filas[i];
+    if (fila.every(c => c === '' || c == null)) continue;
+    const codigo = String(fila[idx.codigo] || '').trim();
+    const cantidad = Number(fila[idx.cantidad]);
+    if (!codigo || isNaN(cantidad) || cantidad <= 0) continue;
+
+    const fechaCelda = idx.fecha > -1 ? fila[idx.fecha] : null;
+    const fechaIso = (fechaCelda instanceof Date && !isNaN(fechaCelda)) ? fechaCelda.toISOString().slice(0, 10) : `${mesFallback}-01`;
+
+    const match = productosCache.find(p =>
+      (p.codigo_fabrica && normalizarTextoImport(p.codigo_fabrica) === normalizarTextoImport(codigo)) ||
+      (p.codigo_interno && normalizarTextoImport(p.codigo_interno) === normalizarTextoImport(codigo))
+    );
+    const descripcionArchivo = idx.descripcion > -1 ? String(fila[idx.descripcion] || '').trim() : '';
+
+    filasValidas.push({
+      codigo, cantidad, fecha: fechaIso,
+      descripcion: match ? match.descripcion : (descripcionArchivo || '(sin coincidencia en Inventario)'),
+      producto_id: match ? match.id : null
+    });
+  }
+  if (filasValidas.length === 0) throw new Error('No encontré filas válidas (con Código y Cantidad) para importar.');
+
+  const { data: importacion, error: eImp } = await sb.from('importaciones_rotacion').insert({
+    nombre_archivo: archivo.name, mes: mesFallback, lineas: filasValidas.length, usuario_id: profile.id
+  }).select().single();
+  if (eImp) throw new Error(eImp.message);
+
+  const { error: eItems } = await sb.from('rotacion_items').insert(filasValidas.map(f => ({ ...f, importacion_id: importacion.id })));
+  if (eItems) throw new Error(eItems.message);
+}
+
+// Agrupa por código (dentro del mes filtrado): cantidad total vendida,
+// en cuántas importaciones distintas apareció ("N° de pedidos") y la
+// fecha más reciente. Si alguna fila coincidió con un producto de
+// Inventario, esa descripción "gana" sobre la del archivo.
+function agruparRotacionPorCodigo() {
+  const items = rotacionMesFiltro === 'todos' ? rotacionItemsCache : rotacionItemsCache.filter(i => i.fecha.slice(0, 7) === rotacionMesFiltro);
+  const porCodigo = {};
+  items.forEach(i => {
+    if (!porCodigo[i.codigo]) porCodigo[i.codigo] = { codigo: i.codigo, descripcion: i.descripcion, producto_id: i.producto_id, cantidad: 0, pedidos: new Set(), ultimaVenta: i.fecha };
+    const g = porCodigo[i.codigo];
+    g.cantidad += Number(i.cantidad);
+    g.pedidos.add(i.importacion_id);
+    if (i.fecha > g.ultimaVenta) g.ultimaVenta = i.fecha;
+    if (i.producto_id || !g.producto_id) { g.descripcion = i.descripcion; g.producto_id = i.producto_id || g.producto_id; }
+  });
+  return Object.values(porCodigo).map(g => ({ ...g, pedidos: g.pedidos.size })).sort((a, b) => b.cantidad - a.cantidad);
+}
+
+function barraHorizontalRotacionHtml(filas, variante) {
+  if (filas.length === 0) return `<div class="empty-state">Sin datos.</div>`;
+  const max = Math.max(...filas.map(f => f.valor), 1);
+  return `<div class="rot-bars">
+    ${filas.map((f, i) => `
+      <div class="rot-bar-row">
+        <span class="rot-bar-label">${i + 1}. ${escapeHtml(f.label)}</span>
+        <div class="rot-bar-track"><div class="rot-bar-fill${variante ? ' ' + variante : ''}" style="width:${(f.valor / max) * 100}%"></div></div>
+        <span class="rot-bar-valor">${f.valor}${f.sufijo || ''}</span>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+// Evolución mensual del top 3 (cantidad vendida por mes) como un
+// gráfico de líneas armado a mano en SVG — la app no usa ninguna
+// librería de gráficos.
+function evolucionMensualRotacionHtml(top3) {
+  if (top3.length === 0) return `<div class="empty-state">Sin datos.</div>`;
+  const codigos = top3.map(t => t.codigo);
+  const meses = [...new Set(rotacionItemsCache.filter(i => codigos.includes(i.codigo)).map(i => i.fecha.slice(0, 7)))].sort();
+  if (meses.length === 0) return `<div class="empty-state">Sin datos.</div>`;
+
+  const colores = ['#00e5a0', '#4c8cff', '#ff6a3d'];
+  const series = top3.map((t, idx) => {
+    const porMes = {};
+    rotacionItemsCache.filter(i => i.codigo === t.codigo).forEach(i => {
+      const m = i.fecha.slice(0, 7);
+      porMes[m] = (porMes[m] || 0) + Number(i.cantidad);
+    });
+    return { codigo: t.codigo, descripcion: t.descripcion, color: colores[idx % colores.length], valores: meses.map(m => porMes[m] || 0) };
+  });
+
+  const maxValor = Math.max(...series.flatMap(s => s.valores), 1);
+  const W = 600, H = 220, padL = 34, padB = 26, padT = 10, padR = 10;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const puntoX = (i) => padL + (meses.length === 1 ? plotW / 2 : (plotW * i) / (meses.length - 1));
+  const puntoY = (v) => padT + plotH - (v / maxValor) * plotH;
+
+  const lineasSvg = series.map(s => `
+    <polyline points="${s.valores.map((v, i) => `${puntoX(i)},${puntoY(v)}`).join(' ')}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
+    ${s.valores.map((v, i) => `<circle cx="${puntoX(i)}" cy="${puntoY(v)}" r="3.5" fill="${s.color}" />`).join('')}
+  `).join('');
+  const ejeXsvg = meses.map((m, i) => `<text x="${puntoX(i)}" y="${H - 6}" font-size="9" fill="#676e80" text-anchor="middle">${m.slice(2)}</text>`).join('');
+  const ejeYsvg = `<text x="${padL - 6}" y="${padT + 4}" font-size="9" fill="#676e80" text-anchor="end">${maxValor}</text><text x="${padL - 6}" y="${H - padB}" font-size="9" fill="#676e80" text-anchor="end">0</text>`;
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;max-height:240px">
+      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${H - padB}" stroke="rgba(255,255,255,0.12)" />
+      <line x1="${padL}" y1="${H - padB}" x2="${W - padR}" y2="${H - padB}" stroke="rgba(255,255,255,0.12)" />
+      ${ejeXsvg}${ejeYsvg}${lineasSvg}
+    </svg>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px">
+      ${series.map(s => `<span style="font-size:12px;color:var(--text-dim)"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${s.color};margin-right:5px"></span>${escapeHtml(s.codigo)} - ${escapeHtml(s.descripcion)}</span>`).join('')}
+    </div>
+  `;
+}
+
+function renderTablaYGraficosRotacion() {
+  const agrupado = agruparRotacionPorCodigo();
+
+  $('#rot-tabla').innerHTML = agrupado.length === 0 ? `<div class="empty-state">Sin datos para este mes.</div>` : `
+    <div class="table-wrap"><table>
+      <thead><tr><th>Código</th><th>Descripción</th><th>Cantidad vendida</th><th>N° de pedidos</th><th>Última venta</th></tr></thead>
+      <tbody>${agrupado.map(g => `
+        <tr>
+          <td>${escapeHtml(g.codigo)}</td>
+          <td>${escapeHtml(g.descripcion || '—')}${g.producto_id ? ' <span class="badge badge-ok" style="margin-left:4px">En inventario</span>' : ''}</td>
+          <td>${g.cantidad}</td>
+          <td>${g.pedidos}</td>
+          <td>${fecha(g.ultimaVenta)}</td>
+        </tr>
+      `).join('')}</tbody>
+    </table></div>
+  `;
+
+  const topCantidad = agrupado.slice(0, 10);
+  const topPedidos = [...agrupado].sort((a, b) => b.pedidos - a.pedidos || b.cantidad - a.cantidad).slice(0, 10);
+
+  $('#rot-chart-top').innerHTML = barraHorizontalRotacionHtml(topCantidad.map(g => ({ label: `${g.codigo} - ${g.descripcion}`, valor: g.cantidad })));
+  $('#rot-chart-repiten').innerHTML = barraHorizontalRotacionHtml(topPedidos.map(g => ({ label: `${g.codigo} - ${g.descripcion}`, valor: g.pedidos, sufijo: ` pedido${g.pedidos === 1 ? '' : 's'} · ${g.cantidad} unidad${g.cantidad === 1 ? '' : 'es'}` })), 'accent-2');
+  $('#rot-chart-evolucion').innerHTML = evolucionMensualRotacionHtml(agrupado.slice(0, 3));
+}
+
+// BAM resume los productos que más rotan — se muestra solo al terminar
+// de importar un archivo nuevo, y también bajo pedido con el botón
+// "Preguntale a BAM" (BAM no entiende texto libre, así que esto se
+// resuelve con un botón en vez de una consulta escrita).
+function mostrarBotResumenRotacion() {
+  const top = agruparRotacionPorCodigo().slice(0, 5);
+  if (top.length === 0) { toast('Todavía no hay datos de rotación para resumir', 'error'); return; }
+  const lineas = top.map((g, i) => `${i + 1}. ${escapeHtml(g.descripcion)} — ${g.cantidad} u.`).join('<br>');
+  mostrarBotBurbuja('🤖 BAM te cuenta:', `Lo que más está rotando:<br>${lineas}`, {
+    botones: [{ label: 'Ver Rotación →', onClick: () => { tabInventario = 'rotacion'; switchView('inventario'); } }]
+  });
+}
+
+async function renderRotacion() {
+  const cont = $('#inv-content');
+  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  await cargarRotacion();
+
+  const totalLineas = rotacionItemsCache.length;
+  const mesesDisponibles = [...new Set(rotacionItemsCache.map(i => i.fecha.slice(0, 7)))].sort().reverse();
+  const hayDatos = rotacionItemsCache.length > 0;
+
+  cont.innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">Importar Excel</div>
+      <p style="color:var(--text-dim);font-size:13px;margin:-6px 0 12px">Subí las planchas de pedido (u otra planilla con Código y Cantidad) una por una — cada una se agrega al historial para ver qué se vendió, cuándo, y qué productos se repiten más.</p>
+      <div class="grid-2">
+        <div class="field"><label>Archivo Excel (.xlsx)</label><input type="file" id="f-rot-archivo" accept=".xlsx" /></div>
+        <div class="field"><label>Mes a usar si no se encuentra fecha</label><input type="month" id="f-rot-mes-fallback" value="${new Date().toISOString().slice(0, 7)}" /></div>
+      </div>
+      <p style="color:var(--text-faint);font-size:12px;margin-top:10px">📄 ${importacionesRotacionCache.length} archivo${importacionesRotacionCache.length === 1 ? '' : 's'} importado${importacionesRotacionCache.length === 1 ? '' : 's'} hasta ahora · ${totalLineas} línea${totalLineas === 1 ? '' : 's'} en total</p>
+    </div>
+
+    ${!hayDatos ? `<div class="empty-state">Todavía no subiste ninguna plancha de pedido.</div>` : `
+    <div class="section-head" style="margin-bottom:10px">
+      <div><div class="card-title" style="margin:0">Qué se vendió y cuándo (por código)</div></div>
+      <div class="field" style="max-width:170px;margin:0">
+        <select id="f-rot-mes-filtro">
+          <option value="todos" ${rotacionMesFiltro === 'todos' ? 'selected' : ''}>Todos</option>
+          ${mesesDisponibles.map(m => `<option value="${m}" ${rotacionMesFiltro === m ? 'selected' : ''}>${nombreMesRotacion(m)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div id="rot-tabla"></div>
+    <div class="grid-2" style="margin-top:16px;gap:16px">
+      <div class="card"><div class="card-title">Top productos por cantidad vendida</div><div id="rot-chart-top"></div></div>
+      <div class="card"><div class="card-title">Productos que más se repiten</div><div id="rot-chart-repiten"></div></div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">Evolución mensual (top 3 productos)</div>
+      <div id="rot-chart-evolucion"></div>
+    </div>
+    <button class="btn btn-secondary" id="btn-preguntar-bam" style="margin-top:16px">🤖 Preguntale a BAM</button>
+    `}
+  `;
+
+  $('#f-rot-archivo').addEventListener('change', async (e) => {
+    const archivo = e.target.files[0];
+    if (!archivo) return;
+    const mesFallback = $('#f-rot-mes-fallback').value || new Date().toISOString().slice(0, 7);
+    e.target.disabled = true;
+    try {
+      await importarPlanchaRotacion(archivo, mesFallback);
+      toast('Archivo importado');
+      await renderRotacion();
+      mostrarBotResumenRotacion();
+    } catch (err) {
+      toast('No se pudo leer el archivo: ' + err.message, 'error');
+      e.target.disabled = false;
+    }
+  });
+
+  if (hayDatos) {
+    $('#f-rot-mes-filtro').addEventListener('change', (e) => { rotacionMesFiltro = e.target.value; renderTablaYGraficosRotacion(); });
+    $('#btn-preguntar-bam').addEventListener('click', () => mostrarBotResumenRotacion());
+    renderTablaYGraficosRotacion();
+  }
 }
 
 function abrirFormProducto(existing) {
@@ -1607,8 +2190,81 @@ async function ajustarStock(productoId, delta, motivo) {
 // Solo admin. Los productos que coincidan por código o por
 // descripción exacta con uno ya cargado se actualizan (precio,
 // costo, descuento máximo y foto); el resto se crea como nuevo.
+// El archivo va agrupado en una tabla por categoría (título de
+// categoría + fila de encabezados + sus filas, después la próxima
+// categoría), igual que se ve agrupado el Catálogo en la app — por
+// eso ya no hay columna "Categoria" por fila: la categoría de cada
+// producto es el título de la tabla en la que está.
 // ============================================================
-const COLUMNAS_IMPORT_PRODUCTOS = ['Codigo', 'Descripcion', 'Categoria', 'Precio Mayorista', 'Precio Venta', 'Margen %', 'Descuento Maximo %', 'Foto'];
+const COLUMNAS_IMPORT_PRODUCTOS = ['Codigo', 'Descripcion', 'Precio Mayorista', 'Precio Venta', 'Margen %', 'Descuento Maximo %', 'Foto'];
+
+// Arma las filas de un Excel a partir de grupos por categoría —
+// [{ categoria, filas: [[...fila sin categoría...], ...], fotos: {indiceEnFilas: dataUrl} }] —
+// insertando el título de cada tabla, su fila de encabezados y una
+// fila en blanco entre categorías. Devuelve las filas ya combinadas,
+// el mapa de fotos reindexado a la fila absoluta del archivo (para
+// generarExcelConFotos) y los merges para que el título de cada
+// tabla se vea como una sola celda ancha.
+function construirFilasAgrupadas(grupos) {
+  const nCols = COLUMNAS_IMPORT_PRODUCTOS.length;
+  const todasFilas = [];
+  const fotosPorFila = {};
+  const merges = [];
+  const bannerRows = [];
+  grupos.forEach((grupo, gi) => {
+    if (gi > 0) todasFilas.push(Array(nCols).fill(''));
+    const filaBanner = todasFilas.length;
+    todasFilas.push([grupo.categoria.toUpperCase(), ...Array(nCols - 1).fill('')]);
+    merges.push({ s: { r: filaBanner, c: 0 }, e: { r: filaBanner, c: nCols - 1 } });
+    bannerRows.push(filaBanner);
+    todasFilas.push(COLUMNAS_IMPORT_PRODUCTOS);
+    grupo.filas.forEach((fila, i) => {
+      const filaIdx = todasFilas.length;
+      todasFilas.push(fila);
+      if (grupo.fotos && grupo.fotos[i]) fotosPorFila[filaIdx] = grupo.fotos[i];
+    });
+  });
+  return { filas: todasFilas, fotosPorFila, merges, bannerRows };
+}
+
+// SheetJS gratis no escribe estilos de celda (negrita/color de fondo) al
+// generar un .xlsx nuevo — los ignora en silencio — así que el título de
+// cada tabla de categoría se inyecta a mano en xl/styles.xml (fuente
+// blanca en negrita + relleno verde, mismo mecanismo que las fotos: XML
+// crudo dentro del .zip). Devuelve el styles.xml modificado y el índice
+// de estilo a usar en las celdas de esas filas.
+function inyectarEstiloCategoriaEnStylesXml(stylesXml) {
+  const fontXml = '<font><b/><sz val="12"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>';
+  const nuevaFuenteIdx = Number(stylesXml.match(/<fonts count="(\d+)">/)[1]);
+  stylesXml = stylesXml
+    .replace(/<fonts count="\d+">/, `<fonts count="${nuevaFuenteIdx + 1}">`)
+    .replace('</fonts>', `${fontXml}</fonts>`);
+
+  const fillXml = '<fill><patternFill patternType="solid"><fgColor rgb="FF1B8F5A"/><bgColor indexed="64"/></patternFill></fill>';
+  const nuevoFillIdx = Number(stylesXml.match(/<fills count="(\d+)">/)[1]);
+  stylesXml = stylesXml
+    .replace(/<fills count="\d+">/, `<fills count="${nuevoFillIdx + 1}">`)
+    .replace('</fills>', `${fillXml}</fills>`);
+
+  const nuevoXfIdx = Number(stylesXml.match(/<cellXfs count="(\d+)">/)[1]);
+  const xfXml = `<xf numFmtId="0" fontId="${nuevaFuenteIdx}" fillId="${nuevoFillIdx}" borderId="0" xfId="0" applyFont="1" applyFill="1"/>`;
+  stylesXml = stylesXml
+    .replace(/<cellXfs count="\d+">/, `<cellXfs count="${nuevoXfIdx + 1}">`)
+    .replace('</cellXfs>', `${xfXml}</cellXfs>`);
+
+  return { stylesXml, estiloIdx: nuevoXfIdx };
+}
+
+// Aplica ese índice de estilo a todas las celdas de las filas-título de
+// categoría (bannerRows, 0-indexado) dentro del XML de la hoja.
+function aplicarEstiloFilasBanner(sheetXml, bannerRows, estiloIdx) {
+  bannerRows.forEach((idx0) => {
+    const rowNum = idx0 + 1; // 1-indexado en el XML de la hoja
+    const re = new RegExp(`(<row r="${rowNum}"[^>]*>)([\\s\\S]*?)(</row>)`);
+    sheetXml = sheetXml.replace(re, (_, open, inner, close) => open + inner.replace(/<c /g, `<c s="${estiloIdx}" `) + close);
+  });
+  return sheetXml;
+}
 
 // Margen de ganancia sobre el costo (lo que le agregás a lo que pagaste),
 // en %. null si no hay costo cargado (no se puede calcular).
@@ -1724,16 +2380,28 @@ async function extraerFotosDeExcel(zip) {
 // extraerFotosDeExcel(), pero al revés. Validado con un archivo real
 // abierto tanto por este mismo lector como por una librería externa
 // (openpyxl) antes de integrarlo acá.
-async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila) {
+async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila, merges, bannerRows) {
   await Promise.all([cargarXLSX(), cargarJSZip()]);
   const hoja = XLSX.utils.aoa_to_sheet(filas);
   hoja['!cols'] = COLUMNAS_IMPORT_PRODUCTOS.map((_, i) => i === 1 ? { wch: 34 } : { wch: 15 });
+  if (merges && merges.length) hoja['!merges'] = merges;
   const libro = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(libro, hoja, 'Productos');
   const bufferBase = XLSX.write(libro, { type: 'array', bookType: 'xlsx' });
 
   const zip = await JSZip.loadAsync(bufferBase);
   const entradasFotos = Object.entries(fotosPorFila || {}).filter(([, url]) => !!url);
+
+  if (bannerRows && bannerRows.length > 0) {
+    const stylesXml = await zip.file('xl/styles.xml').async('text');
+    const { stylesXml: stylesConEstilo, estiloIdx } = inyectarEstiloCategoriaEnStylesXml(stylesXml);
+    zip.file('xl/styles.xml', stylesConEstilo);
+
+    const sheetXmlConEstilo = aplicarEstiloFilasBanner(
+      await zip.file('xl/worksheets/sheet1.xml').async('text'), bannerRows, estiloIdx
+    );
+    zip.file('xl/worksheets/sheet1.xml', sheetXmlConEstilo);
+  }
 
   if (entradasFotos.length > 0) {
     const colFotoIndex = COLUMNAS_IMPORT_PRODUCTOS.indexOf('Foto');
@@ -1775,37 +2443,45 @@ async function generarExcelConFotos(nombreArchivo, filas, fotosPorFila) {
 }
 
 function descargarPlantillaImportacion() {
-  const datos = [
-    COLUMNAS_IMPORT_PRODUCTOS,
-    ['TQ-80L', 'Termotanque Rheem 80L', 'Termotanques', 900, 1250, margenPct(900, 1250).toFixed(1), 10, ''],
-    ['', 'Estufa Longvie 3000 Kcal', 'Estufas', 320, 480, margenPct(320, 480).toFixed(1), 15, '']
+  const grupos = [
+    { categoria: 'Termotanques', filas: [['TQ-80L', 'Termotanque Rheem 80L', 900, 1250, margenPct(900, 1250).toFixed(1), 10, '']] },
+    { categoria: 'Estufas', filas: [['', 'Estufa Longvie 3000 Kcal', 320, 480, margenPct(320, 480).toFixed(1), 15, '']] }
   ];
-  generarExcelConFotos('Plantilla_productos_BM.xlsx', datos, {});
+  const { filas, fotosPorFila, merges, bannerRows } = construirFilasAgrupadas(grupos);
+  generarExcelConFotos('Plantilla_productos_BM.xlsx', filas, fotosPorFila, merges, bannerRows);
 }
 
 // Enlaza Inventario con la importación: exporta TODO lo que ya tenés
-// cargado (con sus fotos) a un Excel — para la próxima actualización de
-// precios, alcanza con abrir este archivo, tocar lo que cambió y volver
-// a subirlo, en vez de empezar de cero cada vez.
+// cargado (con sus fotos) a un Excel, agrupado en una tabla por
+// categoría — para la próxima actualización de precios, alcanza con
+// abrir este archivo, tocar lo que cambió y volver a subirlo, en vez
+// de empezar de cero cada vez.
 async function descargarInventarioActualExcel() {
-  const filas = [COLUMNAS_IMPORT_PRODUCTOS];
-  const fotosPorFila = {};
-  productosCache.forEach((p, i) => {
-    const fila = i + 1;
-    const margen = margenPct(p.costo, p.precio_venta);
-    filas.push([
-      p.codigo_interno || p.codigo_fabrica || '',
-      p.descripcion,
-      p.categoria,
-      Number(p.costo) || 0,
-      Number(p.precio_venta) || 0,
-      margen != null ? margen.toFixed(1) : '',
-      p.descuento_maximo_pct ?? '',
-      ''
-    ]);
-    if (p.imagen_base64) fotosPorFila[fila] = p.imagen_base64;
+  const categoriasPresentes = CATEGORIAS_PRODUCTO.filter(cat => productosCache.some(p => p.categoria === cat));
+  const otrasCategorias = [...new Set(productosCache.map(p => p.categoria).filter(c => !CATEGORIAS_PRODUCTO.includes(c)))];
+  const ordenFinal = [...categoriasPresentes, ...otrasCategorias];
+
+  const grupos = ordenFinal.map(cat => {
+    const filas = [];
+    const fotos = {};
+    productosCache.filter(p => p.categoria === cat).forEach((p, i) => {
+      const margen = margenPct(p.costo, p.precio_venta);
+      filas.push([
+        p.codigo_interno || p.codigo_fabrica || '',
+        p.descripcion,
+        Number(p.costo) || 0,
+        Number(p.precio_venta) || 0,
+        margen != null ? margen.toFixed(1) : '',
+        p.descuento_maximo_pct ?? '',
+        ''
+      ]);
+      if (p.imagen_base64) fotos[i] = p.imagen_base64;
+    });
+    return { categoria: cat, filas, fotos };
   });
-  await generarExcelConFotos(`Inventario_BM_${new Date().toISOString().slice(0, 10)}.xlsx`, filas, fotosPorFila);
+
+  const { filas, fotosPorFila, merges, bannerRows } = construirFilasAgrupadas(grupos);
+  await generarExcelConFotos(`Inventario_BM_${new Date().toISOString().slice(0, 10)}.xlsx`, filas, fotosPorFila, merges, bannerRows);
 }
 
 function encontrarProductoExistente(codigo, descripcion) {
@@ -1829,7 +2505,7 @@ async function abrirImportadorProductos() {
   openModal(`
     <div class="sheet-head"><h3>📥 Importar productos desde Excel</h3><button class="sheet-close" id="sheet-close">✕</button></div>
     <p style="color:var(--text-dim);font-size:13px;margin-top:-6px">
-      Un solo Excel con Descripción, Categoría, Precio Mayorista, Precio Venta y una foto pegada en la celda de cada fila.
+      Un Excel organizado en una tabla por categoría (Termotanques, Estufas, etc.), con Descripción, Precio Mayorista, Precio Venta y una foto pegada en la celda de cada fila.
       Los productos que ya tenés cargados (por código o por descripción exacta) se actualizan; el resto se crea como nuevo.
     </p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
@@ -1876,11 +2552,18 @@ async function analizarArchivoImportacion(archivo) {
   const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
   if (filas.length < 2) throw new Error('El archivo no tiene filas de datos.');
 
-  const encabezados = filas[0].map(normalizarTextoImport);
+  // La fila de encabezados ("Codigo", "Descripcion"...) se repite antes
+  // de cada tabla de categoría, pero las columnas están en el mismo
+  // orden en todas — alcanza con leer la primera que aparezca.
+  const filaEncabezado = filas.find(f => normalizarTextoImport(f[0]) === 'codigo');
+  if (!filaEncabezado) {
+    throw new Error('No encontré la fila de encabezados ("Codigo", "Descripcion"...) — usá la plantilla sin cambiar los encabezados.');
+  }
+  const encabezados = filaEncabezado.map(normalizarTextoImport);
   const idx = {
     codigo: encabezados.indexOf('codigo'),
     descripcion: encabezados.indexOf('descripcion'),
-    categoria: encabezados.indexOf('categoria'),
+    categoria: encabezados.indexOf('categoria'), // -1 en la plantilla nueva agrupada por tablas
     precioVenta: encabezados.indexOf('precio venta'),
     precioMayorista: encabezados.indexOf('precio mayorista'),
     descuentoMax: encabezados.indexOf('descuento maximo %')
@@ -1894,9 +2577,21 @@ async function analizarArchivoImportacion(archivo) {
   const categoriaDefault = CATEGORIAS_PRODUCTO[CATEGORIAS_PRODUCTO.length - 1];
 
   const filasProcesadas = [];
-  for (let i = 1; i < filas.length; i++) {
+  let categoriaActual = null; // se actualiza con el título de cada tabla ("TERMOTANQUES", "ESTUFAS"...)
+  for (let i = 0; i < filas.length; i++) {
     const fila = filas[i];
-    if (fila.every(c => c === '' || c == null)) continue;
+    if (fila.every(c => c === '' || c == null)) continue; // fila en blanco entre tablas
+
+    const primeraCelda = normalizarTextoImport(fila[0]);
+    if (primeraCelda === 'codigo') continue; // fila de encabezados de columna (se repite en cada tabla)
+
+    const restoVacio = fila.slice(1).every(c => c === '' || c == null);
+    if (restoVacio && fila[0]) {
+      // única celda con texto = título de la tabla de esa categoría
+      const cat = CATEGORIAS_PRODUCTO.find(c => normalizarTextoImport(c) === primeraCelda);
+      categoriaActual = cat || String(fila[0]).trim();
+      continue;
+    }
 
     const descripcion = String(fila[idx.descripcion] || '').trim();
     if (!descripcion) continue;
@@ -1907,7 +2602,10 @@ async function analizarArchivoImportacion(archivo) {
     const costo = costoRaw !== '' ? Number(costoRaw) : null;
     const descMaxRaw = idx.descuentoMax > -1 ? fila[idx.descuentoMax] : '';
     const descuento_maximo_pct = descMaxRaw !== '' ? Number(descMaxRaw) : null;
-    const categoriaRaw = idx.categoria > -1 ? String(fila[idx.categoria] || '').trim() : '';
+    // Categoría: si el archivo trae columna "Categoria" (formato viejo,
+    // una sola tabla) se usa esa; si no, la de la tabla donde está esta
+    // fila (título de sección, formato nuevo agrupado).
+    const categoriaRaw = idx.categoria > -1 ? String(fila[idx.categoria] || '').trim() : (categoriaActual || '');
     const catReconocida = CATEGORIAS_PRODUCTO.find(c => normalizarTextoImport(c) === normalizarTextoImport(categoriaRaw));
 
     const existente = encontrarProductoExistente(codigo, descripcion);
@@ -2123,12 +2821,17 @@ async function renderMiCaja() {
         <div id="caja-movs"></div>
       </div>
       <aside class="caja-col-recibos">
-        <div class="card-title" style="margin-bottom:10px">🧾 Recibos — reenviar rápido</div>
+        <div class="section-head" style="margin-bottom:10px">
+          <div class="card-title" style="margin:0">🧾 Recibos — reenviar rápido</div>
+          <button class="btn btn-primary btn-sm" id="btn-nuevo-comprobante-caja">+ Nuevo</button>
+        </div>
+        <p style="color:var(--text-faint);font-size:11.5px;margin:-6px 0 10px">Cargá el comprobante de una venta al contado, a crédito o de un abono a cuenta.</p>
         <div class="field" style="margin-bottom:10px"><input id="recibos-buscar" placeholder="🔍 Buscar cliente o N°…" /></div>
         <div id="recibos-lista"></div>
       </aside>
     </div>
   `;
+  $('#btn-nuevo-comprobante-caja').addEventListener('click', () => abrirFormComprobante({ origenCaja: true }));
   $('#btn-ingreso').addEventListener('click', () => abrirFormMovimientoCaja('ingreso'));
   $('#btn-egreso').addEventListener('click', () => abrirFormMovimientoCaja('egreso'));
   $('#btn-cerrar-caja').addEventListener('click', () => abrirFormCierreCaja(saldo));
@@ -2137,7 +2840,7 @@ async function renderMiCaja() {
   if (!movs || movs.length === 0) { movCont.innerHTML = `<div class="empty-state">Sin movimientos todavía en esta caja.</div>`; }
   else {
     movCont.innerHTML = `<div class="table-wrap"><table>
-      <thead><tr><th>Tipo</th><th>Concepto</th><th>Monto</th><th>Pago</th><th>Hora</th><th>Recibo</th></tr></thead>
+      <thead><tr><th>Tipo</th><th>Concepto</th><th>Monto</th><th>Pago</th><th>Hora</th><th>Acciones</th></tr></thead>
       <tbody>
         ${movs.map(m => `
           <tr>
@@ -2146,7 +2849,12 @@ async function renderMiCaja() {
             <td>${money(m.monto)}</td>
             <td>${metodoLabel(m.metodo_pago)}</td>
             <td>${fechaHora(m.created_at)}</td>
-            <td>${m.comprobante_id ? `<button class="icon-btn" data-ver-recibo="${m.comprobante_id}" title="Ver recibo">🧾</button>` : '—'}</td>
+            <td><div class="row-actions">
+              ${m.comprobante_id
+                ? `<button class="icon-btn" data-ver-recibo="${m.comprobante_id}" title="Ver recibo">🧾</button>`
+                : (m.tipo === 'ingreso' ? `<button class="icon-btn" data-generar-recibo="${m.id}" title="Generar recibo para este cobro">🧾+</button>` : '')}
+              <button class="icon-btn" data-eliminar-mov="${m.id}" title="Eliminar movimiento">🗑</button>
+            </div></td>
           </tr>
         `).join('')}
       </tbody>
@@ -2158,11 +2866,84 @@ async function renderMiCaja() {
         if (comp) abrirVistaPreviaComprobante(comp);
       });
     });
+    movCont.querySelectorAll('[data-eliminar-mov]').forEach(btn => {
+      btn.addEventListener('click', () => eliminarMovimientoCaja(movs.find(x => x.id === btn.dataset.eliminarMov)));
+    });
+    movCont.querySelectorAll('[data-generar-recibo]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mov = movs.find(x => x.id === btn.dataset.generarRecibo);
+        if (mov) abrirFormComprobante({ origenCaja: true, movimientoExistente: mov });
+      });
+    });
   }
 
   await cargarComprobantes();
   renderPanelRecibos();
   $('#recibos-buscar').addEventListener('input', () => renderPanelRecibos());
+}
+
+// Borra un movimiento de caja. Si tiene un comprobante (y, si ese
+// comprobante venía de abonar una venta a crédito, su abono) enlazado,
+// deshace todo junto en vez de bloquear el borrado: elimina el abono,
+// recalcula si la venta sigue saldada o no (si dejó de estarlo, la
+// vuelve a marcar pendiente y devuelve el stock que se había
+// descontado), borra el comprobante y por último el movimiento.
+async function eliminarMovimientoCaja(mov) {
+  if (!mov) return;
+
+  // Se busca por la relación inversa (qué abonos/comprobantes apuntan A
+  // este movimiento) en vez de confiar en mov.comprobante_id — así se
+  // atrapa cualquier comprobante viejo que haya quedado enlazado a este
+  // movimiento sin que ese campo lo reflejara (si no, el borrado se
+  // topa con la restricción de clave foránea y queda a mitad de camino).
+  const [{ data: abonosLigados }, { data: comprobantesLigados }] = await Promise.all([
+    sb.from('venta_abonos').select('*').eq('caja_movimiento_id', mov.id),
+    sb.from('comprobantes').select('id').eq('caja_movimiento_id', mov.id)
+  ]);
+  const abono = abonosLigados && abonosLigados[0];
+  // Unión de las dos direcciones: el comprobante que mov.comprobante_id
+  // dice que tiene, más cualquier comprobante que a SU VEZ apunte a este
+  // movimiento por caja_movimiento_id — pueden haber quedado
+  // desincronizados en algún momento.
+  const idsComprobantes = new Set((comprobantesLigados || []).map(c => c.id));
+  if (mov.comprobante_id) idsComprobantes.add(mov.comprobante_id);
+  const tieneComprobante = idsComprobantes.size > 0;
+
+  let mensaje = '¿Seguro que querés eliminar este movimiento de caja? Esta acción no se puede deshacer.';
+  if (abono) {
+    mensaje = 'Este movimiento tiene un comprobante y un abono de venta a crédito enlazados — se van a borrar los tres juntos. Si la venta había quedado marcada como cobrada por este abono, se revierte y se devuelve el stock descontado. Esta acción no se puede deshacer. ¿Continuar?';
+  } else if (tieneComprobante) {
+    mensaje = 'Este movimiento tiene un comprobante generado — se va a borrar junto con el movimiento. Esta acción no se puede deshacer. ¿Continuar?';
+  }
+  if (!confirm(mensaje)) return;
+
+  if (abono) {
+    const { data: venta } = await sb.from('ventas').select('*').eq('id', abono.venta_id).single();
+    const { error: eAbono } = await sb.from('venta_abonos').delete().eq('id', abono.id);
+    if (eAbono) { toast('Error al borrar el abono: ' + eAbono.message, 'error'); return; }
+
+    if (venta && venta.cobrado) {
+      const { data: abonosRestantes } = await sb.from('venta_abonos').select('monto').eq('venta_id', venta.id);
+      const totalAbonado = (abonosRestantes || []).reduce((s, a) => s + Number(a.monto), 0);
+      if (totalAbonado < Number(venta.total) - 0.01) {
+        await sb.from('ventas').update({ cobrado: false }).eq('id', venta.id);
+        await Promise.all((venta.items || [])
+          .filter(it => it.producto_id)
+          .map(it => ajustarStock(it.producto_id, it.cantidad, `Venta #${venta.numero} (revertida al borrar un abono)`)));
+        await cargarProductos();
+      }
+    }
+  }
+
+  if (tieneComprobante) {
+    const { error: eComp } = await sb.from('comprobantes').delete().in('id', Array.from(idsComprobantes));
+    if (eComp) { toast('Error al borrar el comprobante: ' + eComp.message, 'error'); return; }
+  }
+
+  const { error } = await sb.from('caja_movimientos').delete().eq('id', mov.id);
+  if (error) { toast('Error al eliminar: ' + error.message, 'error'); return; }
+  toast('Movimiento eliminado' + (abono ? ' junto con su abono y comprobante' : (tieneComprobante ? ' junto con su comprobante' : '')));
+  renderCaja();
 }
 
 function renderPanelRecibos() {
@@ -3229,9 +4010,29 @@ async function abrirFormAbonarVenta(venta, abonadoPrevio) {
       renderCaja();
       if (comprobante) abrirVistaPreviaComprobante(comprobante);
     } else {
+      // Abono parcial: igual se genera un comprobante (por lo que se
+      // recibió en esta pasada, con el saldo que queda pendiente), para
+      // que el cliente se lleve constancia de cada pago a cuenta y no
+      // solo del último que salda la venta por completo.
+      const formaComprobante = metodo === 'efectivo' ? 'efectivo' : (metodo === 'qr' ? 'qr' : 'transferencia');
+      const { data: comprobante } = await sb.from('comprobantes').insert({
+        cliente_nombre: venta.cliente_nombre,
+        venta_numero: `#${venta.numero}`,
+        forma_pago: formaComprobante,
+        monto_total: venta.total,
+        monto_efectivo: metodo === 'efectivo' ? monto : 0,
+        monto_transferido: metodo !== 'efectivo' ? monto : 0,
+        saldo_pendiente: saldoRestante,
+        cajero_id: profile.id,
+        cajero_nombre: profile.nombre || profile.usuario,
+        caja_movimiento_id: movimiento.id
+      }).select().single();
+      if (comprobante) await sb.from('caja_movimientos').update({ comprobante_id: comprobante.id }).eq('id', movimiento.id);
+
       toast(`Abono de ${money(monto)} registrado — saldo pendiente: ${money(saldoRestante)}`);
       closeModal();
       renderAutorizaciones();
+      if (comprobante) abrirVistaPreviaComprobante(comprobante);
     }
   });
 }
@@ -4456,6 +5257,7 @@ async function renderChat() {
     <div class="tabs" id="chat-tabs">
       <button class="tab-btn ${chatModo === 'general' ? 'active' : ''}" data-modo="general">General</button>
       <button class="tab-btn ${chatModo === 'individual' ? 'active' : ''}" data-modo="individual">${soyAdmin ? 'Individuales' : 'Con administración'}</button>
+      <button class="tab-btn ${chatModo === 'bam' ? 'active' : ''}" data-modo="bam">🤖 BAM${!bamInformeVistoHoy() ? '<span class="badge-dot"></span>' : ''}</button>
     </div>
     <div id="chat-cuerpo"></div>
   `;
@@ -4478,6 +5280,10 @@ async function renderChat() {
 async function renderChatCuerpo() {
   $$('#chat-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.modo === chatModo));
 
+  if (chatModo === 'bam') {
+    await renderChatBam();
+    return;
+  }
   if (chatModo === 'individual' && profile.rol === 'admin' && !chatHiloVendedorId) {
     await renderListaVendedoresChat();
     return;
@@ -4622,6 +5428,369 @@ async function enviarMensajeChat(hilo) {
 }
 
 // ============================================================
+// MÓDULO: BAM EN EL CHAT — pestaña propia con informe diario
+// (ventas/cobranzas/cotizaciones/créditos por vencer) y agenda de
+// recordatorios personales. Sin cron en el servidor, el informe del
+// día se genera del lado del cliente la primera vez que alguien abre
+// esta pestaña (o entra a la app) ese día — bam_mensajes.fecha evita
+// que se duplique aunque se abra varias veces.
+// ============================================================
+function claveBamVistoHoy() {
+  return `bm_bam_visto_${new Date().toISOString().slice(0, 10)}_${profile.id}`;
+}
+function bamInformeVistoHoy() {
+  try { return localStorage.getItem(claveBamVistoHoy()) === '1'; } catch (e) { return false; }
+}
+function marcarBamVistoHoy() {
+  try { localStorage.setItem(claveBamVistoHoy(), '1'); } catch (e) {}
+}
+
+// Días que faltan para una fecha 'YYYY-MM-DD' (negativo = ya pasó).
+function diasHastaFecha(fechaStr) {
+  const limite = new Date(fechaStr + 'T00:00:00');
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  return Math.round((limite - hoy) / (24 * 60 * 60 * 1000));
+}
+
+// Arma el texto (HTML) del informe diario: para el admin, un resumen
+// de TODO el equipo (ventas, cobrado en caja, cotizaciones y créditos
+// por vencer de todos los vendedores); para cada vendedor, solo lo suyo.
+async function construirInformeDiarioBam() {
+  const hoyInicio = new Date(); hoyInicio.setHours(0, 0, 0, 0);
+  const hoyISO = hoyInicio.toISOString();
+
+  function formatearCreditos(lista) {
+    return lista.slice(0, 5).map(v => {
+      const cuando = v.dias < 0 ? `vencida hace ${Math.abs(v.dias)}d` : v.dias === 0 ? 'vence hoy' : `vence en ${v.dias}d`;
+      return `#${v.numero} ${escapeHtml(v.cliente_nombre)} — ${cuando}`;
+    }).join('<br>') + (lista.length > 5 ? `<br>y ${lista.length - 5} más...` : '');
+  }
+
+  if (profile.rol === 'admin') {
+    const [{ data: ventasHoy }, { count: nCotizPend }, { data: creditos }, { data: cobrosHoy }] = await Promise.all([
+      sb.from('ventas').select('id, total').gte('created_at', hoyISO),
+      sb.from('cotizaciones').select('*', { count: 'exact', head: true }).eq('estado', 'pendiente'),
+      sb.from('ventas').select('id, numero, cliente_nombre, created_at, cuota1_dias, cuota2_dias').eq('condicion_pago', 'credito').eq('autorizada', true).eq('cobrado', false),
+      sb.from('caja_movimientos').select('monto').eq('tipo', 'ingreso').gte('created_at', hoyISO)
+    ]);
+    const totalVentasHoy = (ventasHoy || []).reduce((s, v) => s + Number(v.total), 0);
+    const totalCobradoHoy = (cobrosHoy || []).reduce((s, m) => s + Number(m.monto), 0);
+    const creditosPorVencer = (creditos || []).map(v => ({ ...v, dias: diasRestantesCuota(v) })).filter(v => v.dias <= 3).sort((a, b) => a.dias - b.dias);
+
+    return `📊 <strong>Informe del día — ${fecha(new Date())}</strong><br><br>` +
+      `🧾 Ventas de hoy (todo el equipo): ${ventasHoy?.length || 0} (${money(totalVentasHoy)})<br>` +
+      `💰 Cobrado hoy en caja: ${money(totalCobradoHoy)}<br>` +
+      `📋 Cotizaciones pendientes de autorizar: ${nCotizPend || 0}<br>` +
+      `⏰ Créditos por vencer (≤3 días) o vencidos: ${creditosPorVencer.length}` +
+      (creditosPorVencer.length ? `<br>${formatearCreditos(creditosPorVencer)}` : '');
+  } else {
+    const [{ data: ventasHoy }, { count: nCotizPend }, { data: creditos }] = await Promise.all([
+      sb.from('ventas').select('id, total').eq('vendedor_id', profile.id).gte('created_at', hoyISO),
+      sb.from('cotizaciones').select('*', { count: 'exact', head: true }).eq('vendedor_id', profile.id).eq('estado', 'pendiente'),
+      sb.from('ventas').select('id, numero, cliente_nombre, created_at, cuota1_dias, cuota2_dias').eq('vendedor_id', profile.id).eq('condicion_pago', 'credito').eq('autorizada', true).eq('cobrado', false)
+    ]);
+    const totalVentasHoy = (ventasHoy || []).reduce((s, v) => s + Number(v.total), 0);
+    const creditosPorVencer = (creditos || []).map(v => ({ ...v, dias: diasRestantesCuota(v) })).filter(v => v.dias <= 3).sort((a, b) => a.dias - b.dias);
+
+    return `📊 <strong>Tu informe del día — ${fecha(new Date())}</strong><br><br>` +
+      `🧾 Tus ventas de hoy: ${ventasHoy?.length || 0} (${money(totalVentasHoy)})<br>` +
+      `📋 Tus cotizaciones pendientes: ${nCotizPend || 0}<br>` +
+      `⏰ Tus créditos por vencer (≤3 días) o vencidos: ${creditosPorVencer.length}` +
+      (creditosPorVencer.length ? `<br>${formatearCreditos(creditosPorVencer)}` : '');
+  }
+}
+
+// Se fija si ya se posteó el informe de hoy para este usuario; si no,
+// lo genera y lo inserta — así aunque se llame varias veces (al entrar
+// a la app y también al abrir la pestaña BAM) nunca se duplica.
+async function asegurarInformeDiarioBam() {
+  const hoyStr = new Date().toISOString().slice(0, 10);
+  const { data: existente } = await sb.from('bam_mensajes').select('id')
+    .eq('usuario_id', profile.id).eq('tipo', 'informe').eq('fecha', hoyStr).limit(1);
+  if (existente && existente.length > 0) return false;
+
+  const contenido = await construirInformeDiarioBam();
+  const { error } = await sb.from('bam_mensajes').insert({
+    usuario_id: profile.id, tipo: 'informe', contenido, fecha: hoyStr
+  });
+  return !error;
+}
+
+// Los recordatorios avisan en 3 momentos fijos: la noche anterior a
+// las 20:00, la mañana del día acordado a las 07:00, y — si se cargó
+// una hora puntual — 30 minutos antes de esa hora.
+const BAM_HORA_AVISO_NOCHE = 20;
+const BAM_HORA_AVISO_MANANA = 7;
+
+// 'YYYY-MM-DD' + hora/minutos -> Date en horario local (evita el lío de
+// zonas horarias de parsear "YYYY-MM-DDTHH:mm" directo, que en algunos
+// navegadores lo toma como UTC).
+function fechaHoraLocal(fechaStr, horas, minutos = 0) {
+  const [y, m, d] = fechaStr.split('-').map(Number);
+  return new Date(y, m - 1, d, horas, minutos, 0, 0);
+}
+
+// Reproduce el timbre + vibración de siempre y, si hay permiso,
+// también manda la notificación del sistema (barra de Android o del
+// navegador) — así el aviso "suena" aunque no estés mirando el chat.
+async function avisarNotificacionSistemaBam(titulo, cuerpo) {
+  sonarNotificacion();
+  const idNumerico = Math.floor(Math.random() * 2147483647);
+  if (notifLocalNativaDisponible()) {
+    try {
+      await window.Capacitor.Plugins.LocalNotifications.schedule({
+        notifications: [{ id: idNumerico, title: titulo, body: cuerpo, schedule: { at: new Date(Date.now() + 100) } }]
+      });
+    } catch (e) { /* sin permiso todavía, o el usuario lo negó */ }
+    return;
+  }
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(titulo, { body: cuerpo, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'bam-recordatorio' });
+    } else {
+      new Notification(titulo, { body: cuerpo, icon: 'icons/icon-192.png' });
+    }
+  } catch (e) { /* algunos navegadores bloquean esto en ciertos contextos */ }
+}
+
+// Hash simple y determinístico (uuid del recordatorio + qué momento) ->
+// entero, para poder programar Y CANCELAR notificaciones nativas del
+// mismo recordatorio (Android exige un id numérico por notificación).
+function hashIdNumerico(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+  return Math.abs(h) % 2147483647;
+}
+function idsNotifNativaRecordatorio(r) {
+  return {
+    noche: hashIdNumerico(r.id + '-noche'),
+    manana: hashIdNumerico(r.id + '-manana'),
+    treintaMin: hashIdNumerico(r.id + '-30min')
+  };
+}
+
+// Programa las 3 alarmas nativas de Android para que suenen aunque la
+// app esté cerrada (requiere el APK — @capacitor/local-notifications ya
+// viene compilado ahí, se usa el mismo plugin que las notificaciones de
+// chat). En la web/PWA no hay forma confiable de avisar con la app
+// cerrada; ahí el aviso corre por sondeo cada 5 min (revisarRecordatoriosBam),
+// que solo funciona mientras la app está abierta.
+async function programarNotificacionesNativasRecordatorio(r) {
+  if (!notifLocalNativaDisponible()) return;
+  const ids = idsNotifNativaRecordatorio(r);
+  const ahora = new Date();
+  const notificaciones = [];
+
+  const nocheAntes = fechaHoraLocal(r.fecha, BAM_HORA_AVISO_NOCHE, 0);
+  nocheAntes.setDate(nocheAntes.getDate() - 1);
+  if (nocheAntes > ahora) notificaciones.push({ id: ids.noche, title: '📅 BAM te recuerda (mañana)', body: r.texto, schedule: { at: nocheAntes } });
+
+  const mananaDia = fechaHoraLocal(r.fecha, BAM_HORA_AVISO_MANANA, 0);
+  if (mananaDia > ahora) notificaciones.push({ id: ids.manana, title: '📅 BAM te recuerda (hoy)', body: r.texto, schedule: { at: mananaDia } });
+
+  if (r.hora) {
+    const [hh, mm] = r.hora.split(':').map(Number);
+    const treintaMinAntes = new Date(fechaHoraLocal(r.fecha, hh, mm).getTime() - 30 * 60 * 1000);
+    if (treintaMinAntes > ahora) notificaciones.push({ id: ids.treintaMin, title: '📅 BAM te recuerda (en 30 min)', body: r.texto, schedule: { at: treintaMinAntes } });
+  }
+
+  if (notificaciones.length === 0) return;
+  try { await window.Capacitor.Plugins.LocalNotifications.schedule({ notifications: notificaciones }); }
+  catch (e) { /* sin permiso todavía, o el dispositivo lo rechazó */ }
+}
+
+async function cancelarNotificacionesNativasRecordatorio(r) {
+  if (!notifLocalNativaDisponible()) return;
+  const ids = idsNotifNativaRecordatorio(r);
+  try {
+    await window.Capacitor.Plugins.LocalNotifications.cancel({
+      notifications: [{ id: ids.noche }, { id: ids.manana }, { id: ids.treintaMin }]
+    });
+  } catch (e) { /* no estaba programada, no pasa nada */ }
+}
+
+// Revisa la agenda del usuario y dispara (cada uno una sola vez, con su
+// propio flag) los 3 avisos de cada recordatorio pendiente que ya
+// llegó a su momento: la noche anterior, la mañana del día acordado, y
+// 30 min antes de la hora puesta (si se cargó una). Esto es lo que
+// cubre la web/PWA (donde no se puede programar una alarma real a
+// futuro) y también sirve de respaldo en el APK si la notificación
+// nativa no llegó a dispararse (permiso denegado, etc).
+async function revisarRecordatoriosBam() {
+  const { data: pendientes } = await sb.from('bam_recordatorios').select('*')
+    .eq('usuario_id', profile.id).eq('cumplido', false);
+  if (!pendientes || pendientes.length === 0) return false;
+
+  const ahora = new Date();
+  const hoyStr = new Date().toISOString().slice(0, 10);
+  let huboAviso = false;
+
+  for (const r of pendientes) {
+    const avisos = [];
+
+    if (!r.avisado_noche) {
+      const nocheAntes = fechaHoraLocal(r.fecha, BAM_HORA_AVISO_NOCHE, 0);
+      nocheAntes.setDate(nocheAntes.getDate() - 1);
+      if (ahora >= nocheAntes) avisos.push({ campo: 'avisado_noche', titulo: '📅 BAM te recuerda (mañana)' });
+    }
+    if (!r.avisado_manana) {
+      const mananaDia = fechaHoraLocal(r.fecha, BAM_HORA_AVISO_MANANA, 0);
+      if (ahora >= mananaDia) avisos.push({ campo: 'avisado_manana', titulo: '📅 BAM te recuerda (hoy)' });
+    }
+    if (r.hora && !r.avisado_30min) {
+      const [hh, mm] = r.hora.split(':').map(Number);
+      const treintaMinAntes = new Date(fechaHoraLocal(r.fecha, hh, mm).getTime() - 30 * 60 * 1000);
+      if (ahora >= treintaMinAntes) avisos.push({ campo: 'avisado_30min', titulo: '📅 BAM te recuerda (en 30 min)' });
+    }
+
+    for (const aviso of avisos) {
+      await sb.from('bam_mensajes').insert({
+        usuario_id: profile.id, tipo: 'recordatorio',
+        contenido: `${aviso.titulo}<br>${escapeHtml(r.texto)}`,
+        fecha: hoyStr
+      });
+      await sb.from('bam_recordatorios').update({ [aviso.campo]: true }).eq('id', r.id);
+      avisarNotificacionSistemaBam(aviso.titulo, r.texto);
+      huboAviso = true;
+    }
+  }
+  return huboAviso;
+}
+
+async function cargarBamMensajes() {
+  const { data } = await sb.from('bam_mensajes').select('*').eq('usuario_id', profile.id)
+    .order('created_at', { ascending: true }).limit(200);
+  bamMensajesCache = data || [];
+}
+
+function agregarMensajeBamAlDOM(m) {
+  const cont = $('#chat-mensajes');
+  if (!cont) return;
+  if (cont.querySelector('.empty-state')) cont.innerHTML = '';
+  const hora = new Date(m.created_at).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' });
+  const div = document.createElement('div');
+  div.className = 'chat-msg';
+  div.innerHTML = `
+    <div class="chat-msg-remitente">🤖 BAM</div>
+    <div class="chat-msg-bubble chat-msg-bam">
+      <div class="chat-msg-texto">${m.contenido}</div>
+      <div class="chat-msg-hora">${hora}</div>
+    </div>
+  `;
+  cont.appendChild(div);
+}
+
+async function renderChatBam() {
+  const cont = $('#chat-cuerpo');
+  cont.innerHTML = `
+    <div class="chat-box">
+      <div class="chat-mensajes" id="chat-mensajes"><div class="empty-state">Cargando…</div></div>
+      <div class="chat-input-row" style="justify-content:center">
+        <button class="btn btn-secondary btn-sm" id="btn-agenda-bam">📅 Agenda con BAM</button>
+      </div>
+    </div>
+  `;
+  $('#btn-agenda-bam').addEventListener('click', () => abrirAgendaBam());
+
+  await asegurarInformeDiarioBam();
+  await revisarRecordatoriosBam();
+  await cargarBamMensajes();
+
+  const msgCont = $('#chat-mensajes');
+  msgCont.innerHTML = bamMensajesCache.length === 0 ? `<div class="empty-state">BAM todavía no tiene novedades para vos.</div>` : '';
+  bamMensajesCache.forEach(m => agregarMensajeBamAlDOM(m));
+  msgCont.scrollTop = msgCont.scrollHeight;
+
+  marcarBamVistoHoy();
+  $('.tab-btn[data-modo="bam"] .badge-dot')?.remove();
+}
+
+async function cargarRecordatoriosBam() {
+  const { data } = await sb.from('bam_recordatorios').select('*').eq('usuario_id', profile.id)
+    .order('fecha', { ascending: true });
+  bamRecordatoriosCache = data || [];
+}
+
+async function abrirAgendaBam() {
+  await cargarRecordatoriosBam();
+  pedirPermisoNotifChat(); // por si el usuario nunca tocó el toggle de notificaciones del chat
+  openModal(`
+    <div class="sheet-head"><h3>📅 Agenda con BAM</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <p style="font-size:13px;color:var(--text-dim);margin-top:-6px">Cargá un recordatorio y BAM te avisa: la noche anterior, a las 7am del día, y 30 min antes si cargás una hora.</p>
+    <div class="field" style="margin-top:10px"><label>Recordatorio *</label><input id="f-agenda-texto" placeholder="Ej: Llamar a Juan Pérez por su cuota" /></div>
+    <div class="grid-2" style="margin-top:10px">
+      <div class="field"><label>Fecha *</label><input type="date" id="f-agenda-fecha" value="${new Date().toISOString().slice(0, 10)}" /></div>
+      <div class="field"><label>Hora (opcional)<br><span style="font-weight:400;color:var(--text-faint)">para el aviso de 30 min antes</span></label><input type="time" id="f-agenda-hora" /></div>
+    </div>
+    <div class="form-actions"><button class="btn btn-primary" id="btn-agregar-recordatorio">+ Agregar a la agenda</button></div>
+    <div id="agenda-lista" style="margin-top:16px"></div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+
+  function renderListaAgenda() {
+    const cont = $('#agenda-lista');
+    if (!cont) return;
+    if (bamRecordatoriosCache.length === 0) {
+      cont.innerHTML = `<div class="empty-state">Todavía no cargaste recordatorios.</div>`;
+      return;
+    }
+    cont.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th></th><th>Recordatorio</th><th>Fecha</th><th></th></tr></thead>
+      <tbody>
+        ${bamRecordatoriosCache.map(r => {
+          const dias = diasHastaFecha(r.fecha);
+          const cuando = r.cumplido ? '✔ Cumplido' : dias < 0 ? `vencido hace ${Math.abs(dias)}d` : dias === 0 ? 'hoy' : `en ${dias}d`;
+          return `<tr>
+            <td><input type="checkbox" data-cumplido-id="${r.id}" ${r.cumplido ? 'checked' : ''} title="Marcar cumplido" /></td>
+            <td style="${r.cumplido ? 'text-decoration:line-through;color:var(--text-faint)' : ''}">${escapeHtml(r.texto)}</td>
+            <td style="white-space:nowrap">${fecha(r.fecha)}${r.hora ? ' ' + r.hora.slice(0, 5) : ''} <span style="color:var(--text-faint);font-size:11px">(${cuando})</span></td>
+            <td><button class="icon-btn" data-eliminar-id="${r.id}" title="Eliminar">🗑</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table></div>`;
+
+    cont.querySelectorAll('[data-cumplido-id]').forEach(chk => {
+      chk.addEventListener('change', async (e) => {
+        const r = bamRecordatoriosCache.find(x => x.id === chk.dataset.cumplidoId);
+        await sb.from('bam_recordatorios').update({ cumplido: e.target.checked }).eq('id', chk.dataset.cumplidoId);
+        if (e.target.checked && r) await cancelarNotificacionesNativasRecordatorio(r);
+        await cargarRecordatoriosBam();
+        renderListaAgenda();
+      });
+    });
+    cont.querySelectorAll('[data-eliminar-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('¿Eliminar este recordatorio?')) return;
+        const r = bamRecordatoriosCache.find(x => x.id === btn.dataset.eliminarId);
+        await sb.from('bam_recordatorios').delete().eq('id', btn.dataset.eliminarId);
+        if (r) await cancelarNotificacionesNativasRecordatorio(r);
+        await cargarRecordatoriosBam();
+        renderListaAgenda();
+      });
+    });
+  }
+  renderListaAgenda();
+
+  $('#btn-agregar-recordatorio').addEventListener('click', async () => {
+    const texto = $('#f-agenda-texto').value.trim();
+    const fechaStr = $('#f-agenda-fecha').value;
+    const horaStr = $('#f-agenda-hora').value || null;
+    if (!texto || !fechaStr) { toast('Completá el recordatorio y la fecha', 'error'); return; }
+    const { data, error } = await sb.from('bam_recordatorios').insert({ usuario_id: profile.id, texto, fecha: fechaStr, hora: horaStr }).select().single();
+    if (error) { toast('Error al guardar: ' + error.message, 'error'); return; }
+    if (data) await programarNotificacionesNativasRecordatorio(data);
+    $('#f-agenda-texto').value = '';
+    $('#f-agenda-hora').value = '';
+    await cargarRecordatoriosBam();
+    renderListaAgenda();
+    toast('Recordatorio agregado', 'success');
+  });
+}
+
+// ============================================================
 // MÓDULO: COMPROBANTES DE PAGO
 // ============================================================
 let comprobantesCache = [];
@@ -4730,29 +5899,52 @@ function renderListaComprobantes() {
   });
 }
 
-function abrirFormComprobante() {
+// Ventas a crédito, autorizadas y todavía no cobradas del todo — las
+// mismas que aparecen en Caja → Autorizar con el botón "Abonar" — junto
+// con lo que ya se les abonó, para poder enlazarlas desde acá.
+async function cargarVentasCreditoPendientes() {
+  const { data: ventas } = await sb.from('ventas').select('*').eq('cobrado', false);
+  const pendientes = (ventas || []).filter(v => v.condicion_pago === 'credito' && v.autorizada);
+  if (pendientes.length === 0) return [];
+  const { data: abonos } = await sb.from('venta_abonos').select('venta_id, monto').in('venta_id', pendientes.map(v => v.id));
+  const abonadoPorVenta = {};
+  (abonos || []).forEach(a => { abonadoPorVenta[a.venta_id] = (abonadoPorVenta[a.venta_id] || 0) + Number(a.monto); });
+  return pendientes.map(venta => ({ venta, abonadoPrevio: abonadoPorVenta[venta.id] || 0 }));
+}
+
+async function abrirFormComprobante(opts = {}) {
+  const { origenCaja = false, movimientoExistente = null } = opts;
   const numeroSiguiente = comprobantesCache.length > 0 ? Math.max(...comprobantesCache.map(c => c.numero)) + 1 : 1;
+  const ventasCredito = await cargarVentasCreditoPendientes();
   openModal(`
     <div class="sheet-head"><h3>Nuevo comprobante de pago</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    ${movimientoExistente ? `<p style="color:var(--text-dim);font-size:13px;margin-top:-6px">Generando el comprobante del ingreso: <strong style="color:var(--text)">${escapeHtml(movimientoExistente.concepto)}</strong> — ${money(movimientoExistente.monto)}</p>` : ''}
     <div class="grid-2">
       <div class="field"><label>N° comprobante</label><input value="#${String(numeroSiguiente).padStart(5, '0')}" disabled /></div>
       <div class="field"><label>Fecha</label><input type="date" id="f-comp-fecha" value="${new Date().toISOString().slice(0, 10)}" /></div>
     </div>
+    ${ventasCredito.length > 0 ? `
+    <div class="field" style="margin-top:10px"><label>Venta a crédito a abonar (opcional)<br><span style="font-weight:400;color:var(--text-faint)">enlaza este comprobante como abono a cuenta de esa venta</span></label>
+      <select id="f-comp-venta-credito">
+        <option value="">— Comprobante libre (sin venta asociada) —</option>
+        ${ventasCredito.map(({ venta, abonadoPrevio }) => `<option value="${venta.id}">#${venta.numero} — ${escapeHtml(venta.cliente_nombre)} — Saldo: ${money(Math.max(0, Number(venta.total) - abonadoPrevio))}</option>`).join('')}
+      </select>
+    </div>` : ''}
     <div class="field" style="margin-top:10px"><label>Recibimos de (cliente) *</label><input id="f-comp-cliente" list="clientes-datalist" required /></div>
     <datalist id="clientes-datalist">${clientesCache.map(c => `<option value="${escapeHtml(c.nombre)}"></option>`).join('')}</datalist>
     <div class="field" style="margin-top:10px"><label>N° de venta (opcional)</label><input id="f-comp-venta" placeholder="Ej: 235-5-2026" /></div>
     <div class="field" style="margin-top:10px"><label>Forma de pago</label>
       <select id="f-comp-forma">
-        <option value="efectivo">Efectivo</option>
-        <option value="transferencia">Transferencia</option>
-        <option value="qr">QR</option>
+        <option value="efectivo" ${(!movimientoExistente || movimientoExistente.metodo_pago === 'efectivo') ? 'selected' : ''}>Efectivo</option>
+        <option value="transferencia" ${movimientoExistente?.metodo_pago === 'transferencia' ? 'selected' : ''}>Transferencia</option>
+        <option value="qr" ${movimientoExistente?.metodo_pago === 'qr' ? 'selected' : ''}>QR</option>
         <option value="mixto">Mixto (Efectivo + Transferencia)</option>
       </select>
     </div>
-    <div class="field" style="margin-top:10px"><label>Total a pagar (Bs) *</label><input type="number" id="f-comp-total" min="0" step="0.01" required /></div>
+    <div class="field" style="margin-top:10px"><label>Total a pagar (Bs) *<br><span style="font-weight:400;color:var(--text-faint)">se completa solo con lo recibido — solo cambia si elegís arriba una venta a crédito</span></label><input type="number" id="f-comp-total" min="0" step="0.01" value="${movimientoExistente ? movimientoExistente.monto : '0'}" disabled required /></div>
     <div class="grid-2" style="margin-top:10px">
-      <div class="field"><label>Recibido en efectivo (Bs)</label><input type="number" id="f-comp-efectivo" min="0" step="0.01" value="0" /></div>
-      <div class="field"><label>Recibido por transferencia (Bs)</label><input type="number" id="f-comp-transferido" min="0" step="0.01" value="0" /></div>
+      <div class="field"><label>Recibido en efectivo (Bs)</label><input type="number" id="f-comp-efectivo" min="0" step="0.01" value="${(movimientoExistente && movimientoExistente.metodo_pago === 'efectivo') ? movimientoExistente.monto : 0}" /></div>
+      <div class="field"><label>Recibido por transferencia (Bs)</label><input type="number" id="f-comp-transferido" min="0" step="0.01" value="${(movimientoExistente && movimientoExistente.metodo_pago !== 'efectivo') ? movimientoExistente.monto : 0}" /></div>
     </div>
     <div class="grid-2" id="comp-datos-transferencia" style="margin-top:10px; display:none">
       <div class="field"><label>Banco</label><input id="f-comp-banco" /></div>
@@ -4774,6 +5966,25 @@ function abrirFormComprobante() {
   `);
   $('#sheet-close').addEventListener('click', closeModal);
   $('#btn-cancelar').addEventListener('click', closeModal);
+
+  // Cuando se enlaza una venta a crédito: cliente, N° de venta y total
+  // quedan fijos a esa venta (no se pueden editar a mano), y el saldo
+  // tiene en cuenta lo que ya se le había abonado antes.
+  let ventaSeleccionada = null;
+  $('#f-comp-venta-credito')?.addEventListener('change', (e) => {
+    const id = e.target.value;
+    ventaSeleccionada = id ? ventasCredito.find(x => x.venta.id === id) : null;
+    const campoCliente = $('#f-comp-cliente'), campoVenta = $('#f-comp-venta');
+    if (ventaSeleccionada) {
+      const { venta } = ventaSeleccionada;
+      campoCliente.value = venta.cliente_nombre; campoCliente.disabled = true;
+      campoVenta.value = `#${venta.numero}`; campoVenta.disabled = true;
+    } else {
+      campoCliente.value = ''; campoCliente.disabled = false;
+      campoVenta.value = ''; campoVenta.disabled = false;
+    }
+    actualizarSaldo();
+  });
 
   const firmaCanvas = $('#firma-canvas');
   const firmaCtx = firmaCanvas.getContext('2d');
@@ -4830,14 +6041,24 @@ function abrirFormComprobante() {
     $('#f-comp-transferido').closest('.field').style.display = (forma === 'efectivo') ? 'none' : '';
   }
   function actualizarSaldo() {
+    // Mismo criterio que al guardar: el campo oculto (ej. "Efectivo" cuando
+    // la forma de pago es Transferencia) no cuenta, aunque le haya quedado
+    // un valor viejo cargado de antes de cambiar la forma de pago.
+    const forma = $('#f-comp-forma').value;
+    const ef = (forma === 'transferencia' || forma === 'qr') ? 0 : Number($('#f-comp-efectivo').value || 0);
+    const tr = forma === 'efectivo' ? 0 : Number($('#f-comp-transferido').value || 0);
+    // "Total a pagar" se completa solo — nunca se escribe a mano — con lo
+    // recibido, o con el total real de la venta cuando hay una enlazada.
+    // Así el "Saldo pendiente" nunca puede aparecer por accidente en un
+    // comprobante libre; solo existe cuando de verdad se está abonando una
+    // venta a crédito.
+    $('#f-comp-total').value = ventaSeleccionada ? ventaSeleccionada.venta.total : ef + tr;
     const total = Number($('#f-comp-total').value || 0);
-    const ef = Number($('#f-comp-efectivo').value || 0);
-    const tr = Number($('#f-comp-transferido').value || 0);
-    const saldo = Math.max(0, total - ef - tr);
+    const abonadoPrevio = ventaSeleccionada ? ventaSeleccionada.abonadoPrevio : 0;
+    const saldo = Math.max(0, total - abonadoPrevio - ef - tr);
     $('#comp-saldo-preview').textContent = money(saldo);
   }
   $('#f-comp-forma').addEventListener('change', () => { actualizarVisibilidadForma(); actualizarSaldo(); });
-  $('#f-comp-total').addEventListener('input', actualizarSaldo);
   $('#f-comp-efectivo').addEventListener('input', actualizarSaldo);
   $('#f-comp-transferido').addEventListener('input', actualizarSaldo);
   actualizarVisibilidadForma();
@@ -4847,29 +6068,67 @@ function abrirFormComprobante() {
     const monto_total = Number($('#f-comp-total').value || 0);
     if (!cliente_nombre || monto_total <= 0) { toast('Completá el cliente y el total a pagar', 'error'); return; }
 
-    const { data: sesionesAbiertas } = await sb.from('caja_sesiones').select('*').eq('usuario_id', profile.id).eq('estado', 'abierta').limit(1);
-    const sesionAbierta = sesionesAbiertas && sesionesAbiertas[0];
-    if (!sesionAbierta) {
-      toast('Primero abrí tu caja en Caja → Mi caja para poder generar el comprobante', 'error');
-      return;
+    let sesionAbiertaId = null;
+    if (!movimientoExistente) {
+      const { data: sesionesAbiertas } = await sb.from('caja_sesiones').select('*').eq('usuario_id', profile.id).eq('estado', 'abierta').limit(1);
+      const sesionAbierta = sesionesAbiertas && sesionesAbiertas[0];
+      if (!sesionAbierta) {
+        toast('Primero abrí tu caja en Caja → Mi caja para poder generar el comprobante', 'error');
+        return;
+      }
+      sesionAbiertaId = sesionAbierta.id;
     }
 
     const forma_pago = $('#f-comp-forma').value;
     const monto_efectivo = (forma_pago === 'transferencia' || forma_pago === 'qr') ? 0 : Number($('#f-comp-efectivo').value || 0);
     const monto_transferido = forma_pago === 'efectivo' ? 0 : Number($('#f-comp-transferido').value || 0);
-    const saldo_pendiente = Math.max(0, monto_total - monto_efectivo - monto_transferido);
     const montoRecibido = monto_efectivo + monto_transferido;
 
-    // Movimiento de caja enlazado (solo por lo efectivamente recibido, no el saldo pendiente)
-    const { data: movimiento, error: eMov } = await sb.from('caja_movimientos').insert({
-      sesion_id: sesionAbierta.id,
-      tipo: 'ingreso',
-      concepto: `Comprobante — ${cliente_nombre}`,
-      monto: montoRecibido > 0 ? montoRecibido : monto_total,
-      metodo_pago: forma_pago === 'mixto' ? 'efectivo' : forma_pago,
-      usuario_id: profile.id
-    }).select().single();
-    if (eMov) { toast('Error al registrar el movimiento de caja: ' + eMov.message, 'error'); return; }
+    // Si está enlazado a una venta a crédito, el saldo pendiente tiene que
+    // descontar también lo que ya se le había abonado antes — no alcanza
+    // con total - lo recibido ahora.
+    let saldoActualVenta = null;
+    if (ventaSeleccionada) {
+      saldoActualVenta = Math.max(0, Number(ventaSeleccionada.venta.total) - ventaSeleccionada.abonadoPrevio);
+      if (montoRecibido <= 0) { toast('Ingresá el monto recibido de este abono', 'error'); return; }
+      if (montoRecibido > saldoActualVenta + 0.01) { toast(`El pago no puede superar el saldo pendiente de la venta (${money(saldoActualVenta)})`, 'error'); return; }
+    }
+    const saldo_pendiente = ventaSeleccionada ? Math.max(0, saldoActualVenta - montoRecibido) : Math.max(0, monto_total - monto_efectivo - monto_transferido);
+
+    // Movimiento de caja enlazado (solo por lo efectivamente recibido, no el
+    // saldo pendiente) — si venimos de "Generar recibo" sobre un ingreso ya
+    // registrado, se reutiliza ese mismo movimiento en vez de crear uno
+    // nuevo (si no, se estaría contando la plata recibida dos veces).
+    let movimiento = movimientoExistente;
+    if (!movimiento) {
+      const { data: nuevoMovimiento, error: eMov } = await sb.from('caja_movimientos').insert({
+        sesion_id: sesionAbiertaId,
+        tipo: 'ingreso',
+        concepto: ventaSeleccionada ? `Abono venta a crédito #${ventaSeleccionada.venta.numero} - ${cliente_nombre}` : `Comprobante — ${cliente_nombre}`,
+        monto: montoRecibido > 0 ? montoRecibido : monto_total,
+        metodo_pago: forma_pago === 'mixto' ? 'efectivo' : forma_pago,
+        usuario_id: profile.id,
+        ...(ventaSeleccionada ? { venta_id: ventaSeleccionada.venta.id } : {})
+      }).select().single();
+      if (eMov) { toast('Error al registrar el movimiento de caja: ' + eMov.message, 'error'); return; }
+      movimiento = nuevoMovimiento;
+    }
+
+    if (ventaSeleccionada) {
+      const { error: eAbono } = await sb.from('venta_abonos').insert({
+        venta_id: ventaSeleccionada.venta.id, monto: montoRecibido, metodo_pago: forma_pago, usuario_id: profile.id, caja_movimiento_id: movimiento.id
+      });
+      if (eAbono) { toast('Error al registrar el abono: ' + eAbono.message, 'error'); return; }
+
+      if (saldo_pendiente <= 0.01) {
+        const metodoVenta = forma_pago === 'mixto' ? (monto_efectivo > 0 ? 'efectivo' : 'transferencia') : forma_pago;
+        await sb.from('ventas').update({ cobrado: true, metodo_pago: metodoVenta }).eq('id', ventaSeleccionada.venta.id);
+        await Promise.all((ventaSeleccionada.venta.items || [])
+          .filter(it => it.producto_id)
+          .map(it => ajustarStock(it.producto_id, -it.cantidad, `Venta #${ventaSeleccionada.venta.numero} (cobrada)`)));
+        await cargarProductos();
+      }
+    }
 
     const payload = {
       fecha: $('#f-comp-fecha').value,
@@ -4890,10 +6149,10 @@ function abrirFormComprobante() {
     await sb.from('caja_movimientos').update({ comprobante_id: data.id }).eq('id', movimiento.id);
 
     await guardarClienteSiNoExiste(cliente_nombre, '', '', '');
-    toast('Comprobante generado y enlazado a tu caja');
+    toast(ventaSeleccionada ? 'Abono registrado y comprobante generado' : 'Comprobante generado y enlazado a tu caja');
     closeModal();
     await cargarComprobantes();
-    switchView('comprobantes');
+    if (origenCaja) renderCaja(); else switchView('comprobantes');
     abrirVistaPreviaComprobante(data);
   });
 }
@@ -5064,7 +6323,10 @@ async function generarYCompartirComprobanteImagen(c) {
     await cargarHtml2Canvas();
     const canvas = await html2canvas(elPapel, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-    const texto = `*Comprobante de pago N° ${String(c.numero).padStart(5, '0')} — Electrodomésticos BM*\nRecibimos de: ${c.cliente_nombre}\nMonto: ${money(c.monto_total)}`;
+    const encabezado = `*Comprobante de pago N° ${String(c.numero).padStart(5, '0')} — Electrodomésticos BM*\nRecibimos de: ${c.cliente_nombre}`;
+    const texto = Number(c.saldo_pendiente) > 0
+      ? `${encabezado}\nMonto Credito: ${money(c.monto_total)}\nMonto Abonado: ${money(Number(c.monto_efectivo) + Number(c.monto_transferido))}\nMonto Saldo: ${money(c.saldo_pendiente)}`
+      : `${encabezado}\nMonto: ${money(c.monto_total)}`;
     if (blob) {
       const file = new File([blob], `comprobante_${c.numero}.png`, { type: 'image/png' });
       await compartirArchivosWhatsapp({ files: [file], texto, titulo: 'Comprobante de pago' });

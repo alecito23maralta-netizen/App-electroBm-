@@ -531,6 +531,18 @@ tbody tr:hover { background: rgba(255,255,255,0.04); }
   text-align: center; padding: 40px 20px; color: var(--text-faint); font-size: 13.5px;
 }
 
+/* Barras horizontales simples (Inventario → Rotación) */
+.rot-bars { display: flex; flex-direction: column; gap: 10px; }
+.rot-bar-row { display: grid; grid-template-columns: minmax(0, 1fr) 90px; gap: 8px; align-items: center; }
+.rot-bar-label {
+  grid-column: 1 / -1; font-size: 12.5px; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rot-bar-track { height: 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.06); overflow: hidden; }
+.rot-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); min-width: 3px; }
+.rot-bar-fill.accent-2 { background: var(--accent-2); }
+.rot-bar-valor { font-size: 12px; color: var(--text-faint); text-align: right; white-space: nowrap; }
+
 /* Modal / hoja emergente */
 .overlay {
   position: fixed; inset: 0; background: rgba(5, 6, 9, 0.5);
@@ -608,6 +620,11 @@ tbody tr:hover { background: rgba(255,255,255,0.04); }
   padding: 8px 14px; border-radius: 999px; font-size: 13px; font-weight: 500; white-space: nowrap;
 }
 .tab-btn.active { background: var(--accent-dim); border-color: #00e5a055; color: var(--accent); }
+.tab-btn { position: relative; }
+.badge-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--danger); margin-left: 5px; vertical-align: middle;
+}
 
 .toast {
   position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%) translateY(10px);
@@ -822,6 +839,7 @@ button.card:hover { border-color: var(--accent); background: var(--surface-2); }
   padding: 9px 12px; font-size: 13.5px; color: var(--text);
 }
 .chat-msg.propio .chat-msg-bubble { background: var(--accent-dim); border-color: #00e5a044; border-radius: 14px 14px 4px 14px; }
+.chat-msg-bam { background: var(--info-dim); border-color: #4c8cff44; }
 .chat-msg-img { max-width: 220px; width: 100%; border-radius: 10px; display: block; margin-bottom: 6px; }
 .chat-msg-texto { white-space: pre-wrap; word-break: break-word; }
 .chat-msg-hora { font-size: 10px; color: var(--text-faint); margin-top: 4px; text-align: right; }

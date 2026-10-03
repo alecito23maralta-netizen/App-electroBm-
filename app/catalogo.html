@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=44" />
+<link rel="stylesheet" href="style.css?v=45" />
 <style>
   body { padding: 0; background: var(--bg); }
 
@@ -107,6 +107,10 @@
   /* -------- Grilla completa -------- */
   #pub-grid-section { scroll-margin-top: 70px; }
   .pub-empty { text-align: center; padding: 60px 20px; color: var(--text-faint); }
+  .pub-elige-cat { text-align: center; padding: 56px 20px; border: 1px dashed #ffffff2a; border-radius: 16px; }
+  .pub-elige-cat-ico { font-size: 30px; margin-bottom: 10px; }
+  .pub-elige-cat-title { font-family: var(--font-display); font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+  .pub-elige-cat-sub { color: var(--text-dim); font-size: 13px; max-width: 420px; margin: 0 auto; line-height: 1.5; }
 
   /* -------- Detalle de producto (modal) -------- */
   .pub-detalle-overlay {
@@ -236,7 +240,7 @@
 
   <section class="pub-section" id="pub-grid-section">
     <div class="pub-section-title">Catálogo completo</div>
-    <div class="pub-section-sub">Buscá por nombre o filtrá por categoría</div>
+    <div class="pub-section-sub" id="pub-grid-sub">Buscá por nombre o filtrá por categoría</div>
     <div class="field" style="margin-bottom:14px">
       <input id="pub-buscar" placeholder="🔍 Buscar producto…" />
     </div>
@@ -258,8 +262,8 @@
   <div class="pub-footer">Electrodomésticos BM · Bolivia</div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script src="config.js?v=44"></script>
-  <script src="catalogo-publico.js?v=44"></script>
+  <script src="config.js?v=45"></script>
+  <script src="catalogo-publico.js?v=45"></script>
 
   <script>
     if ('serviceWorker' in navigator) {

@@ -431,9 +431,41 @@ function renderTabs() {
   });
 }
 
+// El tono profesional que pediste: en vez del genérico "Buscá por
+// nombre o filtrá por categoría" fijo, el subtítulo arriba de la
+// grilla ahora cambia según lo que el cliente eligió.
+function actualizarSubtituloGrid(hayFiltro) {
+  const el = $('#pub-grid-sub');
+  if (!el) return;
+  const q = busquedaActual.trim();
+  if (!hayFiltro) {
+    el.textContent = 'Elegí una categoría arriba o buscá por nombre para ver los modelos disponibles, con fotos, precios y stock al día.';
+  } else if (categoriaActual !== 'todas' && !q) {
+    el.textContent = `Nuestra selección completa en ${categoriaActual} — calidad certificada y garantía en cada equipo.`;
+  } else {
+    el.textContent = `Resultados para "${busquedaActual}"${categoriaActual !== 'todas' ? ' en ' + categoriaActual : ''}.`;
+  }
+}
+
 function renderGrid() {
   const grid = $('#pub-grid');
   const q = busquedaActual.trim().toLowerCase();
+  // Las fotos (en base64, pesan) recién se muestran cuando el cliente
+  // elige una categoría o escribe una búsqueda — no de entrada con
+  // "Todas", para no cargar todo el catálogo de una.
+  const hayFiltro = categoriaActual !== 'todas' || q !== '';
+  actualizarSubtituloGrid(hayFiltro);
+
+  if (!hayFiltro) {
+    grid.innerHTML = `
+      <div class="pub-elige-cat">
+        <div class="pub-elige-cat-ico">🧭</div>
+        <div class="pub-elige-cat-title">Elegí una categoría para empezar</div>
+        <div class="pub-elige-cat-sub">Mirá las opciones de arriba o escribí lo que buscás en el cuadro de búsqueda.</div>
+      </div>`;
+    return;
+  }
+
   let items = productosPub;
   if (categoriaActual !== 'todas') items = items.filter(p => p.categoria === categoriaActual);
   if (q) items = items.filter(p => p.descripcion.toLowerCase().includes(q) || (p.subcategoria || '').toLowerCase().includes(q));

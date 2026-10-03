@@ -1289,9 +1289,13 @@ let importacionesRotacionCache = [];
 let rotacionItemsCache = [];
 let rotacionMesFiltro = 'todos';
 
+// Punto de entrada a Inventario: trae el catálogo (select('*') incluye
+// las fotos en base64 de cada producto — con ~1500+ productos esto ya
+// es una transferencia/parseo grande) y arma TODA la pantalla (header,
+// botones, pestañas). Cambiar de pestaña DENTRO de Inventario no debe
+// repetir ninguna de las dos cosas — ver cambiarTabInventario().
 async function renderInventario() {
   await cargarProductos();
-  const bajos = productosCache.filter(p => p.stock <= p.stock_minimo);
   const el = $('#view-inventario');
   el.innerHTML = `
     <div class="section-head">
@@ -1304,8 +1308,8 @@ async function renderInventario() {
         </div>
       ` : ''}
     </div>
-    ${bajos.length > 0 ? `<div class="low-stock-banner"><span class="dot"></span>${bajos.length} producto${bajos.length > 1 ? 's' : ''} con stock bajo — revisá el catálogo</div>` : ''}
-    <div class="tabs">
+    <div id="inv-low-stock-banner"></div>
+    <div class="tabs" id="inv-tabs">
       <button class="tab-btn ${tabInventario === 'catalogo' ? 'active' : ''}" id="tab-catalogo">Catálogo</button>
       <button class="tab-btn ${tabInventario === 'movimientos' ? 'active' : ''}" id="tab-movimientos">Movimientos</button>
       ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>
@@ -1319,20 +1323,46 @@ async function renderInventario() {
     $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
     $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
     $('#btn-cargar-compra').addEventListener('click', () => abrirImportadorCompra());
-    $('#tab-rentabilidad').addEventListener('click', () => { tabInventario = 'rentabilidad'; renderInventario(); });
-    $('#tab-costos').addEventListener('click', () => { tabInventario = 'costos'; renderInventario(); });
-    $('#tab-rotacion').addEventListener('click', () => { tabInventario = 'rotacion'; renderInventario(); });
-    $('#tab-control').addEventListener('click', () => { tabInventario = 'control'; renderInventario(); });
+    $('#tab-rentabilidad').addEventListener('click', () => cambiarTabInventario('rentabilidad'));
+    $('#tab-costos').addEventListener('click', () => cambiarTabInventario('costos'));
+    $('#tab-rotacion').addEventListener('click', () => cambiarTabInventario('rotacion'));
+    $('#tab-control').addEventListener('click', () => cambiarTabInventario('control'));
   }
-  $('#tab-catalogo').addEventListener('click', () => { tabInventario = 'catalogo'; renderInventario(); });
-  $('#tab-movimientos').addEventListener('click', () => { tabInventario = 'movimientos'; renderInventario(); });
+  $('#tab-catalogo').addEventListener('click', () => cambiarTabInventario('catalogo'));
+  $('#tab-movimientos').addEventListener('click', () => cambiarTabInventario('movimientos'));
 
+  renderBannerStockBajoInventario();
+  renderInventarioContenido();
+}
+
+function renderBannerStockBajoInventario() {
+  const cont = $('#inv-low-stock-banner');
+  if (!cont) return;
+  const bajos = productosCache.filter(p => p.stock <= p.stock_minimo);
+  cont.innerHTML = bajos.length > 0
+    ? `<div class="low-stock-banner"><span class="dot"></span>${bajos.length} producto${bajos.length > 1 ? 's' : ''} con stock bajo — revisá el catálogo</div>`
+    : '';
+}
+
+function renderInventarioContenido() {
   if (tabInventario === 'catalogo') renderCatalogoProductos();
   else if (tabInventario === 'movimientos') renderMovimientosInventario();
   else if (tabInventario === 'rentabilidad' && profile.rol === 'admin') renderRentabilidad();
   else if (tabInventario === 'costos' && profile.rol === 'admin') renderCostos();
   else if (tabInventario === 'rotacion' && profile.rol === 'admin') renderRotacion();
   else if (tabInventario === 'control' && profile.rol === 'admin') renderControlFisico();
+}
+
+// Cambiar de pestaña DENTRO de Inventario no necesita volver a traer
+// los ~1500+ productos (con fotos) de Supabase ni rearmar el header/
+// pestañas desde cero — eso era lo que hacía sentir lenta a la app
+// cada vez que tocabas una pestaña. Acá solo se actualiza qué pestaña
+// está marcada como activa y se vuelve a dibujar el contenido, con lo
+// que YA está cargado en memoria (productosCache).
+function cambiarTabInventario(tab) {
+  tabInventario = tab;
+  $$('#inv-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.id === 'tab-' + tab));
+  renderInventarioContenido();
 }
 
 function celdaMargenHtml(p) {
@@ -1744,7 +1774,8 @@ function abrirFormSubirLoteInventario() {
     toast(`Subida terminada: ${ok} producto${ok === 1 ? '' : 's'} creado${ok === 1 ? '' : 's'}${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
     closeModal();
     await cargarProductos();
-    renderInventario();
+    renderBannerStockBajoInventario();
+    renderInventarioContenido();
   });
 }
 
@@ -2090,8 +2121,18 @@ function abrirFormProducto(existing, prefill) {
       <div class="field"><label>Subcategoría</label><input id="f-subcat" placeholder="Ej: Gas, Eléctrico" value="${existing ? escapeHtml(existing.subcategoria || '') : ''}" /></div>
     </div>
     <div class="grid-2" id="campos-codigos" style="margin-top:10px; ${catInicial === 'Herramientas' ? '' : 'display:none'}">
-      <div class="field"><label>Código de fábrica</label><input id="f-codfab" value="${existing ? escapeHtml(existing.codigo_fabrica || '') : escapeHtml(prefill?.codigo_fabrica || '')}" placeholder="Ej: JDCC8395" /></div>
+      <div class="field"><label>Código de fábrica</label>
+        <div style="display:flex;gap:6px">
+          <input id="f-codfab" style="flex:1" value="${existing ? escapeHtml(existing.codigo_fabrica || '') : escapeHtml(prefill?.codigo_fabrica || '')}" placeholder="Ej: JDCC8395" />
+          <button type="button" class="btn btn-secondary" id="btn-escanear-codfab" title="Escanear código de barras">📷</button>
+        </div>
+      </div>
       <div class="field"><label>Código interno</label><input id="f-codint" value="${existing ? escapeHtml(existing.codigo_interno || '') : ''}" placeholder="Ej: H0001" /></div>
+    </div>
+    <div class="cf-cam-panel" id="prod-cam-panel" hidden>
+      <video id="prod-cam-video" autoplay playsinline muted></video>
+      <button type="button" class="cf-cam-close" id="prod-cam-close" title="Cerrar cámara">✕</button>
+      <div class="cf-cam-status" id="prod-cam-status">Iniciando cámara...</div>
     </div>
     <div class="field" style="margin-top:10px"><label>Precio Mayorista<br><span style="font-weight:400;color:var(--text-faint)">lo que te cobra tu proveedor</span></label><input type="number" id="f-costo" value="${existing ? existing.costo : 0}" min="0" step="0.01" /></div>
     <div class="field" style="margin-top:10px"><label>Precio Venta<br><span style="font-weight:400;color:var(--text-faint)">lo que le cobrás al cliente</span></label><input type="number" id="f-precio" value="${existing ? existing.precio_venta : 0}" min="0" step="0.01" /></div>
@@ -2112,11 +2153,31 @@ function abrirFormProducto(existing, prefill) {
       <button class="btn btn-primary" id="btn-guardar">💾 Guardar</button>
     </div>
   `);
-  $('#sheet-close').addEventListener('click', closeModal);
-  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#sheet-close').addEventListener('click', () => { detenerCamaraProd(); closeModal(); });
+  $('#btn-cancelar').addEventListener('click', () => { detenerCamaraProd(); closeModal(); });
   $('#f-cat').addEventListener('change', (e) => {
     $('#campos-codigos').style.display = e.target.value === 'Herramientas' ? '' : 'none';
+    if (e.target.value !== 'Herramientas') detenerCamaraProd();
   });
+
+  let prodCodeReader = null;
+  function detenerCamaraProd() {
+    detenerLectorCodigoBarras(prodCodeReader, 'prod-cam-video');
+    prodCodeReader = null;
+    $('#prod-cam-panel').hidden = true;
+  }
+  $('#btn-escanear-codfab').addEventListener('click', async () => {
+    if (prodCodeReader) { detenerCamaraProd(); return; }
+    $('#prod-cam-panel').hidden = false;
+    prodCodeReader = await iniciarLectorCodigoBarras('prod-cam-video', 'prod-cam-status', (codigo) => {
+      $('#f-codfab').value = codigo;
+      toast('✓ Código escaneado: ' + codigo);
+      detenerCamaraProd();
+    });
+    // Si falló, dejamos el panel abierto mostrando el motivo (ya quedó en
+    // el texto de estado) — el botón ✕ lo cierra cuando el usuario quiera.
+  });
+  $('#prod-cam-close').addEventListener('click', detenerCamaraProd);
 
   let imagenNuevaBase64 = null;
   $('#f-imagen-producto').addEventListener('change', async (e) => {
@@ -2156,8 +2217,11 @@ function abrirFormProducto(existing, prefill) {
     else resp = await sb.from('productos').insert({ ...payload, stock: Number($('#f-stock').value || 0) });
     if (resp.error) { toast('Error: ' + resp.error.message, 'error'); return; }
     toast('Producto guardado');
+    detenerCamaraProd();
     closeModal();
-    renderInventario();
+    await cargarProductos();
+    renderBannerStockBajoInventario();
+    renderInventarioContenido();
   });
 }
 
@@ -2182,7 +2246,8 @@ function abrirFormMovimiento(producto, tipo) {
     toast('Movimiento registrado');
     closeModal();
     await cargarProductos();
-    renderInventario();
+    renderBannerStockBajoInventario();
+    renderInventarioContenido();
   });
 }
 
@@ -2660,11 +2725,19 @@ function catalogarNuevoCF(itemId) {
 // CÁMARA (ZXing) — lee código de barras y lo busca contra
 // codigo_fabrica/codigo_interno (hoy solo cargados en Herramientas).
 // ------------------------------------------------------------
-async function toggleCamaraCF() {
-  if (controlFisicoCamStream) { detenerCamaraCF(); return; }
-  const panel = $('#cf-cam-panel');
-  panel.hidden = false;
-  setStatusCamCF('Iniciando cámara...');
+// ------------------------------------------------------------
+// LECTOR DE CÓDIGO DE BARRAS (ZXing) — reutilizable en cualquier
+// pantalla que tenga un <video> y un contenedor de estado en el DOM:
+// lo usa tanto la cámara de Control Físico como el botón "📷 Escanear"
+// del campo Código de fábrica al cargar/editar una Herramienta.
+// ------------------------------------------------------------
+function setStatusLector(statusId, msg) {
+  const el = document.getElementById(statusId);
+  if (el) el.textContent = msg;
+}
+
+async function iniciarLectorCodigoBarras(videoId, statusId, onDetectado) {
+  setStatusLector(statusId, 'Iniciando cámara...');
   try {
     await cargarZXing();
     if (!window.ZXing || !ZXing.BrowserMultiFormatReader) throw new Error('La librería del lector no cargó bien (ZXing no disponible)');
@@ -2684,7 +2757,7 @@ async function toggleCamaraCF() {
         ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.DATA_MATRIX
       ]);
     } catch (e) { hints = undefined; /* si algo de esto no existe en esta build, seguimos sin hints */ }
-    controlFisicoCodeReader = new ZXing.BrowserMultiFormatReader(hints);
+    const reader = new ZXing.BrowserMultiFormatReader(hints);
 
     // Elegir la cámara trasera es un plus, no algo de lo que dependa
     // poder escanear — si listar dispositivos falla (varía según la
@@ -2692,40 +2765,54 @@ async function toggleCamaraCF() {
     // ya cae solo a la cámara trasera (facingMode: 'environment').
     let deviceId;
     try {
-      const devices = await controlFisicoCodeReader.listVideoInputDevices();
+      const devices = await reader.listVideoInputDevices();
       const trasera = devices.find(d => /back|rear|environment/i.test(d.label));
       deviceId = (trasera || devices[0])?.deviceId;
     } catch (e) { /* sin device list, decodeFromVideoDevice elige sola */ }
 
-    setStatusCamCF('Apuntá al código, a unos 10-15cm, con buena luz');
-    await controlFisicoCodeReader.decodeFromVideoDevice(deviceId, 'cf-cam-video', (result) => {
-      if (result) manejarCodigoBarraCF(result.getText());
+    setStatusLector(statusId, 'Apuntá al código, a unos 10-15cm, con buena luz');
+    await reader.decodeFromVideoDevice(deviceId, videoId, (result) => {
+      if (result) onDetectado(result.getText(), reader);
     });
-    controlFisicoCamStream = $('#cf-cam-video').srcObject;
+    return reader;
   } catch (err) {
     const msg = err.name === 'NotAllowedError' ? 'Permití el acceso a la cámara en tu navegador'
       : err.name === 'NotFoundError' ? 'No se encontró cámara'
       : 'No se pudo abrir la cámara (' + [err.name, err.message].filter(Boolean).join(': ') + ')';
-    setStatusCamCF('⚠ ' + msg);
+    setStatusLector(statusId, '⚠ ' + msg);
     toast(msg, 'error');
-    console.error('toggleCamaraCF:', err);
+    console.error('iniciarLectorCodigoBarras:', err);
+    return null;
   }
 }
-function detenerCamaraCF() {
-  if (controlFisicoCodeReader) { try { controlFisicoCodeReader.reset(); } catch (e) {} controlFisicoCodeReader = null; }
-  if (controlFisicoCamStream) { controlFisicoCamStream.getTracks().forEach(t => t.stop()); controlFisicoCamStream = null; }
-  const v = $('#cf-cam-video');
+
+function detenerLectorCodigoBarras(reader, videoId) {
+  if (reader) { try { reader.reset(); } catch (e) {} }
+  const v = document.getElementById(videoId);
   if (v && v.srcObject) { v.srcObject.getTracks().forEach(t => t.stop()); v.srcObject = null; }
+}
+
+async function toggleCamaraCF() {
+  if (controlFisicoCamStream) { detenerCamaraCF(); return; }
+  const panel = $('#cf-cam-panel');
+  panel.hidden = false;
+  const reader = await iniciarLectorCodigoBarras('cf-cam-video', 'cf-cam-status', (codigo) => manejarCodigoBarraCF(codigo));
+  // Si falló, dejamos el panel abierto mostrando el motivo (ya quedó en
+  // el texto de estado) — el botón ✕ lo cierra cuando el usuario quiera.
+  if (!reader) return;
+  controlFisicoCodeReader = reader;
+  controlFisicoCamStream = $('#cf-cam-video').srcObject;
+}
+function detenerCamaraCF() {
+  detenerLectorCodigoBarras(controlFisicoCodeReader, 'cf-cam-video');
+  controlFisicoCodeReader = null;
+  controlFisicoCamStream = null;
   const panel = $('#cf-cam-panel');
   if (panel) panel.hidden = true;
 }
-function setStatusCamCF(msg) {
-  const el = $('#cf-cam-status');
-  if (el) el.textContent = msg;
-}
 function manejarCodigoBarraCF(codigo) {
   codigo = String(codigo).trim();
-  setStatusCamCF('✓ Código: ' + codigo);
+  setStatusLector('cf-cam-status', '✓ Código: ' + codigo);
   detenerCamaraCF();
   const p = productosCache.find(x => normalizarTextoImport(codigoVisibleProducto(x)) === normalizarTextoImport(codigo) && codigoVisibleProducto(x));
   if (p) { seleccionarProductoCF(p.id); toast('✓ Detectado: ' + p.descripcion.substring(0, 35)); return; }
@@ -3404,7 +3491,8 @@ async function confirmarImportacionProductos() {
   toast(`Importación terminada: ${ok} ok${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
   closeModal();
   await cargarProductos();
-  renderInventario();
+  renderBannerStockBajoInventario();
+  renderInventarioContenido();
 }
 
 // ============================================================
@@ -3588,7 +3676,8 @@ async function confirmarImportacionCompra() {
   toast(`Compra cargada: ${ok} ok${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
   closeModal();
   await cargarProductos();
-  renderInventario();
+  renderBannerStockBajoInventario();
+  renderInventarioContenido();
 }
 
 // ============================================================

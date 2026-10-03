@@ -11,7 +11,6 @@ let adminCreds = null;     // {usuario, password} en memoria, solo para re-logue
 let productosCache = [];
 let clientesCache = [];
 let mediosPagoCache = [];
-let promocionesCache = [];
 let intervaloAlertaPendientes = null;
 let intervaloNotificaciones = null;
 let intervaloBotPendientes = null;  // BAM re-revisa autorizaciones/cobros pendientes (admin y vendedores)
@@ -186,18 +185,17 @@ async function iniciarApp() {
   $('#role-chip').classList.toggle('admin', profile.rol === 'admin');
   $('#nav-usuarios').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-inventario').style.display = profile.rol === 'admin' ? '' : 'none';
-  $('#nav-importar-productos').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-caja').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-garantias').style.display = profile.rol === 'admin' ? '' : 'none';
-  $('#nav-vendedores').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-group-gestion').style.display = profile.rol === 'admin' ? '' : 'none';
+  $('#nav-group-admin').style.display = profile.rol === 'admin' ? '' : 'none';
   $('.nav-group[data-group="ventas"]')?.classList.add('open');
-  if (profile.rol === 'admin') $('#nav-group-gestion')?.classList.add('open');
+  if (profile.rol === 'admin') { $('#nav-group-gestion')?.classList.add('open'); $('#nav-group-admin')?.classList.add('open'); }
 
-  // Las 4 en paralelo, no una atrás de la otra — son independientes
+  // Las 3 en paralelo, no una atrás de la otra — son independientes
   // entre sí y hacerlas de a una sumaba varios segundos de espera al
   // login en datos móviles.
-  await Promise.all([cargarProductos(), cargarClientes(), cargarMediosPago(), cargarPromociones()]);
+  await Promise.all([cargarProductos(), cargarClientes(), cargarMediosPago()]);
   switchView('cotizaciones');
   mostrarSaludoBienvenida();
   setTimeout(mostrarBotPendientesEntrada, 1200);
@@ -226,7 +224,6 @@ async function iniciarApp() {
   intervaloBamRecordatorios = setInterval(revisarRecordatoriosBam, 5 * 60 * 1000);
 
   if (profile.rol !== 'admin') {
-    mostrarPopupPromosVendedor();
     verificarPendientesVendedor();
     verificarNotificacionesVendedor();
     clearInterval(intervaloAlertaPendientes);
@@ -562,7 +559,8 @@ if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.is
 }
 
 async function switchView(view) {
-  if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores') && profile.rol !== 'admin') view = 'cotizaciones';
+  if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores'
+    || view === 'rentabilidad' || view === 'costos' || view === 'rotacion') && profile.rol !== 'admin') view = 'cotizaciones';
   vistaActual = view;
   $$('.view').forEach(v => v.hidden = true);
   $(`#view-${view}`).hidden = false;
@@ -571,7 +569,6 @@ async function switchView(view) {
   if (view === 'cotizaciones') await renderCotizaciones();
   if (view === 'ventas') await renderVentas();
   if (view === 'catalogo') await renderCatalogoClientes();
-  if (view === 'promos') await renderPromos();
   if (view === 'inventario') await renderInventario();
   if (view === 'caja') await renderCaja();
   if (view === 'usuarios') await renderUsuarios();
@@ -579,6 +576,9 @@ async function switchView(view) {
   if (view === 'vendedores') await renderVendedoresReporte();
   if (view === 'chat') await renderChat();
   if (view === 'comprobantes') await renderComprobantes();
+  if (view === 'rentabilidad') await renderRentabilidad();
+  if (view === 'costos') await renderCostos();
+  if (view === 'rotacion') await renderRotacion();
 }
 
 async function cargarProductos() {
@@ -1312,10 +1312,7 @@ async function renderInventario() {
     <div class="tabs" id="inv-tabs">
       <button class="tab-btn ${tabInventario === 'catalogo' ? 'active' : ''}" id="tab-catalogo">Catálogo</button>
       <button class="tab-btn ${tabInventario === 'movimientos' ? 'active' : ''}" id="tab-movimientos">Movimientos</button>
-      ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>
-      <button class="tab-btn ${tabInventario === 'costos' ? 'active' : ''}" id="tab-costos">💰 Costos</button>
-      <button class="tab-btn ${tabInventario === 'rotacion' ? 'active' : ''}" id="tab-rotacion">🔄 Rotación</button>
-      <button class="tab-btn ${tabInventario === 'control' ? 'active' : ''}" id="tab-control">📋 Control Físico</button>` : ''}
+      ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'control' ? 'active' : ''}" id="tab-control">📋 Control Físico</button>` : ''}
     </div>
     <div id="inv-content"></div>
   `;
@@ -1323,9 +1320,6 @@ async function renderInventario() {
     $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
     $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
     $('#btn-cargar-compra').addEventListener('click', () => abrirImportadorCompra());
-    $('#tab-rentabilidad').addEventListener('click', () => cambiarTabInventario('rentabilidad'));
-    $('#tab-costos').addEventListener('click', () => cambiarTabInventario('costos'));
-    $('#tab-rotacion').addEventListener('click', () => cambiarTabInventario('rotacion'));
     $('#tab-control').addEventListener('click', () => cambiarTabInventario('control'));
   }
   $('#tab-catalogo').addEventListener('click', () => cambiarTabInventario('catalogo'));
@@ -1347,9 +1341,6 @@ function renderBannerStockBajoInventario() {
 function renderInventarioContenido() {
   if (tabInventario === 'catalogo') renderCatalogoProductos();
   else if (tabInventario === 'movimientos') renderMovimientosInventario();
-  else if (tabInventario === 'rentabilidad' && profile.rol === 'admin') renderRentabilidad();
-  else if (tabInventario === 'costos' && profile.rol === 'admin') renderCostos();
-  else if (tabInventario === 'rotacion' && profile.rol === 'admin') renderRotacion();
   else if (tabInventario === 'control' && profile.rol === 'admin') renderControlFisico();
 }
 
@@ -1498,8 +1489,12 @@ async function renderMovimientosInventario() {
 // aceptable (configurable).
 // ------------------------------------------------------------
 async function renderRentabilidad() {
-  const cont = $('#inv-content');
-  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  const el = $('#view-rentabilidad');
+  el.innerHTML = `
+    <div class="section-head"><div><h2>Rentabilidad</h2><p class="sub">Márgenes de tus productos y alertas de precio bajo</p></div></div>
+    <div id="rentabilidad-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  const cont = $('#rentabilidad-content');
 
   const { data: config } = await sb.from('configuracion').select('margen_minimo_pct').eq('id', 1).single();
   const margenMinimo = Number(config?.margen_minimo_pct ?? 20);
@@ -1588,8 +1583,12 @@ async function cargarItemsCostos(loteId) {
 }
 
 async function renderCostos() {
-  const cont = $('#inv-content');
-  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  const el = $('#view-costos');
+  el.innerHTML = `
+    <div class="section-head"><div><h2>Costos</h2><p class="sub">Calculá el costo final y precio de venta de un lote de compra</p></div></div>
+    <div id="costos-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  const cont = $('#costos-content');
   if (!loteCostosAbierto) {
     await cargarLotesCostos();
     renderListaLotesCostos(cont);
@@ -2042,8 +2041,12 @@ function mostrarBotResumenRotacion() {
 }
 
 async function renderRotacion() {
-  const cont = $('#inv-content');
-  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  const el = $('#view-rotacion');
+  el.innerHTML = `
+    <div class="section-head"><div><h2>Rotación</h2><p class="sub">Qué mercadería sale más, según las planchas de pedido que subas</p></div></div>
+    <div id="rotacion-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  const cont = $('#rotacion-content');
   await cargarRotacion();
 
   const totalLineas = rotacionItemsCache.length;
@@ -5183,57 +5186,6 @@ async function descargarCatalogoPDF() {
 }
 
 // ============================================================
-// MÓDULO: PROMOCIONES
-// ============================================================
-async function cargarPromociones() {
-  const { data } = await sb.from('promociones').select('*').order('created_at', { ascending: false });
-  promocionesCache = data || [];
-}
-
-function promocionesActivas() {
-  const hoy = new Date(new Date().toDateString());
-  return promocionesCache.filter(p => p.activa && (!p.fecha_fin || new Date(p.fecha_fin) >= hoy));
-}
-
-function mostrarPopupPromosVendedor() {
-  const activas = promocionesActivas();
-  if (activas.length === 0) return;
-  openModal(`
-    <div class="sheet-head"><h3>🎉 Promociones activas</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <p style="color:var(--text-dim);font-size:13px;margin-top:-6px">Contales esto a tus clientes:</p>
-    <div style="display:flex;flex-direction:column;gap:12px;margin-top:12px">
-      ${activas.map(p => `
-        <div class="card">
-          ${p.imagen_base64 ? `<img src="${p.imagen_base64}" style="width:100%;border-radius:8px;margin-bottom:10px" />` : ''}
-          <div class="card-title">${escapeHtml(p.titulo)} <span class="badge badge-ok">${p.tipo === '2x1' ? '2x1' : (p.tipo === 'descuento' ? 'Descuento' : 'Promo')}</span></div>
-          <p style="font-size:13px;color:var(--text-dim);margin:6px 0 0">${escapeHtml(p.descripcion)}</p>
-          ${p.fecha_fin ? `<p style="font-size:11.5px;color:var(--text-faint);margin-top:6px">Válido hasta ${fecha(p.fecha_fin)}</p>` : ''}
-          <button class="btn btn-secondary btn-sm" data-compartir-promo="${p.id}" style="margin-top:10px">📤 Compartir con un cliente</button>
-        </div>
-      `).join('')}
-    </div>
-    <div class="form-actions"><button class="btn btn-primary btn-block" id="btn-entendido-promo">Entendido, continuar</button></div>
-  `);
-  $('#sheet-close').addEventListener('click', closeModal);
-  $('#btn-entendido-promo').addEventListener('click', closeModal);
-  $$('[data-compartir-promo]').forEach(btn => {
-    const p = activas.find(x => x.id === btn.dataset.compartirPromo);
-    btn.addEventListener('click', () => compartirPromocionWhatsapp(p));
-  });
-}
-
-async function compartirPromocionWhatsapp(p) {
-  const texto = `*🎉 ${p.titulo}*\n${p.descripcion}${p.fecha_fin ? '\nVálido hasta ' + fecha(p.fecha_fin) : ''}\n\n_Electrodomésticos BM_`;
-  if (p.imagen_base64) {
-    const blob = dataURLtoBlob(p.imagen_base64);
-    const file = new File([blob], 'promo.jpg', { type: blob.type });
-    await compartirArchivosWhatsapp({ files: [file], texto, titulo: p.titulo });
-  } else {
-    window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
-  }
-}
-
-// ============================================================
 // VENDEDORES: registro mensual de ventas por vendedor + ranking
 // (solo admin)
 // ============================================================
@@ -5340,109 +5292,6 @@ async function cargarYRenderVendedoresReporte() {
       </table>
     </div>
   `;
-}
-
-async function renderPromos() {
-  await cargarPromociones();
-  const el = $('#view-promos');
-  el.innerHTML = `
-    <div class="section-head">
-      <div><h2>Promociones</h2><p class="sub">${profile.rol === 'admin' ? 'Descuentos, 2x1 y otras ofertas para contarle a los clientes' : 'Promos activas para contarle a tus clientes'}</p></div>
-      ${profile.rol === 'admin' ? `<button class="btn btn-primary" id="btn-nueva-promo">+ Nueva promoción</button>` : ''}
-    </div>
-    <div id="promos-list"></div>
-  `;
-  if (profile.rol === 'admin') $('#btn-nueva-promo').addEventListener('click', () => abrirFormPromocion());
-
-  const list = $('#promos-list');
-  const items = profile.rol === 'admin' ? promocionesCache : promocionesActivas();
-  if (items.length === 0) {
-    list.innerHTML = `<div class="empty-state">${profile.rol === 'admin' ? 'Todavía no cargaste ninguna promoción.' : 'No hay promociones activas por ahora.'}</div>`;
-    return;
-  }
-
-  list.innerHTML = `<div class="grid-2">${items.map(p => `
-    <div class="card">
-      ${p.imagen_base64 ? `<img src="${p.imagen_base64}" style="width:100%;border-radius:8px;margin-bottom:10px" />` : ''}
-      <div class="card-title">${escapeHtml(p.titulo)} <span class="badge ${p.activa ? 'badge-ok' : 'badge-rechazada'}">${p.tipo === '2x1' ? '2x1' : (p.tipo === 'descuento' ? 'Descuento' : 'Promo')}${!p.activa ? ' · Inactiva' : ''}</span></div>
-      <p style="font-size:13px;color:var(--text-dim);margin:6px 0 0">${escapeHtml(p.descripcion)}</p>
-      ${p.fecha_fin ? `<p style="font-size:11.5px;color:var(--text-faint);margin-top:6px">Válido hasta ${fecha(p.fecha_fin)}</p>` : ''}
-      <div class="row-actions" style="margin-top:10px">
-        <button class="icon-btn" data-act="compartir" data-id="${p.id}" title="Compartir">📤</button>
-        ${profile.rol === 'admin' ? `
-          <button class="icon-btn" data-act="editar" data-id="${p.id}" title="Editar">✎</button>
-          <button class="icon-btn" data-act="${p.activa ? 'desactivar' : 'activar'}" data-id="${p.id}" title="${p.activa ? 'Desactivar' : 'Activar'}">${p.activa ? '⛔' : '✅'}</button>
-          <button class="icon-btn" data-act="eliminar" data-id="${p.id}" title="Eliminar">🗑</button>
-        ` : ''}
-      </div>
-    </div>
-  `).join('')}</div>`;
-
-  list.querySelectorAll('[data-act]').forEach(btn => {
-    const p = items.find(x => x.id === btn.dataset.id);
-    btn.addEventListener('click', async () => {
-      const act = btn.dataset.act;
-      if (act === 'compartir') compartirPromocionWhatsapp(p);
-      if (act === 'editar') abrirFormPromocion(p);
-      if (act === 'eliminar') eliminarRegistro('promociones', p.id, renderPromos);
-      if (act === 'activar' || act === 'desactivar') {
-        await sb.from('promociones').update({ activa: act === 'activar' }).eq('id', p.id);
-        toast(act === 'activar' ? 'Promoción activada' : 'Promoción desactivada');
-        renderPromos();
-      }
-    });
-  });
-}
-
-function abrirFormPromocion(existing) {
-  openModal(`
-    <div class="sheet-head"><h3>${existing ? 'Editar promoción' : 'Nueva promoción'}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <div class="field"><label>Título *</label><input id="f-titulo" value="${existing ? escapeHtml(existing.titulo) : ''}" placeholder="Ej: 20% off en termotanques a gas" required /></div>
-    <div class="field" style="margin-top:10px"><label>Descripción</label><textarea id="f-desc-promo" placeholder="Detalle de la promoción...">${existing ? escapeHtml(existing.descripcion || '') : ''}</textarea></div>
-    <div class="grid-2" style="margin-top:10px">
-      <div class="field"><label>Tipo</label>
-        <select id="f-tipo-promo">
-          <option value="descuento" ${(!existing || existing.tipo === 'descuento') ? 'selected' : ''}>Descuento</option>
-          <option value="2x1" ${existing?.tipo === '2x1' ? 'selected' : ''}>2x1</option>
-          <option value="otro" ${existing?.tipo === 'otro' ? 'selected' : ''}>Otro</option>
-        </select>
-      </div>
-      <div class="field"><label>Válido hasta (opcional)</label><input type="date" id="f-fecha-fin" value="${existing?.fecha_fin || ''}" /></div>
-    </div>
-    <div class="field" style="margin-top:10px"><label>Imagen (opcional)</label><input type="file" id="f-imagen-promo" accept="image/*" /></div>
-    ${existing?.imagen_base64 ? `<img src="${existing.imagen_base64}" style="width:100%;max-width:200px;border-radius:8px;margin-top:8px" />` : ''}
-    <div class="form-actions">
-      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
-      <button class="btn btn-primary" id="btn-guardar">💾 Guardar</button>
-    </div>
-  `);
-  $('#sheet-close').addEventListener('click', closeModal);
-  $('#btn-cancelar').addEventListener('click', closeModal);
-  $('#btn-guardar').addEventListener('click', async () => {
-    const titulo = $('#f-titulo').value.trim();
-    if (!titulo) { toast('Ingresá un título', 'error'); return; }
-    const archivo = $('#f-imagen-promo').files[0];
-    let imagen_base64 = existing?.imagen_base64 || null;
-    if (archivo) {
-      try { imagen_base64 = await fileToResizedBase64(archivo); }
-      catch (e) { toast('Error al procesar la imagen: ' + e.message, 'error'); return; }
-    }
-    const payload = {
-      titulo,
-      descripcion: $('#f-desc-promo').value.trim(),
-      tipo: $('#f-tipo-promo').value,
-      fecha_fin: $('#f-fecha-fin').value || null,
-      imagen_base64
-    };
-    let resp;
-    if (existing) resp = await sb.from('promociones').update(payload).eq('id', existing.id);
-    else resp = await sb.from('promociones').insert({ ...payload, activa: true });
-    if (resp.error) { toast('Error: ' + resp.error.message, 'error'); return; }
-    toast('Promoción guardada');
-    closeModal();
-    await cargarPromociones();
-    renderPromos();
-  });
 }
 
 // ============================================================

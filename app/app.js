@@ -188,9 +188,9 @@ async function iniciarApp() {
   $('#nav-caja').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-garantias').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-group-gestion').style.display = profile.rol === 'admin' ? '' : 'none';
-  $('#nav-group-admin').style.display = profile.rol === 'admin' ? '' : 'none';
+  $('#panel-switch').hidden = profile.rol !== 'admin';
   $('.nav-group[data-group="ventas"]')?.classList.add('open');
-  if (profile.rol === 'admin') { $('#nav-group-gestion')?.classList.add('open'); $('#nav-group-admin')?.classList.add('open'); }
+  if (profile.rol === 'admin') $('#nav-group-gestion')?.classList.add('open');
 
   // Las 3 en paralelo, no una atrás de la otra — son independientes
   // entre sí y hacerlas de a una sumaba varios segundos de espera al
@@ -524,6 +524,9 @@ $$('.nav-item').forEach(btn => btn.addEventListener('click', () => {
 $$('.nav-group-header').forEach(btn => btn.addEventListener('click', () => {
   btn.closest('.nav-group').classList.toggle('open');
 }));
+$$('.panel-switch-btn').forEach(btn => btn.addEventListener('click', () => {
+  switchView(btn.dataset.panel === 'admin' ? 'vendedores' : 'cotizaciones');
+}));
 $('#menu-toggle')?.addEventListener('click', () => {
   $('#bottom-nav').classList.add('open');
   $('#nav-backdrop').classList.add('show');
@@ -558,10 +561,24 @@ if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.is
   });
 }
 
+// Vistas que viven del lado del Panel Admin (switcher arriba del menú) —
+// "Importar Excel" no es una vista (abre un modal), así que no entra acá.
+const VISTAS_PANEL_ADMIN = ['vendedores', 'rentabilidad', 'costos', 'rotacion'];
+
+function sincronizarPanelConVista(view) {
+  const sw = $('#panel-switch');
+  if (!sw || sw.hidden) return;
+  const panel = VISTAS_PANEL_ADMIN.includes(view) ? 'admin' : 'ventas';
+  $('#nav-panel-ventas').hidden = panel !== 'ventas';
+  $('#nav-panel-admin').hidden = panel !== 'admin';
+  $$('.panel-switch-btn').forEach(b => b.classList.toggle('active', b.dataset.panel === panel));
+}
+
 async function switchView(view) {
   if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores'
     || view === 'rentabilidad' || view === 'costos' || view === 'rotacion') && profile.rol !== 'admin') view = 'cotizaciones';
   vistaActual = view;
+  sincronizarPanelConVista(view);
   $$('.view').forEach(v => v.hidden = true);
   $(`#view-${view}`).hidden = false;
   $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view));
@@ -1723,19 +1740,29 @@ function abrirFormSubirLoteInventario() {
   const lote = loteCostosAbierto;
   const pendientes = itemsCostosCache.filter(i => !i.producto_id);
   if (pendientes.length === 0) { toast('No hay ítems pendientes de subir', 'error'); return; }
+  // Los ítems que coinciden (por descripción) con un producto que ya está en
+  // Inventario se tratan como reposición: suman stock al producto existente
+  // en vez de crear un duplicado (mismo criterio que Cargar Compra).
+  const reposicion = pendientes.filter(i => encontrarProductoExistente('', i.descripcion));
+  const nuevos = pendientes.filter(i => !encontrarProductoExistente('', i.descripcion));
   openModal(`
     <div class="sheet-head"><h3>Subir a Inventario</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <p style="color:var(--text-dim);font-size:13.5px;margin:-8px 0 14px">Se van a crear <strong style="color:var(--text)">${pendientes.length}</strong> producto${pendientes.length === 1 ? '' : 's'} nuevo${pendientes.length === 1 ? '' : 's'} en Inventario, con el costo y precio de venta ya calculados de este lote.</p>
-    <div class="field"><label>Categoría (para todos los ítems)</label>
+    <p style="color:var(--text-dim);font-size:13.5px;margin:-8px 0 14px">
+      ${nuevos.length > 0 ? `<strong style="color:var(--text)">${nuevos.length}</strong> producto${nuevos.length === 1 ? '' : 's'} nuevo${nuevos.length === 1 ? '' : 's'} se va${nuevos.length === 1 ? '' : 'n'} a crear en Inventario. ` : ''}
+      ${reposicion.length > 0 ? `<strong style="color:var(--text)">${reposicion.length}</strong> ya está${reposicion.length === 1 ? '' : 'n'} en Inventario — se les va a sumar el stock comprado (reposición).` : ''}
+      El costo y precio de venta ya salen calculados de este lote.
+    </p>
+    ${nuevos.length > 0 ? `
+    <div class="field"><label>Categoría (para los ${nuevos.length} nuevo${nuevos.length === 1 ? '' : 's'})</label>
       <select id="f-cat-lote">
         ${CATEGORIAS_PRODUCTO.map(cat => `<option value="${cat}">${cat}</option>`).join('')}
       </select>
     </div>
-    <div class="field" style="margin-top:10px"><label>Subcategoría (opcional, para todos los ítems)</label><input id="f-subcat-lote" placeholder="Ej: Gas, Eléctrico" /></div>
+    <div class="field" style="margin-top:10px"><label>Subcategoría (opcional, para los nuevos)</label><input id="f-subcat-lote" placeholder="Ej: Gas, Eléctrico" /></div>
     <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:var(--text-dim)">
       <input type="checkbox" id="f-visible-lote" checked style="width:16px;height:16px" />
       Mostrar estos productos en el Catálogo para clientes
-    </label>
+    </label>` : ''}
     <div class="form-actions">
       <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
       <button class="btn btn-primary" id="btn-confirmar-subir-lote">💾 Subir ${pendientes.length} ítem${pendientes.length === 1 ? '' : 's'}</button>
@@ -1746,14 +1773,26 @@ function abrirFormSubirLoteInventario() {
   $('#btn-confirmar-subir-lote').addEventListener('click', async () => {
     const btn = $('#btn-confirmar-subir-lote');
     btn.disabled = true; btn.textContent = 'Subiendo…';
-    const categoria = $('#f-cat-lote').value;
-    const subcategoria = $('#f-subcat-lote').value.trim();
-    const visible_catalogo = $('#f-visible-lote').checked;
+    const categoria = $('#f-cat-lote')?.value || CATEGORIAS_PRODUCTO[CATEGORIAS_PRODUCTO.length - 1];
+    const subcategoria = $('#f-subcat-lote')?.value.trim() || '';
+    const visible_catalogo = $('#f-visible-lote') ? $('#f-visible-lote').checked : true;
     const totalCantidad = itemsCostosCache.reduce((s, i) => s + Number(i.cantidad), 0);
 
     let ok = 0, fallidas = 0;
     for (const item of pendientes) {
       const calc = calcularItemCosto(item, lote, totalCantidad);
+      const existente = encontrarProductoExistente('', item.descripcion);
+      if (existente) {
+        await ajustarStock(existente.id, item.cantidad, 'Costos: ' + lote.nombre);
+        await sb.from('productos').update({
+          costo: Number(calc.costoUnitarioFinal.toFixed(2)),
+          precio_venta: Number(calc.precioVentaUnitario.toFixed(2))
+        }).eq('id', existente.id);
+        await sb.from('items_costos').update({ producto_id: existente.id }).eq('id', item.id);
+        item.producto_id = existente.id;
+        ok++;
+        continue;
+      }
       const resp = await sb.from('productos').insert({
         descripcion: item.descripcion,
         categoria,
@@ -1770,7 +1809,7 @@ function abrirFormSubirLoteInventario() {
       ok++;
     }
 
-    toast(`Subida terminada: ${ok} producto${ok === 1 ? '' : 's'} creado${ok === 1 ? '' : 's'}${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
+    toast(`Subida terminada: ${ok} ítem${ok === 1 ? '' : 's'} en Inventario${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
     closeModal();
     await cargarProductos();
     renderBannerStockBajoInventario();
@@ -2272,8 +2311,11 @@ async function ajustarStock(productoId, delta, motivo) {
 // MÓDULO: CONTROL FÍSICO DE INVENTARIO — conteo real (a mano o con
 // cámara) contra el stock del sistema. Queda en Supabase como una
 // "sesión" compartida: cualquier admin puede seguir cargando conteos
-// desde otro celular y ve el mismo avance. Es solo informe/comparación
-// — NO ajusta productos.stock ni categoría/subcategoría automáticamente.
+// desde otro celular y ve el mismo avance. Cada conteo registrado AJUSTA
+// productos.stock vía ajustarStock (el conteo físico pasa a ser el stock
+// real del sistema); eliminar un conteo revierte ese ajuste. Los
+// productos nuevos (es_nuevo) quedan pendientes de categoría/precio y se
+// enlazan a Inventario recién cuando se completan desde "＋Catálogo".
 //
 // El código de barras/fábrica solo existe hoy para productos de la
 // categoría Herramientas (es el único campo "código" del catálogo) —
@@ -2360,7 +2402,11 @@ async function elegirSesionCF(id) {
 
 async function cerrarSesionCF() {
   if (!controlFisicoSesionActual) return;
-  if (!confirm('¿Cerrar esta sesión de control físico?\nVa a seguir disponible para ver/exportar, pero no va a aparecer como la sesión activa la próxima vez.')) return;
+  const pendientesCatalogar = controlFisicoItems.filter(i => i.es_nuevo && !i.producto_id);
+  const avisoPendientes = pendientesCatalogar.length > 0
+    ? `\n\n⚠ Quedan ${pendientesCatalogar.length} producto${pendientesCatalogar.length === 1 ? '' : 's'} nuevo${pendientesCatalogar.length === 1 ? '' : 's'} sin mandar al catálogo (sección "✦ Nuevos") — si cerrás ahora, van a seguir pendientes pero no van a sumar stock a Inventario hasta que los completes con "＋".`
+    : '';
+  if (!confirm('¿Cerrar esta sesión de control físico?\nVa a seguir disponible para ver/exportar, pero no va a aparecer como la sesión activa la próxima vez.' + avisoPendientes)) return;
   await sb.from('control_fisico_sesiones').update({ estado: 'cerrada', cerrada_at: new Date().toISOString() }).eq('id', controlFisicoSesionActual.id);
   toast('Sesión cerrada');
   controlFisicoSesionActual = null;
@@ -2590,6 +2636,11 @@ async function registrarConteoCF() {
   };
   const { error } = await sb.from('control_fisico_items').insert(payload);
   if (error) { toast('Error al registrar: ' + error.message, 'error'); return; }
+  const delta = fisico - p.stock;
+  if (delta !== 0) {
+    await ajustarStock(p.id, delta, 'Control físico: ' + controlFisicoSesionActual.nombre);
+    await cargarProductos();
+  }
   if (fisico === p.stock) beepOkCF(); else beepErrorCF();
   toast('Registrado ✓ ' + p.descripcion.substring(0, 35));
   cerrarTarjetaCF();
@@ -2631,6 +2682,10 @@ async function confirmarAdicionCF(item) {
   const nuevasAdiciones = [...(item.adiciones || []), { qty, ts: new Date().toLocaleString('es-BO') }];
   const { error } = await sb.from('control_fisico_items').update({ adiciones: nuevasAdiciones, updated_at: new Date().toISOString() }).eq('id', item.id);
   if (error) { toast('Error: ' + error.message, 'error'); return; }
+  if (item.producto_id) {
+    await ajustarStock(item.producto_id, qty, 'Control físico (adición): ' + controlFisicoSesionActual.nombre);
+    await cargarProductos();
+  }
   beepOkCF();
   toast('+ ' + qty + ' unidades adicionadas');
   closeModal();
@@ -2641,8 +2696,15 @@ async function eliminarItemCF(id) {
   const item = controlFisicoItems.find(i => i.id === id);
   if (!item) return;
   if (!confirm('¿Eliminar el conteo de:\n' + item.descripcion + '?')) return;
+  // Si este conteo ya había ajustado el stock real, revertir ese ajuste
+  // antes de borrar el registro para no dejar el stock desfasado.
+  if (!item.es_nuevo && item.producto_id) {
+    const aplicado = totalConAdicionesCF(item) - item.stock_sistema;
+    if (aplicado !== 0) await ajustarStock(item.producto_id, -aplicado, 'Control físico (conteo eliminado): ' + item.descripcion);
+  }
   await sb.from('control_fisico_items').delete().eq('id', id);
   toast('Conteo eliminado');
+  await cargarProductos();
   await renderControlFisico();
 }
 

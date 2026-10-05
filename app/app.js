@@ -206,6 +206,10 @@ async function iniciarApp() {
   // entrar (silencioso, sin burbuja) para que estén listos en la
   // pestaña BAM del Chat apenas el usuario la abra.
   setTimeout(() => { asegurarInformeDiarioBam(); revisarRecordatoriosBam(); }, 6000);
+  // Vuelve a armar las alarmas nativas de todos los recordatorios
+  // pendientes (por si alguna se perdió) y avisa si las notificaciones
+  // del teléfono están bloqueadas — ver comentarios de cada función.
+  setTimeout(() => { resincronizarNotificacionesNativasRecordatorios(); avisarSiNotificacionesBloqueadas(); }, 7000);
 
   // BAM vuelve a revisar autorizaciones/cobros pendientes, cambios de
   // precio, garantías por vencer y cobranzas de crédito cada 20 min
@@ -563,7 +567,7 @@ if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.is
 
 // Vistas que viven del lado del Panel Admin (switcher arriba del menú) —
 // "Importar Excel" no es una vista (abre un modal), así que no entra acá.
-const VISTAS_PANEL_ADMIN = ['vendedores', 'rentabilidad', 'costos', 'rotacion'];
+const VISTAS_PANEL_ADMIN = ['usuarios', 'vendedores', 'rentabilidad', 'costos', 'rotacion'];
 
 function sincronizarPanelConVista(view) {
   const sw = $('#panel-switch');
@@ -6041,7 +6045,13 @@ async function cargarVendedores() {
 
 async function inicializarNotificacionesChat() {
   chatNoLeidosPorHilo = {};
-  if (notificacionesChatActivas()) pedirPermisoNotifChat();
+  // El permiso de notificaciones del SO es uno solo y lo comparten el chat
+  // Y la Agenda de BAM — antes se pedía solo si el chat tenía su toggle
+  // activado, así que alguien con el chat desactivado (pero con
+  // recordatorios cargados) nunca llegaba a que el teléfono le pida el
+  // permiso. Se pide siempre, una sola vez (el SO no vuelve a preguntar
+  // si ya se contestó antes).
+  pedirPermisoNotifChat();
 
   // Todos los conteos de no leídos en paralelo (antes uno por vendedor,
   // de a uno — con varios vendedores eso eran varios viajes de red
@@ -6538,6 +6548,49 @@ async function revisarRecordatoriosBam() {
     }
   }
   return huboAviso;
+}
+
+// Antes, la alarma nativa de un recordatorio solo se programaba en el
+// momento de crearlo (programarNotificacionesNativasRecordatorio llamada
+// una sola vez, desde el formulario de la Agenda) — cualquier recordatorio
+// cargado en una versión anterior de la app, o cuya alarma se haya perdido
+// (reinicio del celular, APK reinstalado, falla puntual del plugin), se
+// quedaba sin avisar nunca más por esa vía y dependía solo del sondeo cada
+// 5 min (que no sirve con la app cerrada). Esto reprograma TODAS las
+// alarmas nativas de los recordatorios pendientes del usuario cada vez que
+// abre la app, así quedan siempre al día sin importar cuándo se cargaron.
+async function resincronizarNotificacionesNativasRecordatorios() {
+  if (!notifLocalNativaDisponible()) return;
+  const { data: pendientes } = await sb.from('bam_recordatorios').select('*')
+    .eq('usuario_id', profile.id).eq('cumplido', false);
+  if (!pendientes) return;
+  for (const r of pendientes) await programarNotificacionesNativasRecordatorio(r);
+}
+
+// Si el permiso de notificaciones quedó denegado (el usuario cerró el
+// cartel del sistema sin aceptar, o lo bloqueó a mano alguna vez), la app
+// no tiene forma de volver a pedirlo sola — ni la Agenda ni el Chat van a
+// avisar nunca aunque todo el resto del código esté bien. En vez de fallar
+// en silencio para siempre, se lo decimos una sola vez con una burbuja de
+// BAM para que lo active a mano desde Ajustes del teléfono.
+async function avisarSiNotificacionesBloqueadas() {
+  if (localStorage.getItem('bm_aviso_notif_bloqueadas') === 'true') return;
+  let bloqueadas = false;
+  try {
+    if (notifLocalNativaDisponible()) {
+      const { display } = await window.Capacitor.Plugins.LocalNotifications.checkPermissions();
+      bloqueadas = display === 'denied';
+    } else if ('Notification' in window) {
+      bloqueadas = Notification.permission === 'denied';
+    }
+  } catch (e) { return; }
+  if (!bloqueadas) return;
+  localStorage.setItem('bm_aviso_notif_bloqueadas', 'true');
+  mostrarBotBurbuja(
+    '⚠ Notificaciones bloqueadas',
+    'Tenés las notificaciones del teléfono bloqueadas — la Agenda y el Chat no te van a avisar aunque la app esté cerrada. Activalas a mano en Ajustes del teléfono → Apps → Electrodomésticos BM → Notificaciones.',
+    { duracionMs: 60 * 60 * 1000 }
+  );
 }
 
 async function cargarBamMensajes() {

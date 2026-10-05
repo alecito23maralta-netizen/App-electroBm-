@@ -7325,13 +7325,14 @@ async function renderUsuarios() {
   if (error || !data) { cont.innerHTML = `<div class="empty-state">Error cargando usuarios.</div>`; return; }
 
   cont.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Usuario</th><th>Nombre</th><th>Teléfono</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
+    <thead><tr><th>Usuario</th><th>Nombre</th><th>Teléfono</th><th>Email</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
     <tbody>
       ${data.map(u => `
         <tr>
           <td>${escapeHtml(u.usuario)}</td>
           <td>${escapeHtml(u.nombre || '—')}</td>
           <td>${escapeHtml(u.telefono || '—')}</td>
+          <td>${escapeHtml(u.email_notificaciones || '—')}</td>
           <td style="text-transform:capitalize">${u.rol}</td>
           <td><span class="badge ${u.activo ? 'badge-ok' : 'badge-rechazada'}">${u.activo ? 'Activo' : 'Inactivo'}</span></td>
           <td><div class="row-actions">
@@ -7387,6 +7388,7 @@ function abrirFormUsuario(existing) {
     <div class="card-title" style="margin-top:18px">Datos personales</div>
     <div class="field"><label>Nombre completo *</label><input id="f-nombre" value="${existing ? escapeHtml(existing.nombre || '') : ''}" required /></div>
     <div class="field" style="margin-top:10px"><label>Teléfono (para el catálogo enviado a clientes)</label><input id="f-telefono" value="${existing ? escapeHtml(existing.telefono || '') : ''}" placeholder="+591 7xx xxxxx" /></div>
+    <div class="field" style="margin-top:10px"><label>Email (para recibir avisos de la Agenda con BAM por correo)</label><input type="email" id="f-email" value="${existing ? escapeHtml(existing.email_notificaciones || '') : ''}" placeholder="nombre@gmail.com" /></div>
 
     ${!esUnoMismo ? `
     <div class="card-title" style="margin-top:18px">Rol</div>
@@ -7437,10 +7439,11 @@ function abrirFormUsuario(existing) {
   $('#btn-guardar').addEventListener('click', async () => {
     const nombre = $('#f-nombre').value.trim();
     const telefono = $('#f-telefono').value.trim();
+    const email_notificaciones = $('#f-email').value.trim();
     if (!nombre) { toast('Falta el nombre completo', 'error'); return; }
 
     if (existing) {
-      const payload = { nombre, telefono };
+      const payload = { nombre, telefono, email_notificaciones };
       if (!esUnoMismo) {
         payload.rol = $('#f-rol').value;
         payload.activo = estadoActual;
@@ -7450,7 +7453,7 @@ function abrirFormUsuario(existing) {
       if (error) { toast('Error: ' + error.message, 'error'); return; }
       toast('Usuario actualizado');
       closeModal();
-      if (esUnoMismo) { profile.nombre = nombre; profile.telefono = telefono; }
+      if (esUnoMismo) { profile.nombre = nombre; profile.telefono = telefono; profile.email_notificaciones = email_notificaciones; }
       renderUsuarios();
       return;
     }
@@ -7471,10 +7474,14 @@ function abrirFormUsuario(existing) {
     // El signUp deja logueado al usuario nuevo — volvemos a entrar como admin
     if (adminCreds) await sb.auth.signInWithPassword({ email: emailFor(adminCreds.usuario), password: adminCreds.password });
 
-    // Los permisos no viajan por el trigger de creación (solo usuario/nombre/
-    // rol/teléfono) — se guardan aparte, ya logueados otra vez como admin.
-    if (data?.user?.id && permisos.length > 0) {
-      await sb.from('profiles').update({ permisos }).eq('id', data.user.id);
+    // Los permisos y el email de notificaciones no viajan por el trigger de
+    // creación (solo usuario/nombre/rol/teléfono) — se guardan aparte, ya
+    // logueados otra vez como admin.
+    if (data?.user?.id && (permisos.length > 0 || email_notificaciones)) {
+      await sb.from('profiles').update({
+        ...(permisos.length > 0 ? { permisos } : {}),
+        ...(email_notificaciones ? { email_notificaciones } : {})
+      }).eq('id', data.user.id);
     }
 
     toast('Usuario creado correctamente');

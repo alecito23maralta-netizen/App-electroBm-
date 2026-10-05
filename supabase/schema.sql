@@ -1013,3 +1013,14 @@ create policy "control_fisico_sesiones_all" on public.control_fisico_sesiones
 drop policy if exists "control_fisico_items_all" on public.control_fisico_items;
 create policy "control_fisico_items_all" on public.control_fisico_items
   for all using (public.is_admin()) with check (public.is_admin());
+
+-- ============================================================
+-- ACTUALIZACIÓN: email de notificaciones por usuario — el admin lo carga
+-- en Usuarios (cada quien puede cargar/editar el suyo propio también),
+-- separado del email sintético (usuario@bm.internal) que ya se usa para
+-- el login con Supabase Auth. Se usa para mandar por email, además de
+-- los avisos dentro de la app, los recordatorios de la Agenda con BAM
+-- (y a futuro otros avisos) al Gmail real de cada persona.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.profiles add column if not exists email_notificaciones text;

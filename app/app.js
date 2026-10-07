@@ -11,7 +11,6 @@ let adminCreds = null;     // {usuario, password} en memoria, solo para re-logue
 let productosCache = [];
 let clientesCache = [];
 let mediosPagoCache = [];
-let promocionesCache = [];
 let intervaloAlertaPendientes = null;
 let intervaloNotificaciones = null;
 let intervaloBotPendientes = null;  // BAM re-revisa autorizaciones/cobros pendientes (admin y vendedores)
@@ -138,38 +137,135 @@ $('#modal-overlay').addEventListener('click', (e) => { if (e.target.id === 'moda
 // ------------------------------------------------------------
 // LOGIN / SESIÓN
 // ------------------------------------------------------------
+// Login real, compartido por el form normal y por el botón de huella/Face
+// ID — así cualquiera de los dos caminos pasa por las mismas validaciones
+// (perfil activo, etc.) y deja la sesión exactamente igual armada.
+// Devuelve true si entró bien.
+async function realizarLogin(usuario, password, { btn, errBox } = {}) {
+  if (errBox) errBox.classList.remove('show');
+  if (btn) { btn.disabled = true; }
+
+  const { data, error } = await sb.auth.signInWithPassword({ email: emailFor(usuario), password });
+
+  if (error) {
+    if (errBox) { errBox.textContent = 'Usuario o contraseña incorrectos.'; errBox.classList.add('show'); }
+    if (btn) btn.disabled = false;
+    return false;
+  }
+
+  const { data: perfil, error: perfilErr } = await sb.from('profiles').select('*').eq('id', data.user.id).single();
+  if (perfilErr || !perfil || !perfil.activo) {
+    if (errBox) {
+      errBox.textContent = !perfil?.activo ? 'Tu usuario está inactivo. Consultá con el administrador.' : 'No se pudo cargar el perfil.';
+      errBox.classList.add('show');
+    }
+    await sb.auth.signOut();
+    if (btn) btn.disabled = false;
+    return false;
+  }
+
+  profile = perfil;
+  adminCreds = { usuario, password };
+  if (btn) btn.disabled = false;
+  await iniciarApp();
+  return true;
+}
+
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const usuario = $('#login-usuario').value.trim();
   const password = $('#login-password').value;
   const btn = $('#login-submit');
+  btn.textContent = 'Ingresando…';
+  const ok = await realizarLogin(usuario, password, { btn, errBox: $('#login-error') });
+  btn.textContent = 'Ingresar →';
+  if (ok) ofrecerGuardarBiometria(usuario, password);
+});
+
+// ------------------------------------------------------------
+// LOGIN CON HUELLA / FACE ID (@capgo/capacitor-native-biometric) — solo
+// dentro del APK. Guarda usuario/contraseña en el Keystore de Android
+// (cifrado, protegido por biometría), NO en localStorage ni en texto
+// plano — el teléfono los entrega recién después de que el sensor
+// confirma la identidad. La contraseña igual se vuelve a validar contra
+// Supabase Auth como un login normal, esto es solo un atajo para no
+// tener que tipearla cada vez.
+// ------------------------------------------------------------
+const BIOMETRIA_SERVER_ID = AUTH_DOMAIN;
+
+function biometriaDisponibleEnDispositivo() {
+  return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.Plugins.NativeBiometric);
+}
+
+async function actualizarBotonLoginBiometria() {
+  const cont = $('#login-biometria');
+  if (!cont) return;
+  if (!biometriaDisponibleEnDispositivo()) { cont.hidden = true; return; }
+  try {
+    const { isAvailable } = await window.Capacitor.Plugins.NativeBiometric.isAvailable();
+    if (!isAvailable) { cont.hidden = true; return; }
+    const { isSaved } = await window.Capacitor.Plugins.NativeBiometric.isCredentialsSaved({ server: BIOMETRIA_SERVER_ID });
+    cont.hidden = !isSaved;
+  } catch (e) { cont.hidden = true; }
+}
+
+$('#login-biometria-btn')?.addEventListener('click', async () => {
+  const btn = $('#login-biometria-btn');
   const errBox = $('#login-error');
   errBox.classList.remove('show');
+  try {
+    await window.Capacitor.Plugins.NativeBiometric.verifyIdentity({
+      reason: 'Para entrar a tu cuenta',
+      title: 'Ingresar a Electrodomésticos BM'
+    });
+  } catch (e) {
+    return; // el usuario canceló o no se pudo verificar — no mostramos error, solo no pasa nada
+  }
   btn.disabled = true; btn.textContent = 'Ingresando…';
-
-  const { data, error } = await sb.auth.signInWithPassword({ email: emailFor(usuario), password });
-
-  if (error) {
-    errBox.textContent = 'Usuario o contraseña incorrectos.';
+  try {
+    const { username, password } = await window.Capacitor.Plugins.NativeBiometric.getCredentials({ server: BIOMETRIA_SERVER_ID });
+    const ok = await realizarLogin(username, password, { errBox });
+    if (!ok) {
+      errBox.textContent = 'La huella guardada ya no funciona (¿cambiaste la contraseña?). Entrá con usuario y contraseña y volvé a guardarla.';
+      errBox.classList.add('show');
+    }
+  } catch (e) {
+    errBox.textContent = 'No se pudo recuperar el acceso guardado.';
     errBox.classList.add('show');
-    btn.disabled = false; btn.textContent = 'Ingresar →';
-    return;
   }
-
-  const { data: perfil, error: perfilErr } = await sb.from('profiles').select('*').eq('id', data.user.id).single();
-  if (perfilErr || !perfil || !perfil.activo) {
-    errBox.textContent = !perfil?.activo ? 'Tu usuario está inactivo. Consultá con el administrador.' : 'No se pudo cargar el perfil.';
-    errBox.classList.add('show');
-    await sb.auth.signOut();
-    btn.disabled = false; btn.textContent = 'Ingresar →';
-    return;
-  }
-
-  profile = perfil;
-  adminCreds = { usuario, password };
-  btn.disabled = false; btn.textContent = 'Ingresar →';
-  await iniciarApp();
+  btn.disabled = false; btn.textContent = '🔒 Entrar con huella / Face ID';
 });
+
+$('#login-biometria-olvidar')?.addEventListener('click', async () => {
+  try { await window.Capacitor.Plugins.NativeBiometric.deleteCredentials({ server: BIOMETRIA_SERVER_ID }); } catch (e) { /* no estaba guardado, no pasa nada */ }
+  toast('Se borró el acceso rápido de este celular');
+  actualizarBotonLoginBiometria();
+});
+
+// Tras un login a mano con el form normal, si el celular soporta huella/
+// Face ID y todavía no hay nada guardado, ofrece guardar para la próxima.
+async function ofrecerGuardarBiometria(usuario, password) {
+  if (!biometriaDisponibleEnDispositivo()) return;
+  try {
+    const { isAvailable } = await window.Capacitor.Plugins.NativeBiometric.isAvailable();
+    if (!isAvailable) return;
+    const { isSaved } = await window.Capacitor.Plugins.NativeBiometric.isCredentialsSaved({ server: BIOMETRIA_SERVER_ID });
+    if (isSaved) return;
+  } catch (e) { return; }
+
+  mostrarBotBurbuja('🔒 Acceso rápido', '¿Guardo tu usuario y contraseña en este celular para que la próxima entres con huella o Face ID?', {
+    botones: [{
+      label: 'Sí, guardar', onClick: async () => {
+        try {
+          await window.Capacitor.Plugins.NativeBiometric.setCredentials({ username: usuario, password, server: BIOMETRIA_SERVER_ID });
+          toast('Listo — la próxima entrás con huella');
+        } catch (e) { toast('No se pudo guardar', 'error'); }
+      }
+    }, { label: 'Ahora no', onClick: () => {} }]
+  });
+}
+
+actualizarBotonLoginBiometria();
 
 $('#logout-btn').addEventListener('click', async () => {
   await sb.auth.signOut();
@@ -186,18 +282,17 @@ async function iniciarApp() {
   $('#role-chip').classList.toggle('admin', profile.rol === 'admin');
   $('#nav-usuarios').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-inventario').style.display = profile.rol === 'admin' ? '' : 'none';
-  $('#nav-importar-productos').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-caja').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-garantias').style.display = profile.rol === 'admin' ? '' : 'none';
-  $('#nav-vendedores').style.display = profile.rol === 'admin' ? '' : 'none';
   $('#nav-group-gestion').style.display = profile.rol === 'admin' ? '' : 'none';
+  $('#panel-switch').hidden = profile.rol !== 'admin';
   $('.nav-group[data-group="ventas"]')?.classList.add('open');
   if (profile.rol === 'admin') $('#nav-group-gestion')?.classList.add('open');
 
-  // Las 4 en paralelo, no una atrás de la otra — son independientes
+  // Las 3 en paralelo, no una atrás de la otra — son independientes
   // entre sí y hacerlas de a una sumaba varios segundos de espera al
   // login en datos móviles.
-  await Promise.all([cargarProductos(), cargarClientes(), cargarMediosPago(), cargarPromociones()]);
+  await Promise.all([cargarProductos(), cargarClientes(), cargarMediosPago()]);
   switchView('cotizaciones');
   mostrarSaludoBienvenida();
   setTimeout(mostrarBotPendientesEntrada, 1200);
@@ -208,6 +303,10 @@ async function iniciarApp() {
   // entrar (silencioso, sin burbuja) para que estén listos en la
   // pestaña BAM del Chat apenas el usuario la abra.
   setTimeout(() => { asegurarInformeDiarioBam(); revisarRecordatoriosBam(); }, 6000);
+  // Vuelve a armar las alarmas nativas de todos los recordatorios
+  // pendientes (por si alguna se perdió) y avisa si las notificaciones
+  // del teléfono están bloqueadas — ver comentarios de cada función.
+  setTimeout(() => { resincronizarNotificacionesNativasRecordatorios(); avisarSiNotificacionesBloqueadas(); }, 7000);
 
   // BAM vuelve a revisar autorizaciones/cobros pendientes, cambios de
   // precio, garantías por vencer y cobranzas de crédito cada 20 min
@@ -226,7 +325,6 @@ async function iniciarApp() {
   intervaloBamRecordatorios = setInterval(revisarRecordatoriosBam, 5 * 60 * 1000);
 
   if (profile.rol !== 'admin') {
-    mostrarPopupPromosVendedor();
     verificarPendientesVendedor();
     verificarNotificacionesVendedor();
     clearInterval(intervaloAlertaPendientes);
@@ -527,6 +625,9 @@ $$('.nav-item').forEach(btn => btn.addEventListener('click', () => {
 $$('.nav-group-header').forEach(btn => btn.addEventListener('click', () => {
   btn.closest('.nav-group').classList.toggle('open');
 }));
+$$('.panel-switch-btn').forEach(btn => btn.addEventListener('click', () => {
+  switchView(btn.dataset.panel === 'admin' ? 'vendedores' : 'cotizaciones');
+}));
 $('#menu-toggle')?.addEventListener('click', () => {
   $('#bottom-nav').classList.add('open');
   $('#nav-backdrop').classList.add('show');
@@ -561,9 +662,24 @@ if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.is
   });
 }
 
+// Vistas que viven del lado del Panel Admin (switcher arriba del menú) —
+// "Importar Excel" no es una vista (abre un modal), así que no entra acá.
+const VISTAS_PANEL_ADMIN = ['usuarios', 'vendedores', 'rentabilidad', 'costos', 'rotacion', 'reportes', 'asistente'];
+
+function sincronizarPanelConVista(view) {
+  const sw = $('#panel-switch');
+  if (!sw || sw.hidden) return;
+  const panel = VISTAS_PANEL_ADMIN.includes(view) ? 'admin' : 'ventas';
+  $('#nav-panel-ventas').hidden = panel !== 'ventas';
+  $('#nav-panel-admin').hidden = panel !== 'admin';
+  $$('.panel-switch-btn').forEach(b => b.classList.toggle('active', b.dataset.panel === panel));
+}
+
 async function switchView(view) {
-  if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores') && profile.rol !== 'admin') view = 'cotizaciones';
+  if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores'
+    || view === 'rentabilidad' || view === 'costos' || view === 'rotacion' || view === 'reportes' || view === 'asistente') && profile.rol !== 'admin') view = 'cotizaciones';
   vistaActual = view;
+  sincronizarPanelConVista(view);
   $$('.view').forEach(v => v.hidden = true);
   $(`#view-${view}`).hidden = false;
   $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view));
@@ -571,7 +687,6 @@ async function switchView(view) {
   if (view === 'cotizaciones') await renderCotizaciones();
   if (view === 'ventas') await renderVentas();
   if (view === 'catalogo') await renderCatalogoClientes();
-  if (view === 'promos') await renderPromos();
   if (view === 'inventario') await renderInventario();
   if (view === 'caja') await renderCaja();
   if (view === 'usuarios') await renderUsuarios();
@@ -579,6 +694,11 @@ async function switchView(view) {
   if (view === 'vendedores') await renderVendedoresReporte();
   if (view === 'chat') await renderChat();
   if (view === 'comprobantes') await renderComprobantes();
+  if (view === 'rentabilidad') await renderRentabilidad();
+  if (view === 'costos') await renderCostos();
+  if (view === 'rotacion') await renderRotacion();
+  if (view === 'reportes') await renderReportes();
+  if (view === 'asistente') await renderAsistenteBam();
 }
 
 async function cargarProductos() {
@@ -1289,9 +1409,13 @@ let importacionesRotacionCache = [];
 let rotacionItemsCache = [];
 let rotacionMesFiltro = 'todos';
 
+// Punto de entrada a Inventario: trae el catálogo (select('*') incluye
+// las fotos en base64 de cada producto — con ~1500+ productos esto ya
+// es una transferencia/parseo grande) y arma TODA la pantalla (header,
+// botones, pestañas). Cambiar de pestaña DENTRO de Inventario no debe
+// repetir ninguna de las dos cosas — ver cambiarTabInventario().
 async function renderInventario() {
   await cargarProductos();
-  const bajos = productosCache.filter(p => p.stock <= p.stock_minimo);
   const el = $('#view-inventario');
   el.innerHTML = `
     <div class="section-head">
@@ -1299,38 +1423,57 @@ async function renderInventario() {
       ${profile.rol === 'admin' ? `
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-secondary" id="btn-ir-importar">📥 Importar / Actualizar Excel</button>
+          <button class="btn btn-secondary" id="btn-cargar-compra">📦 Cargar compra</button>
           <button class="btn btn-primary" id="btn-nuevo-producto">+ Agregar producto</button>
         </div>
       ` : ''}
     </div>
-    ${bajos.length > 0 ? `<div class="low-stock-banner"><span class="dot"></span>${bajos.length} producto${bajos.length > 1 ? 's' : ''} con stock bajo — revisá el catálogo</div>` : ''}
-    <div class="tabs">
+    <div id="inv-low-stock-banner"></div>
+    <div class="tabs" id="inv-tabs">
       <button class="tab-btn ${tabInventario === 'catalogo' ? 'active' : ''}" id="tab-catalogo">Catálogo</button>
       <button class="tab-btn ${tabInventario === 'movimientos' ? 'active' : ''}" id="tab-movimientos">Movimientos</button>
-      ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'rentabilidad' ? 'active' : ''}" id="tab-rentabilidad">📈 Rentabilidad</button>
-      <button class="tab-btn ${tabInventario === 'costos' ? 'active' : ''}" id="tab-costos">💰 Costos</button>
-      <button class="tab-btn ${tabInventario === 'rotacion' ? 'active' : ''}" id="tab-rotacion">🔄 Rotación</button>
-      <button class="tab-btn ${tabInventario === 'control' ? 'active' : ''}" id="tab-control">📋 Control Físico</button>` : ''}
+      ${profile.rol === 'admin' ? `<button class="tab-btn ${tabInventario === 'control' ? 'active' : ''}" id="tab-control">📋 Control Físico</button>` : ''}
     </div>
     <div id="inv-content"></div>
   `;
   if (profile.rol === 'admin') {
     $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
     $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
-    $('#tab-rentabilidad').addEventListener('click', () => { tabInventario = 'rentabilidad'; renderInventario(); });
-    $('#tab-costos').addEventListener('click', () => { tabInventario = 'costos'; renderInventario(); });
-    $('#tab-rotacion').addEventListener('click', () => { tabInventario = 'rotacion'; renderInventario(); });
-    $('#tab-control').addEventListener('click', () => { tabInventario = 'control'; renderInventario(); });
+    $('#btn-cargar-compra').addEventListener('click', () => abrirImportadorCompra());
+    $('#tab-control').addEventListener('click', () => cambiarTabInventario('control'));
   }
-  $('#tab-catalogo').addEventListener('click', () => { tabInventario = 'catalogo'; renderInventario(); });
-  $('#tab-movimientos').addEventListener('click', () => { tabInventario = 'movimientos'; renderInventario(); });
+  $('#tab-catalogo').addEventListener('click', () => cambiarTabInventario('catalogo'));
+  $('#tab-movimientos').addEventListener('click', () => cambiarTabInventario('movimientos'));
 
+  renderBannerStockBajoInventario();
+  renderInventarioContenido();
+}
+
+function renderBannerStockBajoInventario() {
+  const cont = $('#inv-low-stock-banner');
+  if (!cont) return;
+  const bajos = productosCache.filter(p => p.stock <= p.stock_minimo);
+  cont.innerHTML = bajos.length > 0
+    ? `<div class="low-stock-banner"><span class="dot"></span>${bajos.length} producto${bajos.length > 1 ? 's' : ''} con stock bajo — revisá el catálogo</div>`
+    : '';
+}
+
+function renderInventarioContenido() {
   if (tabInventario === 'catalogo') renderCatalogoProductos();
   else if (tabInventario === 'movimientos') renderMovimientosInventario();
-  else if (tabInventario === 'rentabilidad' && profile.rol === 'admin') renderRentabilidad();
-  else if (tabInventario === 'costos' && profile.rol === 'admin') renderCostos();
-  else if (tabInventario === 'rotacion' && profile.rol === 'admin') renderRotacion();
   else if (tabInventario === 'control' && profile.rol === 'admin') renderControlFisico();
+}
+
+// Cambiar de pestaña DENTRO de Inventario no necesita volver a traer
+// los ~1500+ productos (con fotos) de Supabase ni rearmar el header/
+// pestañas desde cero — eso era lo que hacía sentir lenta a la app
+// cada vez que tocabas una pestaña. Acá solo se actualiza qué pestaña
+// está marcada como activa y se vuelve a dibujar el contenido, con lo
+// que YA está cargado en memoria (productosCache).
+function cambiarTabInventario(tab) {
+  tabInventario = tab;
+  $$('#inv-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.id === 'tab-' + tab));
+  renderInventarioContenido();
 }
 
 function celdaMargenHtml(p) {
@@ -1466,8 +1609,12 @@ async function renderMovimientosInventario() {
 // aceptable (configurable).
 // ------------------------------------------------------------
 async function renderRentabilidad() {
-  const cont = $('#inv-content');
-  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  const el = $('#view-rentabilidad');
+  el.innerHTML = `
+    <div class="section-head"><div><h2>Rentabilidad</h2><p class="sub">Márgenes de tus productos y alertas de precio bajo</p></div></div>
+    <div id="rentabilidad-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  const cont = $('#rentabilidad-content');
 
   const { data: config } = await sb.from('configuracion').select('margen_minimo_pct').eq('id', 1).single();
   const margenMinimo = Number(config?.margen_minimo_pct ?? 20);
@@ -1526,6 +1673,283 @@ async function renderRentabilidad() {
   });
 }
 
+// ============================================================
+// MÓDULO: REPORTES (Panel Admin) — ventas de hoy/últimos 7/últimos 30
+// días, margen estimado (precio de venta - costo ACTUAL del producto,
+// mismo criterio que usa Rentabilidad — no queda guardado el costo
+// histórico al momento de cada venta) y cobranza real (caja_movimientos,
+// lo que de verdad entró/salió de caja). 4 gráficos livianos en SVG/CSS
+// propio — sin sumar una librería externa — con colores fijos por
+// categoría/medio de pago (no dependen de qué aparezca en el período).
+// ============================================================
+const REPORTES_COLOR_CATEGORIA = {
+  'Termotanques': '#00e5a0',
+  'Calefones': '#ff6a3d',
+  'Estufas': '#4c8cff',
+  'Extractores': '#ff4d6d',
+  'Cocinas': '#a78bfa',
+  'Lavadoras': '#fbbf24',
+  'Aires Acondicionados': '#22d3ee',
+  'Herramientas': '#f472b6',
+  'Otros': '#8b93a7'
+};
+const REPORTES_COLOR_MEDIO = { efectivo: '#00e5a0', transferencia: '#4c8cff', qr: '#a78bfa' };
+const REPORTES_DIAS_SEMANA = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+// Donut en SVG puro vía stroke-dasharray — truco clásico: con r=15.9155
+// la circunferencia da exactamente 100, así que los porcentajes se
+// mapean directo a "dasharray" sin tener que calcular arcos a mano.
+function construirDonutHtml(dataObj, colorMap, labelFn = (k) => k) {
+  const entradas = Object.entries(dataObj).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  if (entradas.length === 0) return `<div class="empty-state">Sin datos en este período.</div>`;
+  const total = entradas.reduce((s, [, v]) => s + v, 0);
+  const R = 15.9155;
+  let offset = 25; // arranca a las 12 en punto (un cuarto de vuelta antes de las 3)
+  const segmentos = entradas.map(([k, v]) => {
+    const pct = (v / total) * 100;
+    const seg = { k, v, pct, color: colorMap[k] || '#8b93a7', dashoffset: offset };
+    offset -= pct;
+    return seg;
+  });
+  const svg = `
+    <svg viewBox="0 0 42 42" class="reportes-donut-svg">
+      <circle cx="21" cy="21" r="${R}" fill="transparent" stroke="var(--surface-2)" stroke-width="7"></circle>
+      ${segmentos.map(s => `<circle cx="21" cy="21" r="${R}" fill="transparent" stroke="${s.color}" stroke-width="7" stroke-dasharray="${s.pct} ${100 - s.pct}" stroke-dashoffset="${s.dashoffset}"><title>${escapeHtml(labelFn(s.k))}: ${money(s.v)} (${s.pct.toFixed(1)}%)</title></circle>`).join('')}
+    </svg>`;
+  const leyenda = `
+    <div class="reportes-leyenda">
+      ${segmentos.map(s => `<div class="reportes-leyenda-item"><span class="reportes-leyenda-dot" style="background:${s.color}"></span>${escapeHtml(labelFn(s.k))}<strong>${s.pct.toFixed(0)}%</strong></div>`).join('')}
+    </div>`;
+  return `<div class="reportes-donut-wrap">${svg}${leyenda}</div>`;
+}
+
+function construirLineaSvg(puntos) {
+  const valores = puntos.map(p => p.total);
+  const max = Math.max(1, ...valores);
+  const W = 100, H = 36, PAD = 4;
+  const pasoX = puntos.length > 1 ? (W - PAD * 2) / (puntos.length - 1) : 0;
+  const coords = puntos.map((p, i) => ({
+    ...p,
+    x: PAD + i * pasoX,
+    y: PAD + (H - PAD * 2) * (1 - p.total / max)
+  }));
+  const path = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+  const areaPath = `${path} L${coords[coords.length - 1].x.toFixed(1)},${(H - PAD).toFixed(1)} L${coords[0].x.toFixed(1)},${(H - PAD).toFixed(1)} Z`;
+  return `
+    <svg viewBox="0 0 ${W} ${H}" class="reportes-linea-svg" preserveAspectRatio="none">
+      <path d="${areaPath}" class="reportes-linea-area"></path>
+      <path d="${path}" class="reportes-linea-trazo" vector-effect="non-scaling-stroke"></path>
+      ${coords.map(c => `<circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="1.4" class="reportes-linea-punto"><title>${escapeHtml(c.label)}: ${money(c.total)}</title></circle>`).join('')}
+    </svg>
+    <div class="reportes-linea-labels">${coords.map(c => `<span>${escapeHtml(c.label)}</span>`).join('')}</div>`;
+}
+
+function construirBarrasSemana(totales) {
+  const max = Math.max(1, ...totales);
+  return `
+    <div class="reportes-barras">
+      ${totales.map((v, i) => `
+        <div class="reportes-barra-col">
+          <div class="reportes-barra-track" title="${REPORTES_DIAS_SEMANA[i]}: ${money(v)}"><div class="reportes-barra-fill" style="height:${Math.round((v / max) * 100)}%"></div></div>
+          <div class="reportes-barra-lbl">${REPORTES_DIAS_SEMANA[i]}</div>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+// Costo estimado de una venta: suma costo ACTUAL del producto × cantidad
+// de cada ítem (no queda guardado el costo histórico al momento de la
+// venta, así que un cambio de costo posterior mueve también el margen
+// de ventas viejas — mismo compromiso que ya acepta Rentabilidad).
+function costoEstimadoVenta(v) {
+  return (v.items || []).reduce((s, it) => {
+    const p = productosCache.find(x => x.id === it.producto_id);
+    return s + (p ? Number(p.costo || 0) * Number(it.cantidad || 0) : 0);
+  }, 0);
+}
+
+async function renderReportes() {
+  const el = $('#view-reportes');
+  el.innerHTML = `
+    <div class="section-head"><div><h2>Reportes</h2><p class="sub">Ventas, margen estimado y cobranza — hoy, últimos 7 y últimos 30 días</p></div></div>
+    <div id="reportes-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  const cont = $('#reportes-content');
+
+  const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30); hace30.setHours(0, 0, 0, 0);
+  const [{ data: ventasResp }, { data: movsResp }] = await Promise.all([
+    sb.from('ventas').select('*').gte('created_at', hace30.toISOString()).order('created_at'),
+    sb.from('caja_movimientos').select('*').gte('created_at', hace30.toISOString())
+  ]);
+  const ventas30 = ventasResp || [];
+  const movs30 = movsResp || [];
+
+  const hoyInicio = new Date(); hoyInicio.setHours(0, 0, 0, 0);
+  const hace7 = new Date(); hace7.setDate(hace7.getDate() - 7); hace7.setHours(0, 0, 0, 0);
+  const ventasHoy = ventas30.filter(v => new Date(v.created_at) >= hoyInicio);
+  const ventasSemana = ventas30.filter(v => new Date(v.created_at) >= hace7);
+  const sumaTotal = arr => arr.reduce((s, v) => s + Number(v.total), 0);
+
+  const margen30 = ventas30.reduce((s, v) => s + (Number(v.total) - costoEstimadoVenta(v)), 0);
+  const ingresos30 = movs30.filter(m => m.tipo === 'ingreso').reduce((s, m) => s + Number(m.monto), 0);
+  const egresos30 = movs30.filter(m => m.tipo === 'egreso').reduce((s, m) => s + Number(m.monto), 0);
+
+  const diasLinea = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i); d.setHours(0, 0, 0, 0);
+    const sig = new Date(d); sig.setDate(sig.getDate() + 1);
+    const total = ventas30.filter(v => { const t = new Date(v.created_at); return t >= d && t < sig; }).reduce((s, v) => s + Number(v.total), 0);
+    diasLinea.push({ label: d.toLocaleDateString('es-BO', { day: '2-digit', month: 'short' }), total });
+  }
+
+  const totalesPorDiaSemana = [0, 0, 0, 0, 0, 0, 0];
+  ventas30.forEach(v => { totalesPorDiaSemana[new Date(v.created_at).getDay()] += Number(v.total); });
+
+  const porCategoria = {};
+  ventas30.forEach(v => (v.items || []).forEach(it => {
+    const p = productosCache.find(x => x.id === it.producto_id);
+    const cat = p?.categoria || 'Otros';
+    porCategoria[cat] = (porCategoria[cat] || 0) + Number(it.cantidad || 0) * Number(it.precio_unitario || 0);
+  }));
+
+  const porMedio = {};
+  ventas30.forEach(v => { porMedio[v.metodo_pago] = (porMedio[v.metodo_pago] || 0) + Number(v.total); });
+
+  cont.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Ventas hoy</div><div class="value">${money(sumaTotal(ventasHoy))}</div></div>
+      <div class="stat-chip accent"><div class="label">Ventas últimos 7 días</div><div class="value">${money(sumaTotal(ventasSemana))}</div></div>
+      <div class="stat-chip accent"><div class="label">Ventas últimos 30 días</div><div class="value">${money(sumaTotal(ventas30))}</div></div>
+      <div class="stat-chip warn"><div class="label">Margen estimado (30 días)</div><div class="value">${money(margen30)}</div></div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Cobranza — ingresos (30 días)</div><div class="value">${money(ingresos30)}</div></div>
+      <div class="stat-chip danger"><div class="label">Cobranza — egresos (30 días)</div><div class="value">${money(egresos30)}</div></div>
+      <div class="stat-chip ${ingresos30 - egresos30 >= 0 ? 'accent' : 'danger'}"><div class="label">Saldo neto (30 días)</div><div class="value">${money(ingresos30 - egresos30)}</div></div>
+    </div>
+
+    <div class="reportes-grid">
+      <div class="card"><div class="card-title">Ventas — últimos 7 días</div>${construirLineaSvg(diasLinea)}</div>
+      <div class="card"><div class="card-title">Ventas por categoría (30 días)</div>${construirDonutHtml(porCategoria, REPORTES_COLOR_CATEGORIA)}</div>
+      <div class="card"><div class="card-title">Ventas por día de la semana (30 días)</div>${construirBarrasSemana(totalesPorDiaSemana)}</div>
+      <div class="card"><div class="card-title">Forma de pago (30 días)</div>${construirDonutHtml(porMedio, REPORTES_COLOR_MEDIO, metodoLabel)}</div>
+    </div>
+  `;
+}
+
+// ============================================================
+// MÓDULO: ASISTENTE BAM (Panel Admin) — "chat" de preguntas frecuentes
+// con respuesta fija: sin IA real ni costo por consulta. Al tocar una
+// pregunta, arma la respuesta en el momento con datos reales de la
+// base (mismo criterio de margen que Reportes/Rentabilidad).
+// ============================================================
+const ASISTENTE_BAM_PREGUNTAS = [
+  { id: 'ventas-hoy', label: '¿Cuánto vendí hoy?' },
+  { id: 'stock-bajo', label: '¿Qué productos tienen stock bajo?' },
+  { id: 'pendiente-cobrar', label: '¿Cuánto tengo pendiente de cobrar?' },
+  { id: 'margen-mes', label: '¿Cuál es mi margen de los últimos 30 días?' },
+  { id: 'cotizaciones-pendientes', label: '¿Cuántas cotizaciones están sin aprobar?' },
+  { id: 'garantias-por-vencer', label: '¿Qué garantías vencen pronto?' }
+];
+
+async function renderAsistenteBam() {
+  const el = $('#view-asistente');
+  el.innerHTML = `
+    <div class="section-head"><div><h2>Asistente BAM</h2><p class="sub">Preguntas rápidas sobre el negocio, con datos reales de ahora mismo</p></div></div>
+    <div class="chat-box">
+      <div class="chat-mensajes" id="asistente-mensajes">
+        <div class="chat-msg">
+          <div class="chat-msg-remitente">🤖 BAM</div>
+          <div class="chat-msg-bubble chat-msg-bam"><div class="chat-msg-texto">¡Hola! Tocá una pregunta de abajo y te respondo con los datos de ahora mismo.</div></div>
+        </div>
+      </div>
+      <div class="asistente-preguntas">
+        ${ASISTENTE_BAM_PREGUNTAS.map(p => `<button class="btn btn-secondary btn-sm" data-preg="${p.id}">${escapeHtml(p.label)}</button>`).join('')}
+      </div>
+    </div>
+  `;
+  $$('.asistente-preguntas [data-preg]').forEach(btn => {
+    btn.addEventListener('click', () => responderPreguntaAsistenteBam(btn.dataset.preg, btn.textContent));
+  });
+}
+
+async function responderPreguntaAsistenteBam(id, pregunta) {
+  const cont = $('#asistente-mensajes');
+  cont.insertAdjacentHTML('beforeend', `
+    <div class="chat-msg propio"><div class="chat-msg-bubble"><div class="chat-msg-texto">${escapeHtml(pregunta)}</div></div></div>
+  `);
+  cont.scrollTop = cont.scrollHeight;
+
+  const respuesta = await calcularRespuestaAsistenteBam(id);
+  const div = document.createElement('div');
+  div.className = 'chat-msg';
+  div.innerHTML = `
+    <div class="chat-msg-remitente">🤖 BAM</div>
+    <div class="chat-msg-bubble chat-msg-bam"><div class="chat-msg-texto">${respuesta}</div></div>
+  `;
+  cont.appendChild(div);
+  cont.scrollTop = cont.scrollHeight;
+}
+
+async function calcularRespuestaAsistenteBam(id) {
+  if (id === 'ventas-hoy') {
+    const hoyInicio = new Date(); hoyInicio.setHours(0, 0, 0, 0);
+    const { data } = await sb.from('ventas').select('*').gte('created_at', hoyInicio.toISOString());
+    const ventas = data || [];
+    const total = ventas.reduce((s, v) => s + Number(v.total), 0);
+    return ventas.length === 0
+      ? 'Todavía no registraste ninguna venta hoy.'
+      : `Hoy vendiste <strong>${money(total)}</strong> en ${ventas.length} venta${ventas.length === 1 ? '' : 's'}.`;
+  }
+
+  if (id === 'stock-bajo') {
+    const bajos = productosCache.filter(p => Number(p.stock) <= Number(p.stock_minimo ?? 0));
+    if (bajos.length === 0) return 'Ningún producto está con stock bajo ahora mismo. 👍';
+    const lista = bajos.slice(0, 8).map(p => `• ${escapeHtml(p.descripcion)} (quedan ${p.stock})`).join('<br>');
+    return `Tenés <strong>${bajos.length}</strong> producto${bajos.length === 1 ? '' : 's'} con stock bajo:<br>${lista}${bajos.length > 8 ? `<br>…y ${bajos.length - 8} más.` : ''}`;
+  }
+
+  if (id === 'pendiente-cobrar') {
+    const { data } = await sb.from('ventas').select('*').eq('cobrado', false);
+    const pend = data || [];
+    const total = pend.reduce((s, v) => s + Number(v.total), 0);
+    return pend.length === 0
+      ? 'No tenés ventas pendientes de cobro. 👍'
+      : `Tenés <strong>${money(total)}</strong> pendientes de cobrar, en ${pend.length} venta${pend.length === 1 ? '' : 's'} a crédito.`;
+  }
+
+  if (id === 'margen-mes') {
+    const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30); hace30.setHours(0, 0, 0, 0);
+    const { data } = await sb.from('ventas').select('*').gte('created_at', hace30.toISOString());
+    const ventas = data || [];
+    const margen = ventas.reduce((s, v) => s + (Number(v.total) - costoEstimadoVenta(v)), 0);
+    const totalVentas = ventas.reduce((s, v) => s + Number(v.total), 0);
+    const pct = totalVentas > 0 ? (margen / totalVentas) * 100 : 0;
+    return `En los últimos 30 días tu margen estimado es de <strong>${money(margen)}</strong> (${pct.toFixed(1)}% sobre ${money(totalVentas)} vendidos).`;
+  }
+
+  if (id === 'cotizaciones-pendientes') {
+    const { count } = await sb.from('cotizaciones').select('*', { count: 'exact', head: true }).eq('estado', 'pendiente');
+    return !count
+      ? 'No hay cotizaciones esperando tu aprobación. 👍'
+      : `Tenés <strong>${count}</strong> ${count === 1 ? 'cotización' : 'cotizaciones'} esperando que las apruebes o rechaces.`;
+  }
+
+  if (id === 'garantias-por-vencer') {
+    const hoyIso = fechaISO(new Date());
+    const en30dias = new Date(); en30dias.setDate(en30dias.getDate() + 30);
+    const { data } = await sb.from('garantias').select('*')
+      .gte('fecha_vencimiento', hoyIso).lte('fecha_vencimiento', fechaISO(en30dias))
+      .order('fecha_vencimiento');
+    const garantias = data || [];
+    if (garantias.length === 0) return 'Ninguna garantía vence en los próximos 30 días.';
+    const lista = garantias.slice(0, 8).map(g => `• ${escapeHtml(g.producto_descripcion)} — ${escapeHtml(g.cliente_nombre)} (vence ${fecha(g.fecha_vencimiento)})`).join('<br>');
+    return `<strong>${garantias.length}</strong> garantía${garantias.length === 1 ? '' : 's'} vence${garantias.length === 1 ? '' : 'n'} en los próximos 30 días:<br>${lista}`;
+  }
+
+  return 'No pude calcular esa respuesta.';
+}
+
 // ------------------------------------------------------------
 // COSTOS: réplica del "libro de costos" que se llevaba en Excel —
 // un lote de compra con flete total repartido entre todos sus ítems
@@ -1556,8 +1980,12 @@ async function cargarItemsCostos(loteId) {
 }
 
 async function renderCostos() {
-  const cont = $('#inv-content');
-  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  const el = $('#view-costos');
+  el.innerHTML = `
+    <div class="section-head"><div><h2>Costos</h2><p class="sub">Calculá el costo final y precio de venta de un lote de compra</p></div></div>
+    <div id="costos-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  const cont = $('#costos-content');
   if (!loteCostosAbierto) {
     await cargarLotesCostos();
     renderListaLotesCostos(cont);
@@ -1692,19 +2120,29 @@ function abrirFormSubirLoteInventario() {
   const lote = loteCostosAbierto;
   const pendientes = itemsCostosCache.filter(i => !i.producto_id);
   if (pendientes.length === 0) { toast('No hay ítems pendientes de subir', 'error'); return; }
+  // Los ítems que coinciden (por descripción) con un producto que ya está en
+  // Inventario se tratan como reposición: suman stock al producto existente
+  // en vez de crear un duplicado (mismo criterio que Cargar Compra).
+  const reposicion = pendientes.filter(i => encontrarProductoExistente('', i.descripcion));
+  const nuevos = pendientes.filter(i => !encontrarProductoExistente('', i.descripcion));
   openModal(`
     <div class="sheet-head"><h3>Subir a Inventario</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <p style="color:var(--text-dim);font-size:13.5px;margin:-8px 0 14px">Se van a crear <strong style="color:var(--text)">${pendientes.length}</strong> producto${pendientes.length === 1 ? '' : 's'} nuevo${pendientes.length === 1 ? '' : 's'} en Inventario, con el costo y precio de venta ya calculados de este lote.</p>
-    <div class="field"><label>Categoría (para todos los ítems)</label>
+    <p style="color:var(--text-dim);font-size:13.5px;margin:-8px 0 14px">
+      ${nuevos.length > 0 ? `<strong style="color:var(--text)">${nuevos.length}</strong> producto${nuevos.length === 1 ? '' : 's'} nuevo${nuevos.length === 1 ? '' : 's'} se va${nuevos.length === 1 ? '' : 'n'} a crear en Inventario. ` : ''}
+      ${reposicion.length > 0 ? `<strong style="color:var(--text)">${reposicion.length}</strong> ya está${reposicion.length === 1 ? '' : 'n'} en Inventario — se les va a sumar el stock comprado (reposición).` : ''}
+      El costo y precio de venta ya salen calculados de este lote.
+    </p>
+    ${nuevos.length > 0 ? `
+    <div class="field"><label>Categoría (para los ${nuevos.length} nuevo${nuevos.length === 1 ? '' : 's'})</label>
       <select id="f-cat-lote">
         ${CATEGORIAS_PRODUCTO.map(cat => `<option value="${cat}">${cat}</option>`).join('')}
       </select>
     </div>
-    <div class="field" style="margin-top:10px"><label>Subcategoría (opcional, para todos los ítems)</label><input id="f-subcat-lote" placeholder="Ej: Gas, Eléctrico" /></div>
+    <div class="field" style="margin-top:10px"><label>Subcategoría (opcional, para los nuevos)</label><input id="f-subcat-lote" placeholder="Ej: Gas, Eléctrico" /></div>
     <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13.5px;color:var(--text-dim)">
       <input type="checkbox" id="f-visible-lote" checked style="width:16px;height:16px" />
       Mostrar estos productos en el Catálogo para clientes
-    </label>
+    </label>` : ''}
     <div class="form-actions">
       <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
       <button class="btn btn-primary" id="btn-confirmar-subir-lote">💾 Subir ${pendientes.length} ítem${pendientes.length === 1 ? '' : 's'}</button>
@@ -1715,14 +2153,26 @@ function abrirFormSubirLoteInventario() {
   $('#btn-confirmar-subir-lote').addEventListener('click', async () => {
     const btn = $('#btn-confirmar-subir-lote');
     btn.disabled = true; btn.textContent = 'Subiendo…';
-    const categoria = $('#f-cat-lote').value;
-    const subcategoria = $('#f-subcat-lote').value.trim();
-    const visible_catalogo = $('#f-visible-lote').checked;
+    const categoria = $('#f-cat-lote')?.value || CATEGORIAS_PRODUCTO[CATEGORIAS_PRODUCTO.length - 1];
+    const subcategoria = $('#f-subcat-lote')?.value.trim() || '';
+    const visible_catalogo = $('#f-visible-lote') ? $('#f-visible-lote').checked : true;
     const totalCantidad = itemsCostosCache.reduce((s, i) => s + Number(i.cantidad), 0);
 
     let ok = 0, fallidas = 0;
     for (const item of pendientes) {
       const calc = calcularItemCosto(item, lote, totalCantidad);
+      const existente = encontrarProductoExistente('', item.descripcion);
+      if (existente) {
+        await ajustarStock(existente.id, item.cantidad, 'Costos: ' + lote.nombre);
+        await sb.from('productos').update({
+          costo: Number(calc.costoUnitarioFinal.toFixed(2)),
+          precio_venta: Number(calc.precioVentaUnitario.toFixed(2))
+        }).eq('id', existente.id);
+        await sb.from('items_costos').update({ producto_id: existente.id }).eq('id', item.id);
+        item.producto_id = existente.id;
+        ok++;
+        continue;
+      }
       const resp = await sb.from('productos').insert({
         descripcion: item.descripcion,
         categoria,
@@ -1739,10 +2189,11 @@ function abrirFormSubirLoteInventario() {
       ok++;
     }
 
-    toast(`Subida terminada: ${ok} producto${ok === 1 ? '' : 's'} creado${ok === 1 ? '' : 's'}${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
+    toast(`Subida terminada: ${ok} ítem${ok === 1 ? '' : 's'} en Inventario${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
     closeModal();
     await cargarProductos();
-    renderInventario();
+    renderBannerStockBajoInventario();
+    renderInventarioContenido();
   });
 }
 
@@ -2009,8 +2460,12 @@ function mostrarBotResumenRotacion() {
 }
 
 async function renderRotacion() {
-  const cont = $('#inv-content');
-  cont.innerHTML = `<div class="empty-state">Cargando…</div>`;
+  const el = $('#view-rotacion');
+  el.innerHTML = `
+    <div class="section-head"><div><h2>Rotación</h2><p class="sub">Qué mercadería sale más, según las planchas de pedido que subas</p></div></div>
+    <div id="rotacion-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  const cont = $('#rotacion-content');
   await cargarRotacion();
 
   const totalLineas = rotacionItemsCache.length;
@@ -2088,8 +2543,18 @@ function abrirFormProducto(existing, prefill) {
       <div class="field"><label>Subcategoría</label><input id="f-subcat" placeholder="Ej: Gas, Eléctrico" value="${existing ? escapeHtml(existing.subcategoria || '') : ''}" /></div>
     </div>
     <div class="grid-2" id="campos-codigos" style="margin-top:10px; ${catInicial === 'Herramientas' ? '' : 'display:none'}">
-      <div class="field"><label>Código de fábrica</label><input id="f-codfab" value="${existing ? escapeHtml(existing.codigo_fabrica || '') : escapeHtml(prefill?.codigo_fabrica || '')}" placeholder="Ej: JDCC8395" /></div>
+      <div class="field"><label>Código de fábrica</label>
+        <div style="display:flex;gap:6px">
+          <input id="f-codfab" style="flex:1" value="${existing ? escapeHtml(existing.codigo_fabrica || '') : escapeHtml(prefill?.codigo_fabrica || '')}" placeholder="Ej: JDCC8395" />
+          <button type="button" class="btn btn-secondary" id="btn-escanear-codfab" title="Escanear código de barras">📷</button>
+        </div>
+      </div>
       <div class="field"><label>Código interno</label><input id="f-codint" value="${existing ? escapeHtml(existing.codigo_interno || '') : ''}" placeholder="Ej: H0001" /></div>
+    </div>
+    <div class="cf-cam-panel" id="prod-cam-panel" hidden>
+      <video id="prod-cam-video" autoplay playsinline muted></video>
+      <button type="button" class="cf-cam-close" id="prod-cam-close" title="Cerrar cámara">✕</button>
+      <div class="cf-cam-status" id="prod-cam-status">Iniciando cámara...</div>
     </div>
     <div class="field" style="margin-top:10px"><label>Precio Mayorista<br><span style="font-weight:400;color:var(--text-faint)">lo que te cobra tu proveedor</span></label><input type="number" id="f-costo" value="${existing ? existing.costo : 0}" min="0" step="0.01" /></div>
     <div class="field" style="margin-top:10px"><label>Precio Venta<br><span style="font-weight:400;color:var(--text-faint)">lo que le cobrás al cliente</span></label><input type="number" id="f-precio" value="${existing ? existing.precio_venta : 0}" min="0" step="0.01" /></div>
@@ -2110,11 +2575,31 @@ function abrirFormProducto(existing, prefill) {
       <button class="btn btn-primary" id="btn-guardar">💾 Guardar</button>
     </div>
   `);
-  $('#sheet-close').addEventListener('click', closeModal);
-  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#sheet-close').addEventListener('click', () => { detenerCamaraProd(); closeModal(); });
+  $('#btn-cancelar').addEventListener('click', () => { detenerCamaraProd(); closeModal(); });
   $('#f-cat').addEventListener('change', (e) => {
     $('#campos-codigos').style.display = e.target.value === 'Herramientas' ? '' : 'none';
+    if (e.target.value !== 'Herramientas') detenerCamaraProd();
   });
+
+  let prodCodeReader = null;
+  function detenerCamaraProd() {
+    detenerLectorCodigoBarras(prodCodeReader, 'prod-cam-video');
+    prodCodeReader = null;
+    $('#prod-cam-panel').hidden = true;
+  }
+  $('#btn-escanear-codfab').addEventListener('click', async () => {
+    if (prodCodeReader) { detenerCamaraProd(); return; }
+    $('#prod-cam-panel').hidden = false;
+    prodCodeReader = await iniciarLectorCodigoBarras('prod-cam-video', 'prod-cam-status', (codigo) => {
+      $('#f-codfab').value = codigo;
+      toast('✓ Código escaneado: ' + codigo);
+      detenerCamaraProd();
+    });
+    // Si falló, dejamos el panel abierto mostrando el motivo (ya quedó en
+    // el texto de estado) — el botón ✕ lo cierra cuando el usuario quiera.
+  });
+  $('#prod-cam-close').addEventListener('click', detenerCamaraProd);
 
   let imagenNuevaBase64 = null;
   $('#f-imagen-producto').addEventListener('change', async (e) => {
@@ -2154,8 +2639,11 @@ function abrirFormProducto(existing, prefill) {
     else resp = await sb.from('productos').insert({ ...payload, stock: Number($('#f-stock').value || 0) });
     if (resp.error) { toast('Error: ' + resp.error.message, 'error'); return; }
     toast('Producto guardado');
+    detenerCamaraProd();
     closeModal();
-    renderInventario();
+    await cargarProductos();
+    renderBannerStockBajoInventario();
+    renderInventarioContenido();
   });
 }
 
@@ -2180,7 +2668,8 @@ function abrirFormMovimiento(producto, tipo) {
     toast('Movimiento registrado');
     closeModal();
     await cargarProductos();
-    renderInventario();
+    renderBannerStockBajoInventario();
+    renderInventarioContenido();
   });
 }
 
@@ -2202,8 +2691,11 @@ async function ajustarStock(productoId, delta, motivo) {
 // MÓDULO: CONTROL FÍSICO DE INVENTARIO — conteo real (a mano o con
 // cámara) contra el stock del sistema. Queda en Supabase como una
 // "sesión" compartida: cualquier admin puede seguir cargando conteos
-// desde otro celular y ve el mismo avance. Es solo informe/comparación
-// — NO ajusta productos.stock ni categoría/subcategoría automáticamente.
+// desde otro celular y ve el mismo avance. Cada conteo registrado AJUSTA
+// productos.stock vía ajustarStock (el conteo físico pasa a ser el stock
+// real del sistema); eliminar un conteo revierte ese ajuste. Los
+// productos nuevos (es_nuevo) quedan pendientes de categoría/precio y se
+// enlazan a Inventario recién cuando se completan desde "＋Catálogo".
 //
 // El código de barras/fábrica solo existe hoy para productos de la
 // categoría Herramientas (es el único campo "código" del catálogo) —
@@ -2290,7 +2782,11 @@ async function elegirSesionCF(id) {
 
 async function cerrarSesionCF() {
   if (!controlFisicoSesionActual) return;
-  if (!confirm('¿Cerrar esta sesión de control físico?\nVa a seguir disponible para ver/exportar, pero no va a aparecer como la sesión activa la próxima vez.')) return;
+  const pendientesCatalogar = controlFisicoItems.filter(i => i.es_nuevo && !i.producto_id);
+  const avisoPendientes = pendientesCatalogar.length > 0
+    ? `\n\n⚠ Quedan ${pendientesCatalogar.length} producto${pendientesCatalogar.length === 1 ? '' : 's'} nuevo${pendientesCatalogar.length === 1 ? '' : 's'} sin mandar al catálogo (sección "✦ Nuevos") — si cerrás ahora, van a seguir pendientes pero no van a sumar stock a Inventario hasta que los completes con "＋".`
+    : '';
+  if (!confirm('¿Cerrar esta sesión de control físico?\nVa a seguir disponible para ver/exportar, pero no va a aparecer como la sesión activa la próxima vez.' + avisoPendientes)) return;
   await sb.from('control_fisico_sesiones').update({ estado: 'cerrada', cerrada_at: new Date().toISOString() }).eq('id', controlFisicoSesionActual.id);
   toast('Sesión cerrada');
   controlFisicoSesionActual = null;
@@ -2520,6 +3016,11 @@ async function registrarConteoCF() {
   };
   const { error } = await sb.from('control_fisico_items').insert(payload);
   if (error) { toast('Error al registrar: ' + error.message, 'error'); return; }
+  const delta = fisico - p.stock;
+  if (delta !== 0) {
+    await ajustarStock(p.id, delta, 'Control físico: ' + controlFisicoSesionActual.nombre);
+    await cargarProductos();
+  }
   if (fisico === p.stock) beepOkCF(); else beepErrorCF();
   toast('Registrado ✓ ' + p.descripcion.substring(0, 35));
   cerrarTarjetaCF();
@@ -2561,6 +3062,10 @@ async function confirmarAdicionCF(item) {
   const nuevasAdiciones = [...(item.adiciones || []), { qty, ts: new Date().toLocaleString('es-BO') }];
   const { error } = await sb.from('control_fisico_items').update({ adiciones: nuevasAdiciones, updated_at: new Date().toISOString() }).eq('id', item.id);
   if (error) { toast('Error: ' + error.message, 'error'); return; }
+  if (item.producto_id) {
+    await ajustarStock(item.producto_id, qty, 'Control físico (adición): ' + controlFisicoSesionActual.nombre);
+    await cargarProductos();
+  }
   beepOkCF();
   toast('+ ' + qty + ' unidades adicionadas');
   closeModal();
@@ -2571,8 +3076,15 @@ async function eliminarItemCF(id) {
   const item = controlFisicoItems.find(i => i.id === id);
   if (!item) return;
   if (!confirm('¿Eliminar el conteo de:\n' + item.descripcion + '?')) return;
+  // Si este conteo ya había ajustado el stock real, revertir ese ajuste
+  // antes de borrar el registro para no dejar el stock desfasado.
+  if (!item.es_nuevo && item.producto_id) {
+    const aplicado = totalConAdicionesCF(item) - item.stock_sistema;
+    if (aplicado !== 0) await ajustarStock(item.producto_id, -aplicado, 'Control físico (conteo eliminado): ' + item.descripcion);
+  }
   await sb.from('control_fisico_items').delete().eq('id', id);
   toast('Conteo eliminado');
+  await cargarProductos();
   await renderControlFisico();
 }
 
@@ -2658,47 +3170,94 @@ function catalogarNuevoCF(itemId) {
 // CÁMARA (ZXing) — lee código de barras y lo busca contra
 // codigo_fabrica/codigo_interno (hoy solo cargados en Herramientas).
 // ------------------------------------------------------------
+// ------------------------------------------------------------
+// LECTOR DE CÓDIGO DE BARRAS (ZXing) — reutilizable en cualquier
+// pantalla que tenga un <video> y un contenedor de estado en el DOM:
+// lo usa tanto la cámara de Control Físico como el botón "📷 Escanear"
+// del campo Código de fábrica al cargar/editar una Herramienta.
+// ------------------------------------------------------------
+function setStatusLector(statusId, msg) {
+  const el = document.getElementById(statusId);
+  if (el) el.textContent = msg;
+}
+
+async function iniciarLectorCodigoBarras(videoId, statusId, onDetectado) {
+  setStatusLector(statusId, 'Iniciando cámara...');
+  try {
+    await cargarZXing();
+    if (!window.ZXing || !ZXing.BrowserMultiFormatReader) throw new Error('La librería del lector no cargó bien (ZXing no disponible)');
+
+    // TRY_HARDER + formatos explícitos: sin esto, el lector por defecto
+    // prioriza velocidad sobre precisión y en algunos códigos de barras
+    // 1D reales (borrosos, con poca luz, en ángulo) directamente nunca
+    // llega a decodificar nada, aunque la cámara funcione perfecto.
+    let hints;
+    try {
+      hints = new Map();
+      hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+      hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+        ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39, ZXing.BarcodeFormat.CODE_93,
+        ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+        ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
+        ZXing.BarcodeFormat.ITF, ZXing.BarcodeFormat.QR_CODE, ZXing.BarcodeFormat.DATA_MATRIX
+      ]);
+    } catch (e) { hints = undefined; /* si algo de esto no existe en esta build, seguimos sin hints */ }
+    const reader = new ZXing.BrowserMultiFormatReader(hints);
+
+    // Elegir la cámara trasera es un plus, no algo de lo que dependa
+    // poder escanear — si listar dispositivos falla (varía según la
+    // versión/navegador), seguimos sin deviceId: decodeFromVideoDevice
+    // ya cae solo a la cámara trasera (facingMode: 'environment').
+    let deviceId;
+    try {
+      const devices = await reader.listVideoInputDevices();
+      const trasera = devices.find(d => /back|rear|environment/i.test(d.label));
+      deviceId = (trasera || devices[0])?.deviceId;
+    } catch (e) { /* sin device list, decodeFromVideoDevice elige sola */ }
+
+    setStatusLector(statusId, 'Apuntá al código, a unos 10-15cm, con buena luz');
+    await reader.decodeFromVideoDevice(deviceId, videoId, (result) => {
+      if (result) onDetectado(result.getText(), reader);
+    });
+    return reader;
+  } catch (err) {
+    const msg = err.name === 'NotAllowedError' ? 'Permití el acceso a la cámara en tu navegador'
+      : err.name === 'NotFoundError' ? 'No se encontró cámara'
+      : 'No se pudo abrir la cámara (' + [err.name, err.message].filter(Boolean).join(': ') + ')';
+    setStatusLector(statusId, '⚠ ' + msg);
+    toast(msg, 'error');
+    console.error('iniciarLectorCodigoBarras:', err);
+    return null;
+  }
+}
+
+function detenerLectorCodigoBarras(reader, videoId) {
+  if (reader) { try { reader.reset(); } catch (e) {} }
+  const v = document.getElementById(videoId);
+  if (v && v.srcObject) { v.srcObject.getTracks().forEach(t => t.stop()); v.srcObject = null; }
+}
+
 async function toggleCamaraCF() {
   if (controlFisicoCamStream) { detenerCamaraCF(); return; }
   const panel = $('#cf-cam-panel');
   panel.hidden = false;
-  setStatusCamCF('Iniciando cámara...');
-  try {
-    await cargarZXing();
-    controlFisicoCodeReader = new ZXing.BrowserMultiFormatReader();
-    const devices = await ZXing.BrowserMultiFormatReader.listVideoInputDevices();
-    let deviceId = devices[0]?.deviceId;
-    const trasera = devices.find(d => /back|rear|environment/i.test(d.label));
-    if (trasera) deviceId = trasera.deviceId;
-    setStatusCamCF('Apuntá al código de barras...');
-    await controlFisicoCodeReader.decodeFromVideoDevice(deviceId, 'cf-cam-video', (result) => {
-      if (result) manejarCodigoBarraCF(result.getText());
-    });
-    controlFisicoCamStream = $('#cf-cam-video').srcObject;
-  } catch (err) {
-    const msg = err.name === 'NotAllowedError' ? 'Permití el acceso a la cámara en tu navegador'
-      : err.name === 'NotFoundError' ? 'No se encontró cámara'
-      : 'No se pudo abrir la cámara (' + (err.name || err.message || 'error desconocido') + ')';
-    setStatusCamCF('⚠ ' + msg);
-    toast(msg, 'error');
-    console.error('toggleCamaraCF:', err);
-  }
+  const reader = await iniciarLectorCodigoBarras('cf-cam-video', 'cf-cam-status', (codigo) => manejarCodigoBarraCF(codigo));
+  // Si falló, dejamos el panel abierto mostrando el motivo (ya quedó en
+  // el texto de estado) — el botón ✕ lo cierra cuando el usuario quiera.
+  if (!reader) return;
+  controlFisicoCodeReader = reader;
+  controlFisicoCamStream = $('#cf-cam-video').srcObject;
 }
 function detenerCamaraCF() {
-  if (controlFisicoCodeReader) { try { controlFisicoCodeReader.reset(); } catch (e) {} controlFisicoCodeReader = null; }
-  if (controlFisicoCamStream) { controlFisicoCamStream.getTracks().forEach(t => t.stop()); controlFisicoCamStream = null; }
-  const v = $('#cf-cam-video');
-  if (v && v.srcObject) { v.srcObject.getTracks().forEach(t => t.stop()); v.srcObject = null; }
+  detenerLectorCodigoBarras(controlFisicoCodeReader, 'cf-cam-video');
+  controlFisicoCodeReader = null;
+  controlFisicoCamStream = null;
   const panel = $('#cf-cam-panel');
   if (panel) panel.hidden = true;
 }
-function setStatusCamCF(msg) {
-  const el = $('#cf-cam-status');
-  if (el) el.textContent = msg;
-}
 function manejarCodigoBarraCF(codigo) {
   codigo = String(codigo).trim();
-  setStatusCamCF('✓ Código: ' + codigo);
+  setStatusLector('cf-cam-status', '✓ Código: ' + codigo);
   detenerCamaraCF();
   const p = productosCache.find(x => normalizarTextoImport(codigoVisibleProducto(x)) === normalizarTextoImport(codigo) && codigoVisibleProducto(x));
   if (p) { seleccionarProductoCF(p.id); toast('✓ Detectado: ' + p.descripcion.substring(0, 35)); return; }
@@ -3377,7 +3936,193 @@ async function confirmarImportacionProductos() {
   toast(`Importación terminada: ${ok} ok${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
   closeModal();
   await cargarProductos();
-  renderInventario();
+  renderBannerStockBajoInventario();
+  renderInventarioContenido();
+}
+
+// ============================================================
+// MÓDULO: CARGAR COMPRA — subís el Excel de una factura/pedido de
+// proveedor (código, descripción, cantidad, costo) y se procesa solo:
+// los productos que ya coinciden (por código o descripción exacta,
+// mismo criterio que el importador de precios) SUMAN el stock
+// comprado vía ajustarStock (deja su movimiento de inventario, igual
+// que cargar una entrada a mano); los que no coinciden con nada se
+// crean como producto nuevo con ese stock inicial.
+// ============================================================
+let importCompraPreview = [];
+
+function descargarPlantillaCompra() {
+  const filas = [
+    ['Codigo', 'Descripcion', 'Cantidad', 'Costo Unitario'],
+    ['JDCC8395', 'Taladro Percutor 1/2', 10, 250],
+    ['', 'Termotanque Rheem 80L', 5, 900]
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(filas);
+  ws['!cols'] = [{ wch: 16 }, { wch: 40 }, { wch: 12 }, { wch: 16 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Compra');
+  XLSX.writeFile(wb, 'Plantilla_compra_BM.xlsx');
+}
+
+async function abrirImportadorCompra() {
+  await cargarProductos();
+  importCompraPreview = [];
+  openModal(`
+    <div class="sheet-head"><h3>📦 Cargar compra</h3><button class="sheet-close" id="sheet-close">✕</button></div>
+    <p style="color:var(--text-dim);font-size:13px;margin-top:-6px">
+      Subí el Excel de la factura/pedido del proveedor (Código, Descripción, Cantidad, Costo Unitario).
+      Los productos que ya tenés cargados (por código o por descripción exacta) suman el stock comprado; el resto se crea como producto nuevo.
+    </p>
+    <div style="margin-top:10px"><button class="btn btn-secondary" id="btn-descargar-plantilla-compra">⬇ Plantilla vacía</button></div>
+    <div class="field" style="margin-top:14px"><label>Archivo Excel (.xlsx)</label><input type="file" id="f-import-compra" accept=".xlsx" /></div>
+    <div id="compra-preview"></div>
+    <div class="form-actions" id="compra-acciones" style="display:none">
+      <button class="btn btn-secondary" id="btn-cancelar">Cerrar</button>
+      <button class="btn btn-primary" id="btn-confirmar-compra">💾 Confirmar carga</button>
+    </div>
+  `);
+  $('#sheet-close').addEventListener('click', closeModal);
+  $('#btn-cancelar').addEventListener('click', closeModal);
+  $('#btn-descargar-plantilla-compra').addEventListener('click', async () => { await cargarXLSX(); descargarPlantillaCompra(); });
+  $('#btn-confirmar-compra').addEventListener('click', confirmarImportacionCompra);
+  $('#f-import-compra').addEventListener('change', async (e) => {
+    const archivo = e.target.files[0];
+    if (!archivo) return;
+    $('#compra-preview').innerHTML = `<p style="margin-top:14px;color:var(--text-dim);font-size:13px">Analizando…</p>`;
+    $('#compra-acciones').style.display = 'none';
+    try { await analizarArchivoCompra(archivo); }
+    catch (err) { $('#compra-preview').innerHTML = `<p style="margin-top:14px;color:var(--accent-2);font-size:13px">No se pudo leer el archivo: ${escapeHtml(err.message)}</p>`; }
+  });
+}
+
+async function analizarArchivoCompra(archivo) {
+  await cargarXLSX();
+  const buf = await archivo.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  const hoja = wb.Sheets[wb.SheetNames[0]];
+  const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
+  if (filas.length < 2) throw new Error('El archivo no tiene filas de datos.');
+
+  const buscarCol = (encabezados, patrones) => encabezados.findIndex(h => patrones.some(p => h.includes(p)));
+  const encabezados = filas[0].map(normalizarTextoImport);
+  const idx = {
+    codigo: buscarCol(encabezados, ['codigo', 'cod barra', 'barras']),
+    descripcion: buscarCol(encabezados, ['descripcion', 'nombre', 'producto', 'articulo', 'item']),
+    cantidad: buscarCol(encabezados, ['cantidad', 'cant', 'unidades']),
+    costo: buscarCol(encabezados, ['costo', 'precio compra', 'precio unitario', 'precio costo'])
+  };
+  if (idx.descripcion === -1 || idx.cantidad === -1) {
+    throw new Error('No encontré las columnas "Descripcion" y/o "Cantidad" — usá la plantilla sin cambiar los encabezados.');
+  }
+
+  const filasProcesadas = [];
+  for (let i = 1; i < filas.length; i++) {
+    const fila = filas[i];
+    if (fila.every(c => c === '' || c == null)) continue;
+
+    const descripcion = String(fila[idx.descripcion] || '').trim();
+    const codigo = idx.codigo > -1 ? String(fila[idx.codigo] || '').trim() : '';
+    const cantidad = Math.round(Number(fila[idx.cantidad]) || 0);
+    const costoRaw = idx.costo > -1 ? fila[idx.costo] : '';
+    const costo = costoRaw !== '' ? Number(costoRaw) : null;
+
+    const errores = [];
+    if (!descripcion) errores.push('Sin descripción');
+    if (!cantidad || cantidad <= 0) errores.push('Cantidad inválida');
+    const existente = descripcion ? encontrarProductoExistente(codigo, descripcion) : null;
+    const avisos = [];
+    if (!existente) avisos.push('Producto nuevo — quedará con precio de venta en 0, completalo en Catálogo');
+
+    filasProcesadas.push({ fila: i, codigo, descripcion, cantidad, costo, existente, errores, avisos });
+  }
+
+  importCompraPreview = filasProcesadas;
+  renderPreviewCompra();
+}
+
+function renderPreviewCompra() {
+  const cont = $('#compra-preview');
+  const acciones = $('#compra-acciones');
+  if (importCompraPreview.length === 0) {
+    cont.innerHTML = `<p style="margin-top:14px;color:var(--text-dim);font-size:13px">No encontré filas con datos para cargar.</p>`;
+    acciones.style.display = 'none';
+    return;
+  }
+
+  const nuevos = importCompraPreview.filter(f => !f.existente && f.errores.length === 0);
+  const suman = importCompraPreview.filter(f => f.existente && f.errores.length === 0);
+  const conError = importCompraPreview.filter(f => f.errores.length > 0);
+
+  cont.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <span class="badge badge-pendiente">${suman.length} suma${suman.length !== 1 ? 'n' : ''} stock</span>
+      <span class="badge badge-ok">${nuevos.length} nuevo${nuevos.length !== 1 ? 's' : ''}</span>
+      ${conError.length > 0 ? `<span class="badge badge-rechazada">${conError.length} con error</span>` : ''}
+    </div>
+    ${nuevos.length > 0 ? `
+    <div class="grid-2" style="margin-top:12px">
+      <div class="field"><label>Categoría para los ${nuevos.length} nuevo${nuevos.length !== 1 ? 's' : ''}</label>
+        <select id="f-cat-compra">${CATEGORIAS_PRODUCTO.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>Subcategoría (opcional)</label><input id="f-subcat-compra" placeholder="Ej: Gas, Eléctrico" /></div>
+    </div>` : ''}
+    <div class="import-lista" style="margin-top:10px;max-height:340px;overflow-y:auto">
+      ${importCompraPreview.map(f => `
+        <div class="import-fila">
+          <div class="import-fila-info">
+            <div class="import-fila-titulo">
+              <span>${escapeHtml(f.descripcion || '(sin descripción)')}</span>
+              ${f.errores.length ? '<span class="badge badge-rechazada">Error</span>' : f.existente ? '<span class="badge badge-pendiente">Suma stock</span>' : '<span class="badge badge-ok">Nuevo</span>'}
+            </div>
+            <div class="import-fila-precio">+${f.cantidad || 0} uds${f.costo != null ? ' · ' + money(f.costo) : ''}</div>
+            ${f.avisos.length ? `<div class="import-fila-aviso">${f.avisos.map(escapeHtml).join(' · ')}</div>` : ''}
+            ${f.errores.length ? `<div class="import-fila-error">${f.errores.map(escapeHtml).join(' · ')}</div>` : ''}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  acciones.style.display = (nuevos.length + suman.length > 0) ? 'flex' : 'none';
+}
+
+async function confirmarImportacionCompra() {
+  const validas = importCompraPreview.filter(f => f.errores.length === 0);
+  if (validas.length === 0) { toast('No hay filas válidas para cargar', 'error'); return; }
+  const categoria = $('#f-cat-compra')?.value || CATEGORIAS_PRODUCTO[CATEGORIAS_PRODUCTO.length - 1];
+  const subcategoria = $('#f-subcat-compra')?.value.trim() || '';
+
+  const btn = $('#btn-confirmar-compra');
+  btn.disabled = true;
+  btn.textContent = 'Cargando…';
+
+  let ok = 0, fallidas = 0;
+  for (const f of validas) {
+    if (f.existente) {
+      await ajustarStock(f.existente.id, f.cantidad, 'Compra: ' + (f.codigo || f.descripcion));
+      if (f.costo != null && f.costo !== Number(f.existente.costo)) {
+        await sb.from('productos').update({ costo: f.costo }).eq('id', f.existente.id);
+      }
+      ok++;
+    } else {
+      const resp = await sb.from('productos').insert({
+        descripcion: f.descripcion,
+        categoria, subcategoria,
+        codigo_fabrica: categoria === 'Herramientas' ? f.codigo : '',
+        costo: f.costo || 0,
+        precio_venta: 0,
+        stock: f.cantidad,
+        stock_minimo: 5,
+        visible_catalogo: true
+      });
+      if (resp.error) fallidas++; else ok++;
+    }
+  }
+
+  toast(`Compra cargada: ${ok} ok${fallidas ? `, ${fallidas} con error` : ''}`, fallidas ? 'error' : undefined);
+  closeModal();
+  await cargarProductos();
+  renderBannerStockBajoInventario();
+  renderInventarioContenido();
 }
 
 // ============================================================
@@ -4883,57 +5628,6 @@ async function descargarCatalogoPDF() {
 }
 
 // ============================================================
-// MÓDULO: PROMOCIONES
-// ============================================================
-async function cargarPromociones() {
-  const { data } = await sb.from('promociones').select('*').order('created_at', { ascending: false });
-  promocionesCache = data || [];
-}
-
-function promocionesActivas() {
-  const hoy = new Date(new Date().toDateString());
-  return promocionesCache.filter(p => p.activa && (!p.fecha_fin || new Date(p.fecha_fin) >= hoy));
-}
-
-function mostrarPopupPromosVendedor() {
-  const activas = promocionesActivas();
-  if (activas.length === 0) return;
-  openModal(`
-    <div class="sheet-head"><h3>🎉 Promociones activas</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <p style="color:var(--text-dim);font-size:13px;margin-top:-6px">Contales esto a tus clientes:</p>
-    <div style="display:flex;flex-direction:column;gap:12px;margin-top:12px">
-      ${activas.map(p => `
-        <div class="card">
-          ${p.imagen_base64 ? `<img src="${p.imagen_base64}" style="width:100%;border-radius:8px;margin-bottom:10px" />` : ''}
-          <div class="card-title">${escapeHtml(p.titulo)} <span class="badge badge-ok">${p.tipo === '2x1' ? '2x1' : (p.tipo === 'descuento' ? 'Descuento' : 'Promo')}</span></div>
-          <p style="font-size:13px;color:var(--text-dim);margin:6px 0 0">${escapeHtml(p.descripcion)}</p>
-          ${p.fecha_fin ? `<p style="font-size:11.5px;color:var(--text-faint);margin-top:6px">Válido hasta ${fecha(p.fecha_fin)}</p>` : ''}
-          <button class="btn btn-secondary btn-sm" data-compartir-promo="${p.id}" style="margin-top:10px">📤 Compartir con un cliente</button>
-        </div>
-      `).join('')}
-    </div>
-    <div class="form-actions"><button class="btn btn-primary btn-block" id="btn-entendido-promo">Entendido, continuar</button></div>
-  `);
-  $('#sheet-close').addEventListener('click', closeModal);
-  $('#btn-entendido-promo').addEventListener('click', closeModal);
-  $$('[data-compartir-promo]').forEach(btn => {
-    const p = activas.find(x => x.id === btn.dataset.compartirPromo);
-    btn.addEventListener('click', () => compartirPromocionWhatsapp(p));
-  });
-}
-
-async function compartirPromocionWhatsapp(p) {
-  const texto = `*🎉 ${p.titulo}*\n${p.descripcion}${p.fecha_fin ? '\nVálido hasta ' + fecha(p.fecha_fin) : ''}\n\n_Electrodomésticos BM_`;
-  if (p.imagen_base64) {
-    const blob = dataURLtoBlob(p.imagen_base64);
-    const file = new File([blob], 'promo.jpg', { type: blob.type });
-    await compartirArchivosWhatsapp({ files: [file], texto, titulo: p.titulo });
-  } else {
-    window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank');
-  }
-}
-
-// ============================================================
 // VENDEDORES: registro mensual de ventas por vendedor + ranking
 // (solo admin)
 // ============================================================
@@ -5040,109 +5734,6 @@ async function cargarYRenderVendedoresReporte() {
       </table>
     </div>
   `;
-}
-
-async function renderPromos() {
-  await cargarPromociones();
-  const el = $('#view-promos');
-  el.innerHTML = `
-    <div class="section-head">
-      <div><h2>Promociones</h2><p class="sub">${profile.rol === 'admin' ? 'Descuentos, 2x1 y otras ofertas para contarle a los clientes' : 'Promos activas para contarle a tus clientes'}</p></div>
-      ${profile.rol === 'admin' ? `<button class="btn btn-primary" id="btn-nueva-promo">+ Nueva promoción</button>` : ''}
-    </div>
-    <div id="promos-list"></div>
-  `;
-  if (profile.rol === 'admin') $('#btn-nueva-promo').addEventListener('click', () => abrirFormPromocion());
-
-  const list = $('#promos-list');
-  const items = profile.rol === 'admin' ? promocionesCache : promocionesActivas();
-  if (items.length === 0) {
-    list.innerHTML = `<div class="empty-state">${profile.rol === 'admin' ? 'Todavía no cargaste ninguna promoción.' : 'No hay promociones activas por ahora.'}</div>`;
-    return;
-  }
-
-  list.innerHTML = `<div class="grid-2">${items.map(p => `
-    <div class="card">
-      ${p.imagen_base64 ? `<img src="${p.imagen_base64}" style="width:100%;border-radius:8px;margin-bottom:10px" />` : ''}
-      <div class="card-title">${escapeHtml(p.titulo)} <span class="badge ${p.activa ? 'badge-ok' : 'badge-rechazada'}">${p.tipo === '2x1' ? '2x1' : (p.tipo === 'descuento' ? 'Descuento' : 'Promo')}${!p.activa ? ' · Inactiva' : ''}</span></div>
-      <p style="font-size:13px;color:var(--text-dim);margin:6px 0 0">${escapeHtml(p.descripcion)}</p>
-      ${p.fecha_fin ? `<p style="font-size:11.5px;color:var(--text-faint);margin-top:6px">Válido hasta ${fecha(p.fecha_fin)}</p>` : ''}
-      <div class="row-actions" style="margin-top:10px">
-        <button class="icon-btn" data-act="compartir" data-id="${p.id}" title="Compartir">📤</button>
-        ${profile.rol === 'admin' ? `
-          <button class="icon-btn" data-act="editar" data-id="${p.id}" title="Editar">✎</button>
-          <button class="icon-btn" data-act="${p.activa ? 'desactivar' : 'activar'}" data-id="${p.id}" title="${p.activa ? 'Desactivar' : 'Activar'}">${p.activa ? '⛔' : '✅'}</button>
-          <button class="icon-btn" data-act="eliminar" data-id="${p.id}" title="Eliminar">🗑</button>
-        ` : ''}
-      </div>
-    </div>
-  `).join('')}</div>`;
-
-  list.querySelectorAll('[data-act]').forEach(btn => {
-    const p = items.find(x => x.id === btn.dataset.id);
-    btn.addEventListener('click', async () => {
-      const act = btn.dataset.act;
-      if (act === 'compartir') compartirPromocionWhatsapp(p);
-      if (act === 'editar') abrirFormPromocion(p);
-      if (act === 'eliminar') eliminarRegistro('promociones', p.id, renderPromos);
-      if (act === 'activar' || act === 'desactivar') {
-        await sb.from('promociones').update({ activa: act === 'activar' }).eq('id', p.id);
-        toast(act === 'activar' ? 'Promoción activada' : 'Promoción desactivada');
-        renderPromos();
-      }
-    });
-  });
-}
-
-function abrirFormPromocion(existing) {
-  openModal(`
-    <div class="sheet-head"><h3>${existing ? 'Editar promoción' : 'Nueva promoción'}</h3><button class="sheet-close" id="sheet-close">✕</button></div>
-    <div class="field"><label>Título *</label><input id="f-titulo" value="${existing ? escapeHtml(existing.titulo) : ''}" placeholder="Ej: 20% off en termotanques a gas" required /></div>
-    <div class="field" style="margin-top:10px"><label>Descripción</label><textarea id="f-desc-promo" placeholder="Detalle de la promoción...">${existing ? escapeHtml(existing.descripcion || '') : ''}</textarea></div>
-    <div class="grid-2" style="margin-top:10px">
-      <div class="field"><label>Tipo</label>
-        <select id="f-tipo-promo">
-          <option value="descuento" ${(!existing || existing.tipo === 'descuento') ? 'selected' : ''}>Descuento</option>
-          <option value="2x1" ${existing?.tipo === '2x1' ? 'selected' : ''}>2x1</option>
-          <option value="otro" ${existing?.tipo === 'otro' ? 'selected' : ''}>Otro</option>
-        </select>
-      </div>
-      <div class="field"><label>Válido hasta (opcional)</label><input type="date" id="f-fecha-fin" value="${existing?.fecha_fin || ''}" /></div>
-    </div>
-    <div class="field" style="margin-top:10px"><label>Imagen (opcional)</label><input type="file" id="f-imagen-promo" accept="image/*" /></div>
-    ${existing?.imagen_base64 ? `<img src="${existing.imagen_base64}" style="width:100%;max-width:200px;border-radius:8px;margin-top:8px" />` : ''}
-    <div class="form-actions">
-      <button class="btn btn-secondary" id="btn-cancelar">Cancelar</button>
-      <button class="btn btn-primary" id="btn-guardar">💾 Guardar</button>
-    </div>
-  `);
-  $('#sheet-close').addEventListener('click', closeModal);
-  $('#btn-cancelar').addEventListener('click', closeModal);
-  $('#btn-guardar').addEventListener('click', async () => {
-    const titulo = $('#f-titulo').value.trim();
-    if (!titulo) { toast('Ingresá un título', 'error'); return; }
-    const archivo = $('#f-imagen-promo').files[0];
-    let imagen_base64 = existing?.imagen_base64 || null;
-    if (archivo) {
-      try { imagen_base64 = await fileToResizedBase64(archivo); }
-      catch (e) { toast('Error al procesar la imagen: ' + e.message, 'error'); return; }
-    }
-    const payload = {
-      titulo,
-      descripcion: $('#f-desc-promo').value.trim(),
-      tipo: $('#f-tipo-promo').value,
-      fecha_fin: $('#f-fecha-fin').value || null,
-      imagen_base64
-    };
-    let resp;
-    if (existing) resp = await sb.from('promociones').update(payload).eq('id', existing.id);
-    else resp = await sb.from('promociones').insert({ ...payload, activa: true });
-    if (resp.error) { toast('Error: ' + resp.error.message, 'error'); return; }
-    toast('Promoción guardada');
-    closeModal();
-    await cargarPromociones();
-    renderPromos();
-  });
 }
 
 // ============================================================
@@ -5830,7 +6421,13 @@ async function cargarVendedores() {
 
 async function inicializarNotificacionesChat() {
   chatNoLeidosPorHilo = {};
-  if (notificacionesChatActivas()) pedirPermisoNotifChat();
+  // El permiso de notificaciones del SO es uno solo y lo comparten el chat
+  // Y la Agenda de BAM — antes se pedía solo si el chat tenía su toggle
+  // activado, así que alguien con el chat desactivado (pero con
+  // recordatorios cargados) nunca llegaba a que el teléfono le pida el
+  // permiso. Se pide siempre, una sola vez (el SO no vuelve a preguntar
+  // si ya se contestó antes).
+  pedirPermisoNotifChat();
 
   // Todos los conteos de no leídos en paralelo (antes uno por vendedor,
   // de a uno — con varios vendedores eso eran varios viajes de red
@@ -6327,6 +6924,49 @@ async function revisarRecordatoriosBam() {
     }
   }
   return huboAviso;
+}
+
+// Antes, la alarma nativa de un recordatorio solo se programaba en el
+// momento de crearlo (programarNotificacionesNativasRecordatorio llamada
+// una sola vez, desde el formulario de la Agenda) — cualquier recordatorio
+// cargado en una versión anterior de la app, o cuya alarma se haya perdido
+// (reinicio del celular, APK reinstalado, falla puntual del plugin), se
+// quedaba sin avisar nunca más por esa vía y dependía solo del sondeo cada
+// 5 min (que no sirve con la app cerrada). Esto reprograma TODAS las
+// alarmas nativas de los recordatorios pendientes del usuario cada vez que
+// abre la app, así quedan siempre al día sin importar cuándo se cargaron.
+async function resincronizarNotificacionesNativasRecordatorios() {
+  if (!notifLocalNativaDisponible()) return;
+  const { data: pendientes } = await sb.from('bam_recordatorios').select('*')
+    .eq('usuario_id', profile.id).eq('cumplido', false);
+  if (!pendientes) return;
+  for (const r of pendientes) await programarNotificacionesNativasRecordatorio(r);
+}
+
+// Si el permiso de notificaciones quedó denegado (el usuario cerró el
+// cartel del sistema sin aceptar, o lo bloqueó a mano alguna vez), la app
+// no tiene forma de volver a pedirlo sola — ni la Agenda ni el Chat van a
+// avisar nunca aunque todo el resto del código esté bien. En vez de fallar
+// en silencio para siempre, se lo decimos una sola vez con una burbuja de
+// BAM para que lo active a mano desde Ajustes del teléfono.
+async function avisarSiNotificacionesBloqueadas() {
+  if (localStorage.getItem('bm_aviso_notif_bloqueadas') === 'true') return;
+  let bloqueadas = false;
+  try {
+    if (notifLocalNativaDisponible()) {
+      const { display } = await window.Capacitor.Plugins.LocalNotifications.checkPermissions();
+      bloqueadas = display === 'denied';
+    } else if ('Notification' in window) {
+      bloqueadas = Notification.permission === 'denied';
+    }
+  } catch (e) { return; }
+  if (!bloqueadas) return;
+  localStorage.setItem('bm_aviso_notif_bloqueadas', 'true');
+  mostrarBotBurbuja(
+    '⚠ Notificaciones bloqueadas',
+    'Tenés las notificaciones del teléfono bloqueadas — la Agenda y el Chat no te van a avisar aunque la app esté cerrada. Activalas a mano en Ajustes del teléfono → Apps → Electrodomésticos BM → Notificaciones.',
+    { duracionMs: 60 * 60 * 1000 }
+  );
 }
 
 async function cargarBamMensajes() {
@@ -7061,13 +7701,14 @@ async function renderUsuarios() {
   if (error || !data) { cont.innerHTML = `<div class="empty-state">Error cargando usuarios.</div>`; return; }
 
   cont.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Usuario</th><th>Nombre</th><th>Teléfono</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
+    <thead><tr><th>Usuario</th><th>Nombre</th><th>Teléfono</th><th>Email</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead>
     <tbody>
       ${data.map(u => `
         <tr>
           <td>${escapeHtml(u.usuario)}</td>
           <td>${escapeHtml(u.nombre || '—')}</td>
           <td>${escapeHtml(u.telefono || '—')}</td>
+          <td>${escapeHtml(u.email_notificaciones || '—')}</td>
           <td style="text-transform:capitalize">${u.rol}</td>
           <td><span class="badge ${u.activo ? 'badge-ok' : 'badge-rechazada'}">${u.activo ? 'Activo' : 'Inactivo'}</span></td>
           <td><div class="row-actions">
@@ -7123,6 +7764,7 @@ function abrirFormUsuario(existing) {
     <div class="card-title" style="margin-top:18px">Datos personales</div>
     <div class="field"><label>Nombre completo *</label><input id="f-nombre" value="${existing ? escapeHtml(existing.nombre || '') : ''}" required /></div>
     <div class="field" style="margin-top:10px"><label>Teléfono (para el catálogo enviado a clientes)</label><input id="f-telefono" value="${existing ? escapeHtml(existing.telefono || '') : ''}" placeholder="+591 7xx xxxxx" /></div>
+    <div class="field" style="margin-top:10px"><label>Email (para recibir avisos de la Agenda con BAM por correo)</label><input type="email" id="f-email" value="${existing ? escapeHtml(existing.email_notificaciones || '') : ''}" placeholder="nombre@gmail.com" /></div>
 
     ${!esUnoMismo ? `
     <div class="card-title" style="margin-top:18px">Rol</div>
@@ -7173,10 +7815,11 @@ function abrirFormUsuario(existing) {
   $('#btn-guardar').addEventListener('click', async () => {
     const nombre = $('#f-nombre').value.trim();
     const telefono = $('#f-telefono').value.trim();
+    const email_notificaciones = $('#f-email').value.trim();
     if (!nombre) { toast('Falta el nombre completo', 'error'); return; }
 
     if (existing) {
-      const payload = { nombre, telefono };
+      const payload = { nombre, telefono, email_notificaciones };
       if (!esUnoMismo) {
         payload.rol = $('#f-rol').value;
         payload.activo = estadoActual;
@@ -7186,7 +7829,7 @@ function abrirFormUsuario(existing) {
       if (error) { toast('Error: ' + error.message, 'error'); return; }
       toast('Usuario actualizado');
       closeModal();
-      if (esUnoMismo) { profile.nombre = nombre; profile.telefono = telefono; }
+      if (esUnoMismo) { profile.nombre = nombre; profile.telefono = telefono; profile.email_notificaciones = email_notificaciones; }
       renderUsuarios();
       return;
     }
@@ -7207,10 +7850,14 @@ function abrirFormUsuario(existing) {
     // El signUp deja logueado al usuario nuevo — volvemos a entrar como admin
     if (adminCreds) await sb.auth.signInWithPassword({ email: emailFor(adminCreds.usuario), password: adminCreds.password });
 
-    // Los permisos no viajan por el trigger de creación (solo usuario/nombre/
-    // rol/teléfono) — se guardan aparte, ya logueados otra vez como admin.
-    if (data?.user?.id && permisos.length > 0) {
-      await sb.from('profiles').update({ permisos }).eq('id', data.user.id);
+    // Los permisos y el email de notificaciones no viajan por el trigger de
+    // creación (solo usuario/nombre/rol/teléfono) — se guardan aparte, ya
+    // logueados otra vez como admin.
+    if (data?.user?.id && (permisos.length > 0 || email_notificaciones)) {
+      await sb.from('profiles').update({
+        ...(permisos.length > 0 ? { permisos } : {}),
+        ...(email_notificaciones ? { email_notificaciones } : {})
+      }).eq('id', data.user.id);
     }
 
     toast('Usuario creado correctamente');

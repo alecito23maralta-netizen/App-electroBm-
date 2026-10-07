@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=Pinyon+Script&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=49" />
+<link rel="stylesheet" href="style.css?v=50" />
 </head>
 <body>
 
@@ -50,6 +50,11 @@
           </div>
           <button type="submit" class="btn btn-primary btn-block" id="login-submit">Ingresar →</button>
         </form>
+        <div class="login-biometria" id="login-biometria" hidden>
+          <div class="login-biometria-sep"><span>o</span></div>
+          <button type="button" class="btn btn-secondary btn-block" id="login-biometria-btn">🔒 Entrar con huella / Face ID</button>
+          <button type="button" class="login-biometria-olvidar" id="login-biometria-olvidar">Olvidar en este celular</button>
+        </div>
         <a href="catalogo.html" class="login-catalogo-link">🖼️ Ver catálogo de productos</a>
       </div>
     </div>
@@ -84,6 +89,8 @@
     <main class="view" id="view-rentabilidad" hidden></main>
     <main class="view" id="view-costos" hidden></main>
     <main class="view" id="view-rotacion" hidden></main>
+    <main class="view" id="view-reportes" hidden></main>
+    <main class="view" id="view-asistente" hidden></main>
     <main class="view" id="view-chat" hidden></main>
     <main class="view" id="view-comprobantes" hidden></main>
     <main class="view" id="view-inventario" hidden></main>
@@ -153,6 +160,8 @@
         <button class="nav-item" data-view="rentabilidad" id="nav-rentabilidad"><span class="ic">📈</span>Rentabilidad</button>
         <button class="nav-item" data-view="costos" id="nav-costos"><span class="ic">💰</span>Costos</button>
         <button class="nav-item" data-view="rotacion" id="nav-rotacion"><span class="ic">🔄</span>Rotación</button>
+        <button class="nav-item" data-view="reportes" id="nav-reportes"><span class="ic">📊</span>Reportes</button>
+        <button class="nav-item" data-view="asistente" id="nav-asistente"><span class="ic">🤖</span>Asistente BAM</button>
       </div>
     </nav>
   </div>
@@ -171,15 +180,16 @@
        comparte una foto por WhatsApp o se importa/exporta un Excel — ver
        cargarJsPDF()/cargarHtml2Canvas()/cargarJSZip()/cargarXLSX() en app.js. -->
   <!-- Puente nativo Capacitor: solo se activa dentro de la app instalada (APK). En el navegador no hace nada. -->
-  <script src="vendor/capacitor/capacitor-core.js?v=49"></script>
-  <script src="vendor/capacitor/synapse.js?v=49"></script>
-  <script src="vendor/capacitor/bridge-alias.js?v=49"></script>
-  <script src="vendor/capacitor/filesystem-plugin.js?v=49"></script>
-  <script src="vendor/capacitor/share-plugin.js?v=49"></script>
-  <script src="vendor/capacitor/app-plugin.js?v=49"></script>
-  <script src="vendor/capacitor/local-notifications-plugin.js?v=49"></script>
-  <script src="config.js?v=49"></script>
-  <script src="app.js?v=49"></script>
+  <script src="vendor/capacitor/capacitor-core.js?v=50"></script>
+  <script src="vendor/capacitor/synapse.js?v=50"></script>
+  <script src="vendor/capacitor/bridge-alias.js?v=50"></script>
+  <script src="vendor/capacitor/filesystem-plugin.js?v=50"></script>
+  <script src="vendor/capacitor/share-plugin.js?v=50"></script>
+  <script src="vendor/capacitor/app-plugin.js?v=50"></script>
+  <script src="vendor/capacitor/local-notifications-plugin.js?v=50"></script>
+  <script src="vendor/capacitor/native-biometric-plugin.js?v=50"></script>
+  <script src="config.js?v=50"></script>
+  <script src="app.js?v=50"></script>
 
   <script>
     if ('serviceWorker' in navigator) {

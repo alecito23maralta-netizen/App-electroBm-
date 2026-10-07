@@ -137,38 +137,135 @@ $('#modal-overlay').addEventListener('click', (e) => { if (e.target.id === 'moda
 // ------------------------------------------------------------
 // LOGIN / SESIÓN
 // ------------------------------------------------------------
+// Login real, compartido por el form normal y por el botón de huella/Face
+// ID — así cualquiera de los dos caminos pasa por las mismas validaciones
+// (perfil activo, etc.) y deja la sesión exactamente igual armada.
+// Devuelve true si entró bien.
+async function realizarLogin(usuario, password, { btn, errBox } = {}) {
+  if (errBox) errBox.classList.remove('show');
+  if (btn) { btn.disabled = true; }
+
+  const { data, error } = await sb.auth.signInWithPassword({ email: emailFor(usuario), password });
+
+  if (error) {
+    if (errBox) { errBox.textContent = 'Usuario o contraseña incorrectos.'; errBox.classList.add('show'); }
+    if (btn) btn.disabled = false;
+    return false;
+  }
+
+  const { data: perfil, error: perfilErr } = await sb.from('profiles').select('*').eq('id', data.user.id).single();
+  if (perfilErr || !perfil || !perfil.activo) {
+    if (errBox) {
+      errBox.textContent = !perfil?.activo ? 'Tu usuario está inactivo. Consultá con el administrador.' : 'No se pudo cargar el perfil.';
+      errBox.classList.add('show');
+    }
+    await sb.auth.signOut();
+    if (btn) btn.disabled = false;
+    return false;
+  }
+
+  profile = perfil;
+  adminCreds = { usuario, password };
+  if (btn) btn.disabled = false;
+  await iniciarApp();
+  return true;
+}
+
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const usuario = $('#login-usuario').value.trim();
   const password = $('#login-password').value;
   const btn = $('#login-submit');
+  btn.textContent = 'Ingresando…';
+  const ok = await realizarLogin(usuario, password, { btn, errBox: $('#login-error') });
+  btn.textContent = 'Ingresar →';
+  if (ok) ofrecerGuardarBiometria(usuario, password);
+});
+
+// ------------------------------------------------------------
+// LOGIN CON HUELLA / FACE ID (@capgo/capacitor-native-biometric) — solo
+// dentro del APK. Guarda usuario/contraseña en el Keystore de Android
+// (cifrado, protegido por biometría), NO en localStorage ni en texto
+// plano — el teléfono los entrega recién después de que el sensor
+// confirma la identidad. La contraseña igual se vuelve a validar contra
+// Supabase Auth como un login normal, esto es solo un atajo para no
+// tener que tipearla cada vez.
+// ------------------------------------------------------------
+const BIOMETRIA_SERVER_ID = AUTH_DOMAIN;
+
+function biometriaDisponibleEnDispositivo() {
+  return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform() && window.Capacitor.Plugins.NativeBiometric);
+}
+
+async function actualizarBotonLoginBiometria() {
+  const cont = $('#login-biometria');
+  if (!cont) return;
+  if (!biometriaDisponibleEnDispositivo()) { cont.hidden = true; return; }
+  try {
+    const { isAvailable } = await window.Capacitor.Plugins.NativeBiometric.isAvailable();
+    if (!isAvailable) { cont.hidden = true; return; }
+    const { isSaved } = await window.Capacitor.Plugins.NativeBiometric.isCredentialsSaved({ server: BIOMETRIA_SERVER_ID });
+    cont.hidden = !isSaved;
+  } catch (e) { cont.hidden = true; }
+}
+
+$('#login-biometria-btn')?.addEventListener('click', async () => {
+  const btn = $('#login-biometria-btn');
   const errBox = $('#login-error');
   errBox.classList.remove('show');
+  try {
+    await window.Capacitor.Plugins.NativeBiometric.verifyIdentity({
+      reason: 'Para entrar a tu cuenta',
+      title: 'Ingresar a Electrodomésticos BM'
+    });
+  } catch (e) {
+    return; // el usuario canceló o no se pudo verificar — no mostramos error, solo no pasa nada
+  }
   btn.disabled = true; btn.textContent = 'Ingresando…';
-
-  const { data, error } = await sb.auth.signInWithPassword({ email: emailFor(usuario), password });
-
-  if (error) {
-    errBox.textContent = 'Usuario o contraseña incorrectos.';
+  try {
+    const { username, password } = await window.Capacitor.Plugins.NativeBiometric.getCredentials({ server: BIOMETRIA_SERVER_ID });
+    const ok = await realizarLogin(username, password, { errBox });
+    if (!ok) {
+      errBox.textContent = 'La huella guardada ya no funciona (¿cambiaste la contraseña?). Entrá con usuario y contraseña y volvé a guardarla.';
+      errBox.classList.add('show');
+    }
+  } catch (e) {
+    errBox.textContent = 'No se pudo recuperar el acceso guardado.';
     errBox.classList.add('show');
-    btn.disabled = false; btn.textContent = 'Ingresar →';
-    return;
   }
-
-  const { data: perfil, error: perfilErr } = await sb.from('profiles').select('*').eq('id', data.user.id).single();
-  if (perfilErr || !perfil || !perfil.activo) {
-    errBox.textContent = !perfil?.activo ? 'Tu usuario está inactivo. Consultá con el administrador.' : 'No se pudo cargar el perfil.';
-    errBox.classList.add('show');
-    await sb.auth.signOut();
-    btn.disabled = false; btn.textContent = 'Ingresar →';
-    return;
-  }
-
-  profile = perfil;
-  adminCreds = { usuario, password };
-  btn.disabled = false; btn.textContent = 'Ingresar →';
-  await iniciarApp();
+  btn.disabled = false; btn.textContent = '🔒 Entrar con huella / Face ID';
 });
+
+$('#login-biometria-olvidar')?.addEventListener('click', async () => {
+  try { await window.Capacitor.Plugins.NativeBiometric.deleteCredentials({ server: BIOMETRIA_SERVER_ID }); } catch (e) { /* no estaba guardado, no pasa nada */ }
+  toast('Se borró el acceso rápido de este celular');
+  actualizarBotonLoginBiometria();
+});
+
+// Tras un login a mano con el form normal, si el celular soporta huella/
+// Face ID y todavía no hay nada guardado, ofrece guardar para la próxima.
+async function ofrecerGuardarBiometria(usuario, password) {
+  if (!biometriaDisponibleEnDispositivo()) return;
+  try {
+    const { isAvailable } = await window.Capacitor.Plugins.NativeBiometric.isAvailable();
+    if (!isAvailable) return;
+    const { isSaved } = await window.Capacitor.Plugins.NativeBiometric.isCredentialsSaved({ server: BIOMETRIA_SERVER_ID });
+    if (isSaved) return;
+  } catch (e) { return; }
+
+  mostrarBotBurbuja('🔒 Acceso rápido', '¿Guardo tu usuario y contraseña en este celular para que la próxima entres con huella o Face ID?', {
+    botones: [{
+      label: 'Sí, guardar', onClick: async () => {
+        try {
+          await window.Capacitor.Plugins.NativeBiometric.setCredentials({ username: usuario, password, server: BIOMETRIA_SERVER_ID });
+          toast('Listo — la próxima entrás con huella');
+        } catch (e) { toast('No se pudo guardar', 'error'); }
+      }
+    }, { label: 'Ahora no', onClick: () => {} }]
+  });
+}
+
+actualizarBotonLoginBiometria();
 
 $('#logout-btn').addEventListener('click', async () => {
   await sb.auth.signOut();
@@ -567,7 +664,7 @@ if (window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.is
 
 // Vistas que viven del lado del Panel Admin (switcher arriba del menú) —
 // "Importar Excel" no es una vista (abre un modal), así que no entra acá.
-const VISTAS_PANEL_ADMIN = ['usuarios', 'vendedores', 'rentabilidad', 'costos', 'rotacion'];
+const VISTAS_PANEL_ADMIN = ['usuarios', 'vendedores', 'rentabilidad', 'costos', 'rotacion', 'reportes', 'asistente'];
 
 function sincronizarPanelConVista(view) {
   const sw = $('#panel-switch');
@@ -580,7 +677,7 @@ function sincronizarPanelConVista(view) {
 
 async function switchView(view) {
   if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores'
-    || view === 'rentabilidad' || view === 'costos' || view === 'rotacion') && profile.rol !== 'admin') view = 'cotizaciones';
+    || view === 'rentabilidad' || view === 'costos' || view === 'rotacion' || view === 'reportes' || view === 'asistente') && profile.rol !== 'admin') view = 'cotizaciones';
   vistaActual = view;
   sincronizarPanelConVista(view);
   $$('.view').forEach(v => v.hidden = true);
@@ -600,6 +697,8 @@ async function switchView(view) {
   if (view === 'rentabilidad') await renderRentabilidad();
   if (view === 'costos') await renderCostos();
   if (view === 'rotacion') await renderRotacion();
+  if (view === 'reportes') await renderReportes();
+  if (view === 'asistente') await renderAsistenteBam();
 }
 
 async function cargarProductos() {
@@ -1572,6 +1671,283 @@ async function renderRentabilidad() {
     toast('Margen mínimo actualizado');
     renderRentabilidad();
   });
+}
+
+// ============================================================
+// MÓDULO: REPORTES (Panel Admin) — ventas de hoy/últimos 7/últimos 30
+// días, margen estimado (precio de venta - costo ACTUAL del producto,
+// mismo criterio que usa Rentabilidad — no queda guardado el costo
+// histórico al momento de cada venta) y cobranza real (caja_movimientos,
+// lo que de verdad entró/salió de caja). 4 gráficos livianos en SVG/CSS
+// propio — sin sumar una librería externa — con colores fijos por
+// categoría/medio de pago (no dependen de qué aparezca en el período).
+// ============================================================
+const REPORTES_COLOR_CATEGORIA = {
+  'Termotanques': '#00e5a0',
+  'Calefones': '#ff6a3d',
+  'Estufas': '#4c8cff',
+  'Extractores': '#ff4d6d',
+  'Cocinas': '#a78bfa',
+  'Lavadoras': '#fbbf24',
+  'Aires Acondicionados': '#22d3ee',
+  'Herramientas': '#f472b6',
+  'Otros': '#8b93a7'
+};
+const REPORTES_COLOR_MEDIO = { efectivo: '#00e5a0', transferencia: '#4c8cff', qr: '#a78bfa' };
+const REPORTES_DIAS_SEMANA = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+// Donut en SVG puro vía stroke-dasharray — truco clásico: con r=15.9155
+// la circunferencia da exactamente 100, así que los porcentajes se
+// mapean directo a "dasharray" sin tener que calcular arcos a mano.
+function construirDonutHtml(dataObj, colorMap, labelFn = (k) => k) {
+  const entradas = Object.entries(dataObj).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  if (entradas.length === 0) return `<div class="empty-state">Sin datos en este período.</div>`;
+  const total = entradas.reduce((s, [, v]) => s + v, 0);
+  const R = 15.9155;
+  let offset = 25; // arranca a las 12 en punto (un cuarto de vuelta antes de las 3)
+  const segmentos = entradas.map(([k, v]) => {
+    const pct = (v / total) * 100;
+    const seg = { k, v, pct, color: colorMap[k] || '#8b93a7', dashoffset: offset };
+    offset -= pct;
+    return seg;
+  });
+  const svg = `
+    <svg viewBox="0 0 42 42" class="reportes-donut-svg">
+      <circle cx="21" cy="21" r="${R}" fill="transparent" stroke="var(--surface-2)" stroke-width="7"></circle>
+      ${segmentos.map(s => `<circle cx="21" cy="21" r="${R}" fill="transparent" stroke="${s.color}" stroke-width="7" stroke-dasharray="${s.pct} ${100 - s.pct}" stroke-dashoffset="${s.dashoffset}"><title>${escapeHtml(labelFn(s.k))}: ${money(s.v)} (${s.pct.toFixed(1)}%)</title></circle>`).join('')}
+    </svg>`;
+  const leyenda = `
+    <div class="reportes-leyenda">
+      ${segmentos.map(s => `<div class="reportes-leyenda-item"><span class="reportes-leyenda-dot" style="background:${s.color}"></span>${escapeHtml(labelFn(s.k))}<strong>${s.pct.toFixed(0)}%</strong></div>`).join('')}
+    </div>`;
+  return `<div class="reportes-donut-wrap">${svg}${leyenda}</div>`;
+}
+
+function construirLineaSvg(puntos) {
+  const valores = puntos.map(p => p.total);
+  const max = Math.max(1, ...valores);
+  const W = 100, H = 36, PAD = 4;
+  const pasoX = puntos.length > 1 ? (W - PAD * 2) / (puntos.length - 1) : 0;
+  const coords = puntos.map((p, i) => ({
+    ...p,
+    x: PAD + i * pasoX,
+    y: PAD + (H - PAD * 2) * (1 - p.total / max)
+  }));
+  const path = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+  const areaPath = `${path} L${coords[coords.length - 1].x.toFixed(1)},${(H - PAD).toFixed(1)} L${coords[0].x.toFixed(1)},${(H - PAD).toFixed(1)} Z`;
+  return `
+    <svg viewBox="0 0 ${W} ${H}" class="reportes-linea-svg" preserveAspectRatio="none">
+      <path d="${areaPath}" class="reportes-linea-area"></path>
+      <path d="${path}" class="reportes-linea-trazo" vector-effect="non-scaling-stroke"></path>
+      ${coords.map(c => `<circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="1.4" class="reportes-linea-punto"><title>${escapeHtml(c.label)}: ${money(c.total)}</title></circle>`).join('')}
+    </svg>
+    <div class="reportes-linea-labels">${coords.map(c => `<span>${escapeHtml(c.label)}</span>`).join('')}</div>`;
+}
+
+function construirBarrasSemana(totales) {
+  const max = Math.max(1, ...totales);
+  return `
+    <div class="reportes-barras">
+      ${totales.map((v, i) => `
+        <div class="reportes-barra-col">
+          <div class="reportes-barra-track" title="${REPORTES_DIAS_SEMANA[i]}: ${money(v)}"><div class="reportes-barra-fill" style="height:${Math.round((v / max) * 100)}%"></div></div>
+          <div class="reportes-barra-lbl">${REPORTES_DIAS_SEMANA[i]}</div>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+// Costo estimado de una venta: suma costo ACTUAL del producto × cantidad
+// de cada ítem (no queda guardado el costo histórico al momento de la
+// venta, así que un cambio de costo posterior mueve también el margen
+// de ventas viejas — mismo compromiso que ya acepta Rentabilidad).
+function costoEstimadoVenta(v) {
+  return (v.items || []).reduce((s, it) => {
+    const p = productosCache.find(x => x.id === it.producto_id);
+    return s + (p ? Number(p.costo || 0) * Number(it.cantidad || 0) : 0);
+  }, 0);
+}
+
+async function renderReportes() {
+  const el = $('#view-reportes');
+  el.innerHTML = `
+    <div class="section-head"><div><h2>Reportes</h2><p class="sub">Ventas, margen estimado y cobranza — hoy, últimos 7 y últimos 30 días</p></div></div>
+    <div id="reportes-content"><div class="empty-state">Cargando…</div></div>
+  `;
+  const cont = $('#reportes-content');
+
+  const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30); hace30.setHours(0, 0, 0, 0);
+  const [{ data: ventasResp }, { data: movsResp }] = await Promise.all([
+    sb.from('ventas').select('*').gte('created_at', hace30.toISOString()).order('created_at'),
+    sb.from('caja_movimientos').select('*').gte('created_at', hace30.toISOString())
+  ]);
+  const ventas30 = ventasResp || [];
+  const movs30 = movsResp || [];
+
+  const hoyInicio = new Date(); hoyInicio.setHours(0, 0, 0, 0);
+  const hace7 = new Date(); hace7.setDate(hace7.getDate() - 7); hace7.setHours(0, 0, 0, 0);
+  const ventasHoy = ventas30.filter(v => new Date(v.created_at) >= hoyInicio);
+  const ventasSemana = ventas30.filter(v => new Date(v.created_at) >= hace7);
+  const sumaTotal = arr => arr.reduce((s, v) => s + Number(v.total), 0);
+
+  const margen30 = ventas30.reduce((s, v) => s + (Number(v.total) - costoEstimadoVenta(v)), 0);
+  const ingresos30 = movs30.filter(m => m.tipo === 'ingreso').reduce((s, m) => s + Number(m.monto), 0);
+  const egresos30 = movs30.filter(m => m.tipo === 'egreso').reduce((s, m) => s + Number(m.monto), 0);
+
+  const diasLinea = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i); d.setHours(0, 0, 0, 0);
+    const sig = new Date(d); sig.setDate(sig.getDate() + 1);
+    const total = ventas30.filter(v => { const t = new Date(v.created_at); return t >= d && t < sig; }).reduce((s, v) => s + Number(v.total), 0);
+    diasLinea.push({ label: d.toLocaleDateString('es-BO', { day: '2-digit', month: 'short' }), total });
+  }
+
+  const totalesPorDiaSemana = [0, 0, 0, 0, 0, 0, 0];
+  ventas30.forEach(v => { totalesPorDiaSemana[new Date(v.created_at).getDay()] += Number(v.total); });
+
+  const porCategoria = {};
+  ventas30.forEach(v => (v.items || []).forEach(it => {
+    const p = productosCache.find(x => x.id === it.producto_id);
+    const cat = p?.categoria || 'Otros';
+    porCategoria[cat] = (porCategoria[cat] || 0) + Number(it.cantidad || 0) * Number(it.precio_unitario || 0);
+  }));
+
+  const porMedio = {};
+  ventas30.forEach(v => { porMedio[v.metodo_pago] = (porMedio[v.metodo_pago] || 0) + Number(v.total); });
+
+  cont.innerHTML = `
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Ventas hoy</div><div class="value">${money(sumaTotal(ventasHoy))}</div></div>
+      <div class="stat-chip accent"><div class="label">Ventas últimos 7 días</div><div class="value">${money(sumaTotal(ventasSemana))}</div></div>
+      <div class="stat-chip accent"><div class="label">Ventas últimos 30 días</div><div class="value">${money(sumaTotal(ventas30))}</div></div>
+      <div class="stat-chip warn"><div class="label">Margen estimado (30 días)</div><div class="value">${money(margen30)}</div></div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-chip accent"><div class="label">Cobranza — ingresos (30 días)</div><div class="value">${money(ingresos30)}</div></div>
+      <div class="stat-chip danger"><div class="label">Cobranza — egresos (30 días)</div><div class="value">${money(egresos30)}</div></div>
+      <div class="stat-chip ${ingresos30 - egresos30 >= 0 ? 'accent' : 'danger'}"><div class="label">Saldo neto (30 días)</div><div class="value">${money(ingresos30 - egresos30)}</div></div>
+    </div>
+
+    <div class="reportes-grid">
+      <div class="card"><div class="card-title">Ventas — últimos 7 días</div>${construirLineaSvg(diasLinea)}</div>
+      <div class="card"><div class="card-title">Ventas por categoría (30 días)</div>${construirDonutHtml(porCategoria, REPORTES_COLOR_CATEGORIA)}</div>
+      <div class="card"><div class="card-title">Ventas por día de la semana (30 días)</div>${construirBarrasSemana(totalesPorDiaSemana)}</div>
+      <div class="card"><div class="card-title">Forma de pago (30 días)</div>${construirDonutHtml(porMedio, REPORTES_COLOR_MEDIO, metodoLabel)}</div>
+    </div>
+  `;
+}
+
+// ============================================================
+// MÓDULO: ASISTENTE BAM (Panel Admin) — "chat" de preguntas frecuentes
+// con respuesta fija: sin IA real ni costo por consulta. Al tocar una
+// pregunta, arma la respuesta en el momento con datos reales de la
+// base (mismo criterio de margen que Reportes/Rentabilidad).
+// ============================================================
+const ASISTENTE_BAM_PREGUNTAS = [
+  { id: 'ventas-hoy', label: '¿Cuánto vendí hoy?' },
+  { id: 'stock-bajo', label: '¿Qué productos tienen stock bajo?' },
+  { id: 'pendiente-cobrar', label: '¿Cuánto tengo pendiente de cobrar?' },
+  { id: 'margen-mes', label: '¿Cuál es mi margen de los últimos 30 días?' },
+  { id: 'cotizaciones-pendientes', label: '¿Cuántas cotizaciones están sin aprobar?' },
+  { id: 'garantias-por-vencer', label: '¿Qué garantías vencen pronto?' }
+];
+
+async function renderAsistenteBam() {
+  const el = $('#view-asistente');
+  el.innerHTML = `
+    <div class="section-head"><div><h2>Asistente BAM</h2><p class="sub">Preguntas rápidas sobre el negocio, con datos reales de ahora mismo</p></div></div>
+    <div class="chat-box">
+      <div class="chat-mensajes" id="asistente-mensajes">
+        <div class="chat-msg">
+          <div class="chat-msg-remitente">🤖 BAM</div>
+          <div class="chat-msg-bubble chat-msg-bam"><div class="chat-msg-texto">¡Hola! Tocá una pregunta de abajo y te respondo con los datos de ahora mismo.</div></div>
+        </div>
+      </div>
+      <div class="asistente-preguntas">
+        ${ASISTENTE_BAM_PREGUNTAS.map(p => `<button class="btn btn-secondary btn-sm" data-preg="${p.id}">${escapeHtml(p.label)}</button>`).join('')}
+      </div>
+    </div>
+  `;
+  $$('.asistente-preguntas [data-preg]').forEach(btn => {
+    btn.addEventListener('click', () => responderPreguntaAsistenteBam(btn.dataset.preg, btn.textContent));
+  });
+}
+
+async function responderPreguntaAsistenteBam(id, pregunta) {
+  const cont = $('#asistente-mensajes');
+  cont.insertAdjacentHTML('beforeend', `
+    <div class="chat-msg propio"><div class="chat-msg-bubble"><div class="chat-msg-texto">${escapeHtml(pregunta)}</div></div></div>
+  `);
+  cont.scrollTop = cont.scrollHeight;
+
+  const respuesta = await calcularRespuestaAsistenteBam(id);
+  const div = document.createElement('div');
+  div.className = 'chat-msg';
+  div.innerHTML = `
+    <div class="chat-msg-remitente">🤖 BAM</div>
+    <div class="chat-msg-bubble chat-msg-bam"><div class="chat-msg-texto">${respuesta}</div></div>
+  `;
+  cont.appendChild(div);
+  cont.scrollTop = cont.scrollHeight;
+}
+
+async function calcularRespuestaAsistenteBam(id) {
+  if (id === 'ventas-hoy') {
+    const hoyInicio = new Date(); hoyInicio.setHours(0, 0, 0, 0);
+    const { data } = await sb.from('ventas').select('*').gte('created_at', hoyInicio.toISOString());
+    const ventas = data || [];
+    const total = ventas.reduce((s, v) => s + Number(v.total), 0);
+    return ventas.length === 0
+      ? 'Todavía no registraste ninguna venta hoy.'
+      : `Hoy vendiste <strong>${money(total)}</strong> en ${ventas.length} venta${ventas.length === 1 ? '' : 's'}.`;
+  }
+
+  if (id === 'stock-bajo') {
+    const bajos = productosCache.filter(p => Number(p.stock) <= Number(p.stock_minimo ?? 0));
+    if (bajos.length === 0) return 'Ningún producto está con stock bajo ahora mismo. 👍';
+    const lista = bajos.slice(0, 8).map(p => `• ${escapeHtml(p.descripcion)} (quedan ${p.stock})`).join('<br>');
+    return `Tenés <strong>${bajos.length}</strong> producto${bajos.length === 1 ? '' : 's'} con stock bajo:<br>${lista}${bajos.length > 8 ? `<br>…y ${bajos.length - 8} más.` : ''}`;
+  }
+
+  if (id === 'pendiente-cobrar') {
+    const { data } = await sb.from('ventas').select('*').eq('cobrado', false);
+    const pend = data || [];
+    const total = pend.reduce((s, v) => s + Number(v.total), 0);
+    return pend.length === 0
+      ? 'No tenés ventas pendientes de cobro. 👍'
+      : `Tenés <strong>${money(total)}</strong> pendientes de cobrar, en ${pend.length} venta${pend.length === 1 ? '' : 's'} a crédito.`;
+  }
+
+  if (id === 'margen-mes') {
+    const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30); hace30.setHours(0, 0, 0, 0);
+    const { data } = await sb.from('ventas').select('*').gte('created_at', hace30.toISOString());
+    const ventas = data || [];
+    const margen = ventas.reduce((s, v) => s + (Number(v.total) - costoEstimadoVenta(v)), 0);
+    const totalVentas = ventas.reduce((s, v) => s + Number(v.total), 0);
+    const pct = totalVentas > 0 ? (margen / totalVentas) * 100 : 0;
+    return `En los últimos 30 días tu margen estimado es de <strong>${money(margen)}</strong> (${pct.toFixed(1)}% sobre ${money(totalVentas)} vendidos).`;
+  }
+
+  if (id === 'cotizaciones-pendientes') {
+    const { count } = await sb.from('cotizaciones').select('*', { count: 'exact', head: true }).eq('estado', 'pendiente');
+    return !count
+      ? 'No hay cotizaciones esperando tu aprobación. 👍'
+      : `Tenés <strong>${count}</strong> ${count === 1 ? 'cotización' : 'cotizaciones'} esperando que las apruebes o rechaces.`;
+  }
+
+  if (id === 'garantias-por-vencer') {
+    const hoyIso = fechaISO(new Date());
+    const en30dias = new Date(); en30dias.setDate(en30dias.getDate() + 30);
+    const { data } = await sb.from('garantias').select('*')
+      .gte('fecha_vencimiento', hoyIso).lte('fecha_vencimiento', fechaISO(en30dias))
+      .order('fecha_vencimiento');
+    const garantias = data || [];
+    if (garantias.length === 0) return 'Ninguna garantía vence en los próximos 30 días.';
+    const lista = garantias.slice(0, 8).map(g => `• ${escapeHtml(g.producto_descripcion)} — ${escapeHtml(g.cliente_nombre)} (vence ${fecha(g.fecha_vencimiento)})`).join('<br>');
+    return `<strong>${garantias.length}</strong> garantía${garantias.length === 1 ? '' : 's'} vence${garantias.length === 1 ? '' : 'n'} en los próximos 30 días:<br>${lista}`;
+  }
+
+  return 'No pude calcular esa respuesta.';
 }
 
 // ------------------------------------------------------------

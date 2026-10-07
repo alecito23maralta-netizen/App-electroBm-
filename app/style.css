@@ -566,6 +566,32 @@ tbody tr:hover { background: rgba(255,255,255,0.04); }
 .rot-bar-fill.accent-2 { background: var(--accent-2); }
 .rot-bar-valor { font-size: 12px; color: var(--text-faint); text-align: right; white-space: nowrap; }
 
+/* Reportes (Panel Admin): grilla de 2 columnas con los 4 gráficos,
+   livianos (SVG/CSS propio, sin librería externa) para no sumar peso
+   a la app — mismo criterio que las barras de Rotación/Vendedores. */
+.reportes-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 4px; }
+@media (max-width: 760px) { .reportes-grid { grid-template-columns: 1fr; } }
+
+.reportes-linea-svg { width: 100%; height: 120px; display: block; }
+.reportes-linea-area { fill: var(--accent-dim); stroke: none; }
+.reportes-linea-trazo { fill: none; stroke: var(--accent); stroke-width: 0.8; stroke-linecap: round; stroke-linejoin: round; }
+.reportes-linea-punto { fill: var(--accent); stroke: var(--bg); stroke-width: 0.5; }
+.reportes-linea-labels { display: flex; justify-content: space-between; margin-top: 6px; font-size: 10.5px; color: var(--text-faint); }
+
+.reportes-donut-wrap { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.reportes-donut-svg { width: 120px; height: 120px; flex-shrink: 0; }
+.reportes-donut-svg circle { transition: opacity .15s ease; }
+.reportes-leyenda { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 140px; }
+.reportes-leyenda-item { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-dim); }
+.reportes-leyenda-item strong { margin-left: auto; color: var(--text); }
+.reportes-leyenda-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+.reportes-barras { display: flex; align-items: flex-end; justify-content: space-between; gap: 6px; height: 120px; }
+.reportes-barra-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 6px; flex: 1; height: 100%; }
+.reportes-barra-track { width: 100%; max-width: 26px; height: 100%; display: flex; align-items: flex-end; background: rgba(255, 255, 255, 0.06); border-radius: 6px; overflow: hidden; }
+.reportes-barra-fill { width: 100%; background: linear-gradient(180deg, var(--accent), #00b384); border-radius: 6px 6px 0 0; min-height: 2px; }
+.reportes-barra-lbl { font-size: 10.5px; color: var(--text-faint); }
+
 /* ============================================================
    CONTROL FÍSICO DE INVENTARIO (Inventario → Control Físico)
    ============================================================ */
@@ -953,6 +979,13 @@ button.card:hover { border-color: var(--accent); background: var(--surface-2); }
 .chat-input-row input[type="text"]:focus { border-color: var(--accent); }
 .chat-input-row .icon-btn { cursor: pointer; }
 
+/* Asistente BAM (Panel Admin) — mismo .chat-box del Chat del equipo,
+   pero en vez de un input de texto libre, botones de preguntas fijas. */
+.asistente-preguntas {
+  display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px;
+  border-top: 1px solid var(--border); background: var(--surface);
+}
+
 /* Caja de medio de pago incrustada en la nota (vista previa / imagen) */
 .docprev-pago-box {
   margin-top: 16px; border: 2px solid #14161c; border-radius: 10px;
@@ -1089,6 +1122,20 @@ button.card:hover { border-color: var(--accent); background: var(--surface-2); }
   border: 1px dashed #00e5a044;
 }
 .login-catalogo-link:hover { background: var(--accent-dim); }
+
+/* Login con huella/Face ID — solo aparece dentro del APK cuando ya hay
+   un acceso guardado en este celular. */
+.login-biometria { margin-top: 16px; }
+.login-biometria-sep {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+  color: var(--text-faint); font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+}
+.login-biometria-sep::before, .login-biometria-sep::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.login-biometria-olvidar {
+  display: block; width: 100%; text-align: center; margin-top: 8px;
+  background: none; border: none; color: var(--text-faint); font-size: 12px;
+  text-decoration: underline; cursor: pointer; padding: 4px;
+}
 
 /* ============================================================
    BOT PERRITO: botones de acción dentro de la burbuja

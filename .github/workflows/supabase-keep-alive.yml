@@ -1,0 +1,39 @@
+name: Supabase Keep Alive
+
+# Evita que el proyecto de Supabase (plan gratis) se pause solo por falta
+# de actividad: Supabase pausa automáticamente un proyecto free después
+# de 7 días sin ningún pedido a su API. Este workflow manda un pedido
+# mínimo de lectura cada pocos días (lunes y jueves, nunca más de 4 días
+# de silencio) para que el proyecto nunca llegue a esos 7 días, sin que
+# nadie tenga que entrar a la app a propósito.
+#
+# Usa la misma URL y API key "anon" (públicas) que ya usa la app desde
+# el navegador de cualquier cliente/vendedor — se leen de app/config.js
+# en vez de duplicarlas acá, para que nunca queden desactualizadas si
+# alguna vez se rota la key.
+
+on:
+  schedule:
+    - cron: '0 9 * * 1,4'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ping a Supabase (lectura mínima, mantiene el proyecto activo)
+        run: |
+          URL=$(grep -oP '(?<=SUPABASE_URL = ")[^"]+' app/config.js)
+          KEY=$(grep -oP '(?<=SUPABASE_ANON_KEY = ")[^"]+' app/config.js)
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then
+            echo "::error::No se pudo leer SUPABASE_URL/SUPABASE_ANON_KEY desde app/config.js"
+            exit 1
+          fi
+          CODE=$(curl -sS -o /dev/null -w "%{http_code}" "$URL/rest/v1/configuracion?select=id&limit=1" -H "apikey: $KEY")
+          echo "Respuesta de Supabase: HTTP $CODE"
+          if [ "$CODE" -ge 500 ] || [ "$CODE" = "000" ]; then
+            echo "::warning::Supabase respondió raro (HTTP $CODE) — revisar manualmente si el proyecto sigue activo."
+          fi

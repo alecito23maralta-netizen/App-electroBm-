@@ -1024,3 +1024,15 @@ create policy "control_fisico_items_all" on public.control_fisico_items
 -- Ejecutar en el proyecto que ya tenías creado
 -- ============================================================
 alter table public.profiles add column if not exists email_notificaciones text;
+
+-- ============================================================
+-- ACTUALIZACIÓN: fix comprobante de abono de venta a crédito — quedaba
+-- guardado monto_total = total de la venta en vez del monto realmente
+-- abonado en esa pasada, así que el recibo impreso mostraba "Total a
+-- pagar" con el total de la venta entera aunque el cliente solo haya
+-- pagado una parte. monto_total ahora SIEMPRE es lo recibido en esa
+-- transacción puntual; venta_total queda como referencia aparte (solo
+-- se carga cuando el comprobante está enlazado a una venta a crédito).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.comprobantes add column if not exists venta_total numeric(12,2);

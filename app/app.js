@@ -5405,10 +5405,11 @@ async function abrirFormAbonarVenta(venta, abonadoPrevio) {
         cliente_nombre: venta.cliente_nombre,
         venta_numero: `#${venta.numero}`,
         forma_pago: formaComprobante,
-        monto_total: venta.total,
-        monto_efectivo: metodo === 'efectivo' ? venta.total : 0,
-        monto_transferido: metodo !== 'efectivo' ? venta.total : 0,
+        monto_total: monto,
+        monto_efectivo: metodo === 'efectivo' ? monto : 0,
+        monto_transferido: metodo !== 'efectivo' ? monto : 0,
         saldo_pendiente: 0,
+        venta_total: venta.total,
         cajero_id: profile.id,
         cajero_nombre: profile.nombre || profile.usuario,
         caja_movimiento_id: movimiento.id
@@ -5434,10 +5435,11 @@ async function abrirFormAbonarVenta(venta, abonadoPrevio) {
         cliente_nombre: venta.cliente_nombre,
         venta_numero: `#${venta.numero}`,
         forma_pago: formaComprobante,
-        monto_total: venta.total,
+        monto_total: monto,
         monto_efectivo: metodo === 'efectivo' ? monto : 0,
         monto_transferido: metodo !== 'efectivo' ? monto : 0,
         saldo_pendiente: saldoRestante,
+        venta_total: venta.total,
         cajero_id: profile.id,
         cajero_nombre: profile.nombre || profile.usuario,
         caja_movimiento_id: movimiento.id
@@ -7251,7 +7253,7 @@ async function abrirFormComprobante(opts = {}) {
         <option value="mixto">Mixto (Efectivo + Transferencia)</option>
       </select>
     </div>
-    <div class="field" style="margin-top:10px"><label>Total a pagar (Bs) *<br><span style="font-weight:400;color:var(--text-faint)">se completa solo con lo recibido — solo cambia si elegís arriba una venta a crédito</span></label><input type="number" id="f-comp-total" min="0" step="0.01" value="${movimientoExistente ? movimientoExistente.monto : '0'}" disabled required /></div>
+    <div class="field" style="margin-top:10px"><label>Monto recibido ahora (Bs) *<br><span style="font-weight:400;color:var(--text-faint)">se completa solo con lo que cargues abajo en efectivo/transferencia</span></label><input type="number" id="f-comp-total" min="0" step="0.01" value="${movimientoExistente ? movimientoExistente.monto : '0'}" disabled required /></div>
     <div class="grid-2" style="margin-top:10px">
       <div class="field"><label>Recibido en efectivo (Bs)</label><input type="number" id="f-comp-efectivo" min="0" step="0.01" value="${(movimientoExistente && movimientoExistente.metodo_pago === 'efectivo') ? movimientoExistente.monto : 0}" /></div>
       <div class="field"><label>Recibido por transferencia (Bs)</label><input type="number" id="f-comp-transferido" min="0" step="0.01" value="${(movimientoExistente && movimientoExistente.metodo_pago !== 'efectivo') ? movimientoExistente.monto : 0}" /></div>
@@ -7357,15 +7359,16 @@ async function abrirFormComprobante(opts = {}) {
     const forma = $('#f-comp-forma').value;
     const ef = (forma === 'transferencia' || forma === 'qr') ? 0 : Number($('#f-comp-efectivo').value || 0);
     const tr = forma === 'efectivo' ? 0 : Number($('#f-comp-transferido').value || 0);
-    // "Total a pagar" se completa solo — nunca se escribe a mano — con lo
-    // recibido, o con el total real de la venta cuando hay una enlazada.
-    // Así el "Saldo pendiente" nunca puede aparecer por accidente en un
-    // comprobante libre; solo existe cuando de verdad se está abonando una
-    // venta a crédito.
-    $('#f-comp-total').value = ventaSeleccionada ? ventaSeleccionada.venta.total : ef + tr;
-    const total = Number($('#f-comp-total').value || 0);
+    // "Monto recibido ahora" es SIEMPRE lo que se está cargando en esta
+    // pasada (nunca el total de la venta entera) — eso es lo que después
+    // queda impreso en el comprobante como "Total a pagar". Si antes se
+    // guardaba acá el total de la venta en vez de lo recibido, el recibo
+    // de un abono parcial mostraba el total de la venta completa en vez
+    // de lo que el cliente realmente pagó en esa visita.
+    $('#f-comp-total').value = ef + tr;
     const abonadoPrevio = ventaSeleccionada ? ventaSeleccionada.abonadoPrevio : 0;
-    const saldo = Math.max(0, total - abonadoPrevio - ef - tr);
+    const totalVenta = ventaSeleccionada ? Number(ventaSeleccionada.venta.total) : (ef + tr);
+    const saldo = Math.max(0, totalVenta - abonadoPrevio - ef - tr);
     $('#comp-saldo-preview').textContent = money(saldo);
   }
   $('#f-comp-forma').addEventListener('change', () => { actualizarVisibilidadForma(); actualizarSaldo(); });
@@ -7446,6 +7449,7 @@ async function abrirFormComprobante(opts = {}) {
       venta_numero: $('#f-comp-venta').value.trim() || null,
       forma_pago,
       monto_total, monto_efectivo, monto_transferido, saldo_pendiente,
+      venta_total: ventaSeleccionada ? ventaSeleccionada.venta.total : null,
       banco: (forma_pago !== 'efectivo') ? $('#f-comp-banco').value.trim() : null,
       cuenta_destino: (forma_pago !== 'efectivo') ? $('#f-comp-cuenta').value.trim() : null,
       cajero_id: profile.id,
@@ -7525,7 +7529,8 @@ function comprobanteHtml(c) {
     </div>
     <div class="comp-detalle">
       <div class="comp-detalle-titulo">${tituloForma}</div>
-      <div class="comp-linea"><span>Total a pagar:</span><strong>${money(c.monto_total)}</strong></div>
+      ${c.venta_total != null ? `<div class="comp-linea"><span>Total de la venta:</span><strong>${money(c.venta_total)}</strong></div>` : ''}
+      <div class="comp-linea"><span>${c.venta_total != null ? 'Abono recibido:' : 'Total a pagar:'}</span><strong>${money(c.monto_total)}</strong></div>
       ${c.forma_pago !== 'transferencia' && c.forma_pago !== 'qr' ? `<div class="comp-linea"><span>En efectivo:</span><strong>${money(c.monto_efectivo)}</strong></div>` : ''}
       ${c.forma_pago !== 'efectivo' ? `<div class="comp-linea"><span>${etiquetaNoEfectivo}</span><strong>${money(c.monto_transferido)}</strong></div>` : ''}
       ${c.saldo_pendiente > 0 ? `<div class="comp-linea comp-saldo"><span>Saldo pendiente:</span><strong>${money(c.saldo_pendiente)}</strong></div>` : ''}
@@ -7585,7 +7590,8 @@ async function generarPdfComprobante(c) {
   pdf.text(tituloFormaPdf, 14, y);
   y += 7;
   pdf.setFont(undefined, 'normal'); pdf.setFontSize(9.5);
-  pdf.text(`Total a pagar: ${money(c.monto_total)}`, 14, y); y += 6;
+  if (c.venta_total != null) { pdf.text(`Total de la venta: ${money(c.venta_total)}`, 14, y); y += 6; }
+  pdf.text(`${c.venta_total != null ? 'Abono recibido' : 'Total a pagar'}: ${money(c.monto_total)}`, 14, y); y += 6;
   if (c.forma_pago !== 'transferencia' && c.forma_pago !== 'qr') { pdf.text(`En efectivo: ${money(c.monto_efectivo)}`, 14, y); y += 6; }
   if (c.forma_pago !== 'efectivo') { pdf.text(`${c.forma_pago === 'qr' ? 'Pagado por QR' : 'Transferido'}: ${money(c.monto_transferido)}`, 14, y); y += 6; }
   if (c.saldo_pendiente > 0) { pdf.setTextColor(220, 38, 38); pdf.text(`Saldo pendiente: ${money(c.saldo_pendiente)}`, 14, y); pdf.setTextColor(20, 20, 20); y += 6; }
@@ -7635,7 +7641,7 @@ async function generarYCompartirComprobanteImagen(c) {
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
     const encabezado = `*Comprobante de pago N° ${String(c.numero).padStart(5, '0')} — Electrodomésticos BM*\nRecibimos de: ${c.cliente_nombre}`;
     const texto = Number(c.saldo_pendiente) > 0
-      ? `${encabezado}\nMonto Credito: ${money(c.monto_total)}\nMonto Abonado: ${money(Number(c.monto_efectivo) + Number(c.monto_transferido))}\nMonto Saldo: ${money(c.saldo_pendiente)}`
+      ? `${encabezado}\nMonto Credito: ${money(c.venta_total ?? c.monto_total)}\nMonto Abonado: ${money(Number(c.monto_efectivo) + Number(c.monto_transferido))}\nMonto Saldo: ${money(c.saldo_pendiente)}`
       : `${encabezado}\nMonto: ${money(c.monto_total)}`;
     if (blob) {
       const file = new File([blob], `comprobante_${c.numero}.png`, { type: 'image/png' });

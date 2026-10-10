@@ -3204,6 +3204,33 @@ async function iniciarLectorCodigoBarras(videoId, statusId, onDetectado) {
     } catch (e) { hints = undefined; /* si algo de esto no existe en esta build, seguimos sin hints */ }
     const reader = new ZXing.BrowserMultiFormatReader(hints);
 
+    // Códigos de barras impresos en colores (verde, rojo, etc.) casi no
+    // tienen contraste con la conversión a blanco y negro que usa ZXing
+    // por defecto (0.299R + 0.587G + 0.114B, le da más peso al canal
+    // verde) — la tinta verde refleja bastante verde, así que queda
+    // "clara" en la imagen en blanco y negro en vez de oscura, y el
+    // lector no encuentra las barras aunque a simple vista se vean bien
+    // marcadas. Se pisa drawImageOnCanvas (la librería lo deja pensado
+    // para esto: "manipulate the snapshot image in any way you want
+    // before decode") y se usa el canal más oscuro de cada píxel
+    // (mínimo de R/G/B) en vez del promedio — cualquier tinta de color
+    // queda bien oscura frente a un fondo claro, sin afectar en nada a
+    // los códigos de siempre en blanco y negro.
+    try {
+      reader.drawImageOnCanvas = function (ctx, srcElement) {
+        ctx.drawImage(srcElement, 0, 0);
+        const w = ctx.canvas.width, h = ctx.canvas.height;
+        if (!w || !h) return;
+        const imgData = ctx.getImageData(0, 0, w, h);
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const min = Math.min(d[i], d[i + 1], d[i + 2]);
+          d[i] = d[i + 1] = d[i + 2] = min;
+        }
+        ctx.putImageData(imgData, 0, 0);
+      };
+    } catch (e) { /* si esta build no lo soporta, sigue con la conversión normal */ }
+
     // Elegir la cámara trasera es un plus, no algo de lo que dependa
     // poder escanear — si listar dispositivos falla (varía según la
     // versión/navegador), seguimos sin deviceId: decodeFromVideoDevice

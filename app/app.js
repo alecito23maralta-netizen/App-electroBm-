@@ -2542,7 +2542,7 @@ function abrirFormProducto(existing, prefill) {
       </div>
       <div class="field"><label>Subcategoría</label><input id="f-subcat" placeholder="Ej: Gas, Eléctrico" value="${existing ? escapeHtml(existing.subcategoria || '') : ''}" /></div>
     </div>
-    <div class="grid-2" id="campos-codigos" style="margin-top:10px; ${catInicial === 'Herramientas' ? '' : 'display:none'}">
+    <div class="grid-2" id="campos-codigos" style="margin-top:10px">
       <div class="field"><label>Código de fábrica</label>
         <div style="display:flex;gap:6px">
           <input id="f-codfab" style="flex:1" value="${existing ? escapeHtml(existing.codigo_fabrica || '') : escapeHtml(prefill?.codigo_fabrica || '')}" placeholder="Ej: JDCC8395" />
@@ -2577,10 +2577,6 @@ function abrirFormProducto(existing, prefill) {
   `);
   $('#sheet-close').addEventListener('click', () => { detenerCamaraProd(); closeModal(); });
   $('#btn-cancelar').addEventListener('click', () => { detenerCamaraProd(); closeModal(); });
-  $('#f-cat').addEventListener('change', (e) => {
-    $('#campos-codigos').style.display = e.target.value === 'Herramientas' ? '' : 'none';
-    if (e.target.value !== 'Herramientas') detenerCamaraProd();
-  });
 
   let prodCodeReader = null;
   function detenerCamaraProd() {
@@ -2613,15 +2609,14 @@ function abrirFormProducto(existing, prefill) {
   });
 
   $('#btn-guardar').addEventListener('click', async () => {
-    const esHerramienta = $('#f-cat').value === 'Herramientas';
     const imagen_base64 = imagenNuevaBase64 || existing?.imagen_base64 || prefill?.imagen_base64 || null;
     const nuevoPrecioVenta = Number($('#f-precio').value || 0);
     const payload = {
       descripcion: $('#f-desc').value.trim(),
       categoria: $('#f-cat').value,
       subcategoria: $('#f-subcat').value.trim(),
-      codigo_fabrica: esHerramienta ? $('#f-codfab').value.trim() : '',
-      codigo_interno: esHerramienta ? $('#f-codint').value.trim() : '',
+      codigo_fabrica: $('#f-codfab').value.trim(),
+      codigo_interno: $('#f-codint').value.trim(),
       precio_venta: nuevoPrecioVenta,
       costo: Number($('#f-costo').value || 0),
       stock_minimo: Number($('#f-stockmin').value || 0),
@@ -2697,10 +2692,9 @@ async function ajustarStock(productoId, delta, motivo) {
 // productos nuevos (es_nuevo) quedan pendientes de categoría/precio y se
 // enlazan a Inventario recién cuando se completan desde "＋Catálogo".
 //
-// El código de barras/fábrica solo existe hoy para productos de la
-// categoría Herramientas (es el único campo "código" del catálogo) —
-// para el resto (termotanques, calefones, etc.) la búsqueda es por
-// descripción, igual que en el resto de la app.
+// Disponible para cualquier categoría (antes solo se guardaba en
+// Herramientas) — si el producto no tiene código cargado, el escaneo
+// simplemente no lo encuentra por código (pero sí por descripción).
 // ============================================================
 function codigoVisibleProducto(p) {
   return p.codigo_fabrica || p.codigo_interno || '';
@@ -3168,13 +3162,13 @@ function catalogarNuevoCF(itemId) {
 
 // ------------------------------------------------------------
 // CÁMARA (ZXing) — lee código de barras y lo busca contra
-// codigo_fabrica/codigo_interno (hoy solo cargados en Herramientas).
+// codigo_fabrica/codigo_interno (disponible en cualquier categoría).
 // ------------------------------------------------------------
 // ------------------------------------------------------------
 // LECTOR DE CÓDIGO DE BARRAS (ZXing) — reutilizable en cualquier
 // pantalla que tenga un <video> y un contenedor de estado en el DOM:
 // lo usa tanto la cámara de Control Físico como el botón "📷 Escanear"
-// del campo Código de fábrica al cargar/editar una Herramienta.
+// del campo Código de fábrica al cargar/editar un producto.
 // ------------------------------------------------------------
 function setStatusLector(statusId, msg) {
   const el = document.getElementById(statusId);
@@ -3946,6 +3940,7 @@ async function confirmarImportacionProductos() {
       : {
           descripcion: f.descripcion,
           categoria: f.categoria,
+          codigo_fabrica: f.codigo || '',
           precio_venta: f.precio_venta,
           costo: f.costo || 0,
           descuento_maximo_pct: f.descuento_maximo_pct,
@@ -4134,7 +4129,7 @@ async function confirmarImportacionCompra() {
       const resp = await sb.from('productos').insert({
         descripcion: f.descripcion,
         categoria, subcategoria,
-        codigo_fabrica: categoria === 'Herramientas' ? f.codigo : '',
+        codigo_fabrica: f.codigo || '',
         costo: f.costo || 0,
         precio_venta: 0,
         stock: f.cantidad,

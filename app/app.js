@@ -1843,32 +1843,58 @@ async function renderReportes() {
 // pregunta, arma la respuesta en el momento con datos reales de la
 // base (mismo criterio de margen que Reportes/Rentabilidad).
 // ============================================================
-const ASISTENTE_BAM_PREGUNTAS = [
-  { id: 'ventas-hoy', label: '¿Cuánto vendí hoy?' },
-  { id: 'stock-bajo', label: '¿Qué productos tienen stock bajo?' },
-  { id: 'pendiente-cobrar', label: '¿Cuánto tengo pendiente de cobrar?' },
-  { id: 'margen-mes', label: '¿Cuál es mi margen de los últimos 30 días?' },
-  { id: 'cotizaciones-pendientes', label: '¿Cuántas cotizaciones están sin aprobar?' },
-  { id: 'garantias-por-vencer', label: '¿Qué garantías vencen pronto?' }
+const ASISTENTE_BAM_CATEGORIAS = [
+  { id: 'ventas', label: '💰 Ventas', preguntas: [
+    { id: 'ventas-hoy', label: '¿Cuánto vendí hoy?' },
+    { id: 'margen-mes', label: '¿Cuál es mi margen de los últimos 30 días?' },
+    { id: 'ticket-promedio', label: '¿Cuál es mi ticket promedio?' },
+    { id: 'productos-mas-vendidos', label: '¿Qué productos más vendí este mes?' },
+    { id: 'cotizaciones-pendientes', label: '¿Cuántas cotizaciones están sin aprobar?' }
+  ]},
+  { id: 'cobranzas', label: '🧾 Cobranzas', preguntas: [
+    { id: 'pendiente-cobrar', label: '¿Cuánto tengo pendiente de cobrar?' }
+  ]},
+  { id: 'inventario', label: '📦 Inventario', preguntas: [
+    { id: 'stock-bajo', label: '¿Qué productos tienen stock bajo?' },
+    { id: 'garantias-por-vencer', label: '¿Qué garantías vencen pronto?' }
+  ]},
+  { id: 'marketing', label: '📣 Marketing', preguntas: [
+    { id: 'clientes-inactivos', label: '¿Qué clientes no compran hace más de 60 días?' },
+    { id: 'productos-sin-rotar', label: '¿Qué productos no se vendieron en 30 días?' },
+    { id: 'clientes-nuevos-mes', label: '¿Cuántos clientes nuevos tengo este mes?' }
+  ]}
 ];
+const ASISTENTE_BAM_PREGUNTAS = ASISTENTE_BAM_CATEGORIAS.flatMap(c => c.preguntas);
 
 async function renderAsistenteBam() {
   const el = $('#view-asistente');
   el.innerHTML = `
-    <div class="section-head"><div><h2>Asistente BAM</h2><p class="sub">Preguntas rápidas sobre el negocio, con datos reales de ahora mismo</p></div></div>
-    <div class="chat-box">
-      <div class="chat-mensajes" id="asistente-mensajes">
-        <div class="chat-msg">
-          <div class="chat-msg-remitente">🤖 BAM</div>
-          <div class="chat-msg-bubble chat-msg-bam"><div class="chat-msg-texto">¡Hola! Tocá una pregunta de abajo y te respondo con los datos de ahora mismo.</div></div>
+    <div class="bam-chat">
+      <div class="bam-chat-header">
+        <img src="icons/bam-avatar.png" class="bam-chat-avatar" alt="BAM" />
+        <div class="bam-chat-header-info">
+          <div class="bam-chat-header-nombre">Asistente BAM</div>
+          <div class="bam-chat-header-estado">en línea</div>
         </div>
       </div>
-      <div class="asistente-preguntas">
-        ${ASISTENTE_BAM_PREGUNTAS.map(p => `<button class="btn btn-secondary btn-sm" data-preg="${p.id}">${escapeHtml(p.label)}</button>`).join('')}
+      <div class="bam-chat-mensajes" id="asistente-mensajes">
+        <div class="bam-chat-msg bam">
+          <div class="bam-chat-bubble">¡Hola! Tocá una pregunta de abajo y te respondo con los datos de ahora mismo.</div>
+        </div>
+      </div>
+      <div class="bam-chat-preguntas">
+        ${ASISTENTE_BAM_CATEGORIAS.map(cat => `
+          <div class="bam-chat-cat">
+            <div class="bam-chat-cat-label">${escapeHtml(cat.label)}</div>
+            <div class="bam-chat-cat-botones">
+              ${cat.preguntas.map(p => `<button class="bam-chat-chip" data-preg="${p.id}">${escapeHtml(p.label)}</button>`).join('')}
+            </div>
+          </div>
+        `).join('')}
       </div>
     </div>
   `;
-  $$('.asistente-preguntas [data-preg]').forEach(btn => {
+  $$('.bam-chat-chip').forEach(btn => {
     btn.addEventListener('click', () => responderPreguntaAsistenteBam(btn.dataset.preg, btn.textContent));
   });
 }
@@ -1876,17 +1902,14 @@ async function renderAsistenteBam() {
 async function responderPreguntaAsistenteBam(id, pregunta) {
   const cont = $('#asistente-mensajes');
   cont.insertAdjacentHTML('beforeend', `
-    <div class="chat-msg propio"><div class="chat-msg-bubble"><div class="chat-msg-texto">${escapeHtml(pregunta)}</div></div></div>
+    <div class="bam-chat-msg propio"><div class="bam-chat-bubble">${escapeHtml(pregunta)}</div></div>
   `);
   cont.scrollTop = cont.scrollHeight;
 
   const respuesta = await calcularRespuestaAsistenteBam(id);
   const div = document.createElement('div');
-  div.className = 'chat-msg';
-  div.innerHTML = `
-    <div class="chat-msg-remitente">🤖 BAM</div>
-    <div class="chat-msg-bubble chat-msg-bam"><div class="chat-msg-texto">${respuesta}</div></div>
-  `;
+  div.className = 'bam-chat-msg bam';
+  div.innerHTML = `<div class="bam-chat-bubble">${respuesta}</div>`;
   cont.appendChild(div);
   cont.scrollTop = cont.scrollHeight;
 }
@@ -1945,6 +1968,74 @@ async function calcularRespuestaAsistenteBam(id) {
     if (garantias.length === 0) return 'Ninguna garantía vence en los próximos 30 días.';
     const lista = garantias.slice(0, 8).map(g => `• ${escapeHtml(g.producto_descripcion)} — ${escapeHtml(g.cliente_nombre)} (vence ${fecha(g.fecha_vencimiento)})`).join('<br>');
     return `<strong>${garantias.length}</strong> garantía${garantias.length === 1 ? '' : 's'} vence${garantias.length === 1 ? '' : 'n'} en los próximos 30 días:<br>${lista}`;
+  }
+
+  if (id === 'ticket-promedio') {
+    const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30); hace30.setHours(0, 0, 0, 0);
+    const { data } = await sb.from('ventas').select('*').gte('created_at', hace30.toISOString());
+    const ventas = data || [];
+    if (ventas.length === 0) return 'Todavía no hay ventas en los últimos 30 días para calcular un promedio.';
+    const promedio = ventas.reduce((s, v) => s + Number(v.total), 0) / ventas.length;
+    return `En los últimos 30 días tu ticket promedio fue de <strong>${money(promedio)}</strong>, sobre ${ventas.length} venta${ventas.length === 1 ? '' : 's'}.`;
+  }
+
+  if (id === 'productos-mas-vendidos') {
+    const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30); hace30.setHours(0, 0, 0, 0);
+    const { data } = await sb.from('ventas').select('*').gte('created_at', hace30.toISOString());
+    const ventas = data || [];
+    const cantidadPorProducto = new Map();
+    ventas.forEach(v => (v.items || []).forEach(it => {
+      if (!it.producto_id) return;
+      cantidadPorProducto.set(it.producto_id, (cantidadPorProducto.get(it.producto_id) || 0) + Number(it.cantidad || 0));
+    }));
+    if (cantidadPorProducto.size === 0) return 'Todavía no hay ventas en los últimos 30 días.';
+    const top = [...cantidadPorProducto.entries()]
+      .map(([producto_id, cantidad]) => ({ p: productosCache.find(x => x.id === producto_id), cantidad }))
+      .filter(x => x.p)
+      .sort((a, b) => b.cantidad - a.cantidad)
+      .slice(0, 5);
+    const lista = top.map(x => `• ${escapeHtml(x.p.descripcion)} — ${x.cantidad} unidad${x.cantidad === 1 ? '' : 'es'}`).join('<br>');
+    return `Lo más vendido en los últimos 30 días:<br>${lista}`;
+  }
+
+  if (id === 'clientes-inactivos') {
+    const hace60 = new Date(); hace60.setDate(hace60.getDate() - 60); hace60.setHours(0, 0, 0, 0);
+    const [{ data: clientes }, { data: ventas }] = await Promise.all([
+      sb.from('clientes').select('*'),
+      sb.from('ventas').select('cliente_nombre, created_at').order('created_at', { ascending: false })
+    ]);
+    const ultimaCompraPorCliente = new Map();
+    (ventas || []).forEach(v => {
+      const key = normalizarTextoImport(v.cliente_nombre || '');
+      if (key && !ultimaCompraPorCliente.has(key)) ultimaCompraPorCliente.set(key, v.created_at);
+    });
+    const inactivos = (clientes || []).filter(c => {
+      const ultima = ultimaCompraPorCliente.get(normalizarTextoImport(c.nombre || ''));
+      return ultima && new Date(ultima) < hace60;
+    });
+    if (inactivos.length === 0) return 'No tenés clientes con compras registradas que lleven más de 60 días sin volver.';
+    const lista = inactivos.slice(0, 8).map(c => `• ${escapeHtml(c.nombre)}${c.telefono ? ' — ' + escapeHtml(c.telefono) : ''}`).join('<br>');
+    return `<strong>${inactivos.length}</strong> cliente${inactivos.length === 1 ? '' : 's'} no compra${inactivos.length === 1 ? '' : 'n'} hace más de 60 días — buena lista para una campaña de reactivación:<br>${lista}${inactivos.length > 8 ? `<br>…y ${inactivos.length - 8} más.` : ''}`;
+  }
+
+  if (id === 'productos-sin-rotar') {
+    const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30); hace30.setHours(0, 0, 0, 0);
+    const { data } = await sb.from('ventas').select('items').gte('created_at', hace30.toISOString());
+    const vendidosIds = new Set();
+    (data || []).forEach(v => (v.items || []).forEach(it => { if (it.producto_id) vendidosIds.add(it.producto_id); }));
+    const sinRotar = productosCache.filter(p => p.stock > 0 && !vendidosIds.has(p.id));
+    if (sinRotar.length === 0) return 'Todo tu stock tuvo al menos una venta en los últimos 30 días. 👍';
+    const topPorStock = [...sinRotar].sort((a, b) => Number(b.stock) - Number(a.stock)).slice(0, 8);
+    const lista = topPorStock.map(p => `• ${escapeHtml(p.descripcion)} (${p.stock} en stock)`).join('<br>');
+    return `<strong>${sinRotar.length}</strong> producto${sinRotar.length === 1 ? '' : 's'} con stock sin ninguna venta en 30 días — candidatos a promoción o liquidación:<br>${lista}${sinRotar.length > 8 ? `<br>…y ${sinRotar.length - 8} más.` : ''}`;
+  }
+
+  if (id === 'clientes-nuevos-mes') {
+    const inicioMes = new Date(); inicioMes.setDate(1); inicioMes.setHours(0, 0, 0, 0);
+    const { count } = await sb.from('clientes').select('*', { count: 'exact', head: true }).gte('created_at', inicioMes.toISOString());
+    return !count
+      ? 'Todavía no registraste clientes nuevos este mes.'
+      : `Este mes sumaste <strong>${count}</strong> cliente${count === 1 ? '' : 's'} nuevo${count === 1 ? '' : 's'}.`;
   }
 
   return 'No pude calcular esa respuesta.';

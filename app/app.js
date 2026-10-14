@@ -4211,6 +4211,18 @@ async function abrirImportadorCompra() {
     </p>
     <div style="margin-top:10px"><button class="btn btn-secondary" id="btn-descargar-plantilla-compra">⬇ Plantilla vacía</button></div>
     <div class="field" style="margin-top:14px"><label>Archivo Excel (.xlsx)</label><input type="file" id="f-import-compra" accept=".xlsx" /></div>
+
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+      <label style="font-size:13px;font-weight:600;color:var(--text-dim)">✍️ O agregá productos a mano (sin Excel)</label>
+      <div class="grid-2" style="margin-top:8px">
+        <div class="field"><label>Código (opcional)</label><input id="cm-codigo" placeholder="Ej: JDMK1K18" /></div>
+        <div class="field"><label>Cantidad *</label><input type="number" id="cm-cantidad" min="1" value="1" /></div>
+      </div>
+      <div class="field" style="margin-top:8px"><label>Descripción *</label><input id="cm-descripcion" placeholder="Ej: Repuesto para cutter 18x100mm" /></div>
+      <div class="field" style="margin-top:8px"><label>Costo unitario (opcional)</label><input type="number" id="cm-costo" min="0" step="0.01" placeholder="0.00" /></div>
+      <button type="button" class="btn btn-secondary" id="btn-agregar-manual-compra" style="margin-top:8px;width:100%">＋ Agregar a la lista</button>
+    </div>
+
     <div id="compra-preview"></div>
     <div class="form-actions" id="compra-acciones" style="display:none">
       <button class="btn btn-secondary" id="btn-cancelar">Cerrar</button>
@@ -4221,6 +4233,10 @@ async function abrirImportadorCompra() {
   $('#btn-cancelar').addEventListener('click', closeModal);
   $('#btn-descargar-plantilla-compra').addEventListener('click', async () => { await cargarXLSX(); descargarPlantillaCompra(); });
   $('#btn-confirmar-compra').addEventListener('click', confirmarImportacionCompra);
+  $('#btn-agregar-manual-compra').addEventListener('click', agregarItemManualCompra);
+  ['cm-codigo', 'cm-descripcion', 'cm-cantidad', 'cm-costo'].forEach(id => {
+    $('#' + id).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); agregarItemManualCompra(); } });
+  });
   $('#f-import-compra').addEventListener('change', async (e) => {
     const archivo = e.target.files[0];
     if (!archivo) return;
@@ -4229,6 +4245,33 @@ async function abrirImportadorCompra() {
     try { await analizarArchivoCompra(archivo); }
     catch (err) { $('#compra-preview').innerHTML = `<p style="margin-top:14px;color:var(--accent-2);font-size:13px">No se pudo leer el archivo: ${escapeHtml(err.message)}</p>`; }
   });
+}
+
+// Carga manual, renglón por renglón, para compras chicas donde no vale
+// la pena armar un Excel — agrega al mismo importCompraPreview que usa
+// el importador de Excel, así comparten la vista previa y la confirmación.
+function agregarItemManualCompra() {
+  const codigo = $('#cm-codigo').value.trim();
+  const descripcion = $('#cm-descripcion').value.trim();
+  const cantidad = Math.round(Number($('#cm-cantidad').value) || 0);
+  const costoRaw = $('#cm-costo').value;
+  const costo = costoRaw !== '' ? Number(costoRaw) : null;
+
+  if (!descripcion) { toast('Escribí una descripción', 'error'); $('#cm-descripcion').focus(); return; }
+  if (!cantidad || cantidad <= 0) { toast('Ingresá una cantidad válida', 'error'); $('#cm-cantidad').focus(); return; }
+
+  const existente = encontrarProductoExistente(codigo, descripcion);
+  const avisos = [];
+  if (!existente) avisos.push('Producto nuevo — quedará con precio de venta en 0, completalo en Catálogo');
+
+  importCompraPreview.push({ fila: importCompraPreview.length, codigo, descripcion, cantidad, costo, existente, errores: [], avisos });
+  renderPreviewCompra();
+
+  $('#cm-codigo').value = '';
+  $('#cm-descripcion').value = '';
+  $('#cm-cantidad').value = '1';
+  $('#cm-costo').value = '';
+  $('#cm-descripcion').focus();
 }
 
 async function analizarArchivoCompra(archivo) {
@@ -4314,7 +4357,7 @@ function renderPreviewCompra() {
       <div class="field"><label>Subcategoría (opcional)</label><input id="f-subcat-compra" placeholder="Ej: Gas, Eléctrico" /></div>
     </div>` : ''}
     <div class="import-lista" style="margin-top:10px;max-height:340px;overflow-y:auto">
-      ${importCompraPreview.map(f => `
+      ${importCompraPreview.map((f, i) => `
         <div class="import-fila">
           <div class="import-fila-info">
             <div class="import-fila-titulo">
@@ -4325,11 +4368,16 @@ function renderPreviewCompra() {
             ${f.avisos.length ? `<div class="import-fila-aviso">${f.avisos.map(escapeHtml).join(' · ')}</div>` : ''}
             ${f.errores.length ? `<div class="import-fila-error">${f.errores.map(escapeHtml).join(' · ')}</div>` : ''}
           </div>
+          <button class="icon-btn" data-del-compra="${i}" title="Quitar">🗑</button>
         </div>
       `).join('')}
     </div>
   `;
   acciones.style.display = (nuevos.length + suman.length > 0) ? 'flex' : 'none';
+  cont.querySelectorAll('[data-del-compra]').forEach(b => b.addEventListener('click', () => {
+    importCompraPreview.splice(Number(b.dataset.delCompra), 1);
+    renderPreviewCompra();
+  }));
 }
 
 async function confirmarImportacionCompra() {

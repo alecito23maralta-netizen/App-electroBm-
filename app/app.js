@@ -4240,19 +4240,30 @@ async function analizarArchivoCompra(archivo) {
   if (filas.length < 2) throw new Error('El archivo no tiene filas de datos.');
 
   const buscarCol = (encabezados, patrones) => encabezados.findIndex(h => patrones.some(p => h.includes(p)));
-  const encabezados = filas[0].map(normalizarTextoImport);
-  const idx = {
-    codigo: buscarCol(encabezados, ['codigo', 'cod barra', 'barras']),
-    descripcion: buscarCol(encabezados, ['descripcion', 'nombre', 'producto', 'articulo', 'item']),
-    cantidad: buscarCol(encabezados, ['cantidad', 'cant', 'unidades']),
-    costo: buscarCol(encabezados, ['costo', 'precio compra', 'precio unitario', 'precio costo'])
-  };
-  if (idx.descripcion === -1 || idx.cantidad === -1) {
+
+  // La fila de encabezados no siempre es la primera — las hojas de pedido
+  // de algunos proveedores (ej. Jadever) traen varias filas de título,
+  // datos del cliente y condiciones de pago ANTES de la tabla real. Se
+  // busca la primera fila (de las primeras 30) que tenga a la vez una
+  // columna de descripción y una de cantidad, sea cual sea su posición.
+  let filaEncabezados = -1;
+  let idx = null;
+  for (let i = 0; i < Math.min(filas.length, 30); i++) {
+    const encabezados = filas[i].map(normalizarTextoImport);
+    const candidato = {
+      codigo: buscarCol(encabezados, ['codigo', 'cod barra', 'barras']),
+      descripcion: buscarCol(encabezados, ['descripcion', 'nombre', 'producto', 'articulo', 'item']),
+      cantidad: buscarCol(encabezados, ['cantidad', 'cant', 'unidades']),
+      costo: buscarCol(encabezados, ['costo', 'precio compra', 'precio unitario', 'precio costo', 'precio con descuento', 'precio neto'])
+    };
+    if (candidato.descripcion > -1 && candidato.cantidad > -1) { filaEncabezados = i; idx = candidato; break; }
+  }
+  if (!idx) {
     throw new Error('No encontré las columnas "Descripcion" y/o "Cantidad" — usá la plantilla sin cambiar los encabezados.');
   }
 
   const filasProcesadas = [];
-  for (let i = 1; i < filas.length; i++) {
+  for (let i = filaEncabezados + 1; i < filas.length; i++) {
     const fila = filas[i];
     if (fila.every(c => c === '' || c == null)) continue;
 

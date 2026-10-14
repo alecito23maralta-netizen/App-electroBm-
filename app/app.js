@@ -1891,6 +1891,52 @@ const ASISTENTE_BAM_RELACIONADAS = {
   'clientes-nuevos-mes': ['cliente-mas-valioso', 'crecimiento-mensual', 'clientes-inactivos']
 };
 
+// Para entender preguntas escritas libremente (no solo las de los
+// botones) — igual que el motor de reglas del simulador de referencia:
+// nada de IA real ni costo por consulta, solo coincidencia de palabras
+// clave con tolerancia a errores de tipeo (distancia de Levenshtein).
+// Cada pregunta tiene una o más "frases gatillo"; si TODAS las palabras
+// de alguna frase aparecen (exactas o muy parecidas) en lo que escribió
+// el admin, esa pregunta queda como candidata.
+function levBam(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 9;
+  const d = [...Array(b.length + 1).keys()];
+  for (let i = 1; i <= a.length; i++) {
+    let prev = d[0]; d[0] = i;
+    for (let j = 1; j <= b.length; j++) { const tmp = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = tmp; }
+  }
+  return d[b.length];
+}
+const ASISTENTE_BAM_PALABRAS_CLAVE = {
+  'ventas-hoy': ['vendi hoy', 'venta de hoy', 'ventas de hoy', 'cuanto vendi', 'como van las ventas hoy'],
+  'margen-mes': ['mi margen', 'margen de ganancia', 'ganancia del mes', 'utilidad del mes', 'cuanto gano'],
+  'ticket-promedio': ['ticket promedio', 'promedio de venta', 'venta promedio', 'cuanto es mi ticket'],
+  'productos-mas-vendidos': ['mas vendido', 'mas vendidos', 'que se vendio mas', 'lo mas vendido', 'top ventas'],
+  'crecimiento-mensual': ['como voy este mes', 'crecimiento mensual', 'mes anterior', 'mes pasado', 'subi o baje'],
+  'mejor-dia-ventas': ['mejor dia', 'que dia vendo mas', 'dia que mas se vende', 'mejor dia de ventas'],
+  'cotizaciones-pendientes': ['cotizaciones pendientes', 'cotizaciones sin aprobar', 'cuantas cotizaciones'],
+  'pendiente-cobrar': ['pendiente de cobrar', 'cuanto me deben', 'por cobrar', 'cobranza pendiente', 'creditos pendientes'],
+  'stock-bajo': ['stock bajo', 'poco stock', 'que falta reponer', 'falta stock'],
+  'garantias-por-vencer': ['garantias por vencer', 'garantias que vencen', 'garantia proxima'],
+  'clientes-inactivos': ['clientes inactivos', 'clientes que no compran', 'no volvio a comprar', 'no compran hace'],
+  'cliente-mas-valioso': ['mejores clientes', 'mejor cliente', 'quien me compra mas', 'cliente mas valioso'],
+  'productos-sin-rotar': ['sin rotar', 'no se vendio', 'productos estancados', 'sin movimiento'],
+  'mejor-margen-para-promocionar': ['que promocionar', 'que conviene promocionar', 'mejor margen para promocionar'],
+  'clientes-nuevos-mes': ['clientes nuevos', 'cuantos clientes nuevos', 'nuevos clientes este mes']
+};
+function interpretarPreguntaLibreBam(texto) {
+  const tokensIn = normalizarTextoImport(texto).split(/\s+/).filter(Boolean);
+  const matchPalabra = (palabra) => tokensIn.some(t => t === palabra || (palabra.length >= 4 && levBam(t, palabra) <= 1));
+  let mejor = null, mejorLargo = 0;
+  for (const [id, frases] of Object.entries(ASISTENTE_BAM_PALABRAS_CLAVE)) {
+    for (const frase of frases) {
+      const palabras = frase.split(' ');
+      if (palabras.every(matchPalabra) && palabras.length > mejorLargo) { mejor = id; mejorLargo = palabras.length; }
+    }
+  }
+  return mejor;
+}
+
 // Insignia 🟢/🟡/🔴 con un veredicto corto y concreto — para que la
 // respuesta diga claramente "esto está bien" o "esto necesita atención"
 // en vez de dejar al usuario interpretando el número solo.
@@ -1913,8 +1959,12 @@ async function renderAsistenteBam() {
       </div>
       <div class="bam-chat-mensajes" id="asistente-mensajes">
         <div class="bam-chat-msg bam">
-          <div class="bam-chat-bubble">¡Hola! Tocá una pregunta de abajo y te respondo con los datos de ahora mismo.</div>
+          <div class="bam-chat-bubble">¡Hola! Escribime tu pregunta o tocá una de abajo y te respondo con los datos de ahora mismo.</div>
         </div>
+      </div>
+      <div class="bam-chat-input-row">
+        <input type="text" id="bam-chat-input" placeholder="Escribí tu pregunta…" autocomplete="off" />
+        <button class="bam-chat-send" id="bam-chat-send" title="Enviar" aria-label="Enviar">➤</button>
       </div>
       <div class="bam-chat-preguntas">
         ${ASISTENTE_BAM_CATEGORIAS.map(cat => `
@@ -1931,6 +1981,27 @@ async function renderAsistenteBam() {
   $$('.bam-chat-chip').forEach(btn => {
     btn.addEventListener('click', () => responderPreguntaAsistenteBam(btn.dataset.preg, btn.textContent));
   });
+  $('#bam-chat-send').addEventListener('click', enviarPreguntaLibreBam);
+  $('#bam-chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') enviarPreguntaLibreBam(); });
+}
+
+function enviarPreguntaLibreBam() {
+  const input = $('#bam-chat-input');
+  const texto = input.value.trim();
+  if (!texto) return;
+  input.value = '';
+  const id = interpretarPreguntaLibreBam(texto);
+  if (id) { responderPreguntaAsistenteBam(id, texto); return; }
+
+  const cont = $('#asistente-mensajes');
+  cont.insertAdjacentHTML('beforeend', `
+    <div class="bam-chat-msg propio"><div class="bam-chat-bubble">${escapeHtml(texto)}</div></div>
+  `);
+  const div = document.createElement('div');
+  div.className = 'bam-chat-msg bam';
+  div.innerHTML = `<div class="bam-chat-bubble">No entendí bien esa pregunta 🤔 Elegí una de las de abajo, o probá escribirla con otras palabras.</div>`;
+  cont.appendChild(div);
+  cont.scrollTop = cont.scrollHeight;
 }
 
 async function responderPreguntaAsistenteBam(id, pregunta) {

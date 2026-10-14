@@ -1924,9 +1924,27 @@ const ASISTENTE_BAM_PALABRAS_CLAVE = {
   'mejor-margen-para-promocionar': ['que promocionar', 'que conviene promocionar', 'mejor margen para promocionar'],
   'clientes-nuevos-mes': ['clientes nuevos', 'cuantos clientes nuevos', 'nuevos clientes este mes']
 };
+// "Hagamos una promoción para termotanques" no es ninguna de las 15
+// preguntas fijas — es una idea/pedido, no una consulta de datos. Se
+// reconoce aparte: si menciona una palabra de "promo" y (opcional) una
+// categoría del catálogo, se responde con los mejores candidatos de esa
+// categoría por margen (reusa mejor-margen-para-promocionar con filtro).
+const BAM_PALABRAS_PROMOCION = ['promocion', 'promo', 'oferta', 'liquidacion'];
+function categoriaEnTextoBam(tokensIn) {
+  for (const cat of CATEGORIAS_PRODUCTO) {
+    const palabrasCat = normalizarTextoImport(cat).split(/\s+/);
+    if (palabrasCat.every(cp => tokensIn.some(t => t === cp || (cp.length >= 4 && levBam(t, cp) <= 1)))) return cat;
+  }
+  return null;
+}
 function interpretarPreguntaLibreBam(texto) {
   const tokensIn = normalizarTextoImport(texto).split(/\s+/).filter(Boolean);
   const matchPalabra = (palabra) => tokensIn.some(t => t === palabra || (palabra.length >= 4 && levBam(t, palabra) <= 1));
+
+  if (BAM_PALABRAS_PROMOCION.some(matchPalabra)) {
+    return { id: 'mejor-margen-para-promocionar', categoria: categoriaEnTextoBam(tokensIn) };
+  }
+
   let mejor = null, mejorLargo = 0;
   for (const [id, frases] of Object.entries(ASISTENTE_BAM_PALABRAS_CLAVE)) {
     for (const frase of frases) {
@@ -1990,8 +2008,13 @@ function enviarPreguntaLibreBam() {
   const texto = input.value.trim();
   if (!texto) return;
   input.value = '';
-  const id = interpretarPreguntaLibreBam(texto);
-  if (id) { responderPreguntaAsistenteBam(id, texto); return; }
+  const resultado = interpretarPreguntaLibreBam(texto);
+  if (resultado) {
+    const id = typeof resultado === 'string' ? resultado : resultado.id;
+    const extra = typeof resultado === 'string' ? undefined : resultado.categoria;
+    responderPreguntaAsistenteBam(id, texto, extra);
+    return;
+  }
 
   const cont = $('#asistente-mensajes');
   cont.insertAdjacentHTML('beforeend', `
@@ -2004,14 +2027,14 @@ function enviarPreguntaLibreBam() {
   cont.scrollTop = cont.scrollHeight;
 }
 
-async function responderPreguntaAsistenteBam(id, pregunta) {
+async function responderPreguntaAsistenteBam(id, pregunta, extra) {
   const cont = $('#asistente-mensajes');
   cont.insertAdjacentHTML('beforeend', `
     <div class="bam-chat-msg propio"><div class="bam-chat-bubble">${escapeHtml(pregunta)}</div></div>
   `);
   cont.scrollTop = cont.scrollHeight;
 
-  const respuesta = await calcularRespuestaAsistenteBam(id);
+  const respuesta = await calcularRespuestaAsistenteBam(id, extra);
   const div = document.createElement('div');
   div.className = 'bam-chat-msg bam';
   div.innerHTML = `<div class="bam-chat-bubble">${respuesta}</div>`;
@@ -2038,7 +2061,7 @@ async function responderPreguntaAsistenteBam(id, pregunta) {
   cont.scrollTop = cont.scrollHeight;
 }
 
-async function calcularRespuestaAsistenteBam(id) {
+async function calcularRespuestaAsistenteBam(id, extra) {
   if (id === 'ventas-hoy') {
     const hoyInicio = new Date(); hoyInicio.setHours(0, 0, 0, 0);
     const hace7 = new Date(hoyInicio); hace7.setDate(hace7.getDate() - 7);
@@ -2261,17 +2284,29 @@ async function calcularRespuestaAsistenteBam(id) {
   }
 
   if (id === 'mejor-margen-para-promocionar') {
-    const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30); hace30.setHours(0, 0, 0, 0);
-    const { data } = await sb.from('ventas').select('items').gte('created_at', hace30.toISOString());
-    const vendidosIds = new Set();
-    (data || []).forEach(v => (v.items || []).forEach(it => { if (it.producto_id) vendidosIds.add(it.producto_id); }));
-    const candidatos = productosCache.filter(p => vendidosIds.has(p.id) && p.stock > 0 && Number(p.precio_venta) > 0);
+    const categoria = extra || null;
+    let candidatos;
+    if (categoria) {
+      candidatos = productosCache.filter(p => p.categoria === categoria && p.stock > 0 && Number(p.precio_venta) > 0);
+    } else {
+      const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30); hace30.setHours(0, 0, 0, 0);
+      const { data } = await sb.from('ventas').select('items').gte('created_at', hace30.toISOString());
+      const vendidosIds = new Set();
+      (data || []).forEach(v => (v.items || []).forEach(it => { if (it.producto_id) vendidosIds.add(it.producto_id); }));
+      candidatos = productosCache.filter(p => vendidosIds.has(p.id) && p.stock > 0 && Number(p.precio_venta) > 0);
+    }
     const conMargen = candidatos.map(p => ({ p, m: margenPct(p.costo, p.precio_venta) })).filter(x => x.m != null);
-    if (conMargen.length === 0) return 'No encontré productos vendidos recientemente con datos de costo/precio para comparar márgenes.';
+    if (conMargen.length === 0) {
+      return categoria
+        ? `No tenés productos de ${escapeHtml(categoria)} con stock y costo/precio cargados para armar una promo.`
+        : 'No encontré productos vendidos recientemente con datos de costo/precio para comparar márgenes.';
+    }
     conMargen.sort((a, b) => b.m - a.m);
     const top = conMargen.slice(0, 5);
     const lista = top.map(x => `• ${escapeHtml(x.p.descripcion)} — ${x.m.toFixed(0)}% de margen (stock: ${x.p.stock})`).join('<br>');
-    return `Estos productos que ya se están vendiendo tienen el mejor margen — son los mejores candidatos para empujar en una promo o destacar en el mostrador:<br>${lista}`;
+    return categoria
+      ? `Para armar una promoción de ${escapeHtml(categoria.toLowerCase())}, estos son tus mejores candidatos por margen:<br>${lista}`
+      : `Estos productos que ya se están vendiendo tienen el mejor margen — son los mejores candidatos para empujar en una promo o destacar en el mostrador:<br>${lista}`;
   }
 
   if (id === 'clientes-nuevos-mes') {

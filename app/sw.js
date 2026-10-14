@@ -8,14 +8,14 @@
 // Los archivos propios se sirven "caché primero" — sin el ?v=N nuevo, el
 // navegador puede seguir mostrando la versión vieja aunque ya hayas
 // resubido los archivos a Cloudflare.
-const CACHE_VERSION = 'bm-app-v57';
+const CACHE_VERSION = 'bm-app-v58';
 const APP_SHELL = [
   'index.html',
   'catalogo.html',
-  'style.css?v=57',
-  'app.js?v=57',
-  'catalogo-publico.js?v=57',
-  'config.js?v=57',
+  'style.css?v=58',
+  'app.js?v=58',
+  'catalogo-publico.js?v=58',
+  'config.js?v=58',
   'offline.html',
   'manifest.json',
   'icons/icon-192.png',
@@ -23,14 +23,14 @@ const APP_SHELL = [
   'icons/icon-maskable-512.png',
   'icons/apple-touch-icon.png',
   'icons/bam-avatar.png',
-  'vendor/capacitor/capacitor-core.js?v=57',
-  'vendor/capacitor/synapse.js?v=57',
-  'vendor/capacitor/bridge-alias.js?v=57',
-  'vendor/capacitor/filesystem-plugin.js?v=57',
-  'vendor/capacitor/share-plugin.js?v=57',
-  'vendor/capacitor/app-plugin.js?v=57',
-  'vendor/capacitor/local-notifications-plugin.js?v=57',
-  'vendor/capacitor/native-biometric-plugin.js?v=57'
+  'vendor/capacitor/capacitor-core.js?v=58',
+  'vendor/capacitor/synapse.js?v=58',
+  'vendor/capacitor/bridge-alias.js?v=58',
+  'vendor/capacitor/filesystem-plugin.js?v=58',
+  'vendor/capacitor/share-plugin.js?v=58',
+  'vendor/capacitor/app-plugin.js?v=58',
+  'vendor/capacitor/local-notifications-plugin.js?v=58',
+  'vendor/capacitor/native-biometric-plugin.js?v=58'
 ];
 
 self.addEventListener('install', (event) => {

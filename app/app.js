@@ -1870,6 +1870,36 @@ const ASISTENTE_BAM_CATEGORIAS = [
 ];
 const ASISTENTE_BAM_PREGUNTAS = ASISTENTE_BAM_CATEGORIAS.flatMap(c => c.preguntas);
 
+// Para cada pregunta, 3 preguntas relacionadas orientadas a mejorar ese
+// número — se muestran como sugerencias después de responder, para
+// poder seguir profundizando sin tener que bajar a buscarlas abajo.
+const ASISTENTE_BAM_RELACIONADAS = {
+  'ventas-hoy': ['mejor-dia-ventas', 'productos-mas-vendidos', 'crecimiento-mensual'],
+  'margen-mes': ['mejor-margen-para-promocionar', 'productos-mas-vendidos', 'crecimiento-mensual'],
+  'ticket-promedio': ['productos-mas-vendidos', 'cliente-mas-valioso', 'mejor-margen-para-promocionar'],
+  'productos-mas-vendidos': ['mejor-margen-para-promocionar', 'stock-bajo', 'productos-sin-rotar'],
+  'crecimiento-mensual': ['mejor-dia-ventas', 'clientes-nuevos-mes', 'productos-mas-vendidos'],
+  'mejor-dia-ventas': ['ventas-hoy', 'productos-mas-vendidos', 'crecimiento-mensual'],
+  'cotizaciones-pendientes': ['clientes-inactivos', 'cliente-mas-valioso', 'ventas-hoy'],
+  'pendiente-cobrar': ['cotizaciones-pendientes', 'clientes-inactivos', 'ventas-hoy'],
+  'stock-bajo': ['productos-mas-vendidos', 'productos-sin-rotar', 'mejor-margen-para-promocionar'],
+  'garantias-por-vencer': ['clientes-inactivos', 'cliente-mas-valioso', 'pendiente-cobrar'],
+  'clientes-inactivos': ['cliente-mas-valioso', 'productos-sin-rotar', 'mejor-margen-para-promocionar'],
+  'cliente-mas-valioso': ['clientes-inactivos', 'clientes-nuevos-mes', 'ticket-promedio'],
+  'productos-sin-rotar': ['mejor-margen-para-promocionar', 'stock-bajo', 'clientes-inactivos'],
+  'mejor-margen-para-promocionar': ['productos-mas-vendidos', 'stock-bajo', 'productos-sin-rotar'],
+  'clientes-nuevos-mes': ['cliente-mas-valioso', 'crecimiento-mensual', 'clientes-inactivos']
+};
+
+// Insignia 🟢/🟡/🔴 con un veredicto corto y concreto — para que la
+// respuesta diga claramente "esto está bien" o "esto necesita atención"
+// en vez de dejar al usuario interpretando el número solo.
+function insigniaVeredicto(nivel, texto) {
+  const porNivel = { ok: ['🟢', 'bam-verdict-ok'], warn: ['🟡', 'bam-verdict-warn'], bad: ['🔴', 'bam-verdict-bad'] };
+  const [emoji, clase] = porNivel[nivel] || porNivel.warn;
+  return `<div class="bam-verdict ${clase}">${emoji} ${escapeHtml(texto)}</div>`;
+}
+
 async function renderAsistenteBam() {
   const el = $('#view-asistente');
   el.innerHTML = `
@@ -1915,6 +1945,25 @@ async function responderPreguntaAsistenteBam(id, pregunta) {
   div.className = 'bam-chat-msg bam';
   div.innerHTML = `<div class="bam-chat-bubble">${respuesta}</div>`;
   cont.appendChild(div);
+
+  const relacionadas = (ASISTENTE_BAM_RELACIONADAS[id] || [])
+    .map(relId => ASISTENTE_BAM_PREGUNTAS.find(p => p.id === relId))
+    .filter(Boolean);
+  if (relacionadas.length) {
+    const sug = document.createElement('div');
+    sug.className = 'bam-chat-sugeridas';
+    sug.innerHTML = `
+      <div class="bam-chat-sugeridas-lbl">💡 Para seguir mejorando, también podés preguntar:</div>
+      <div class="bam-chat-sugeridas-chips">
+        ${relacionadas.map(p => `<button class="bam-chat-chip" data-preg="${p.id}">${escapeHtml(p.label)}</button>`).join('')}
+      </div>
+    `;
+    cont.appendChild(sug);
+    sug.querySelectorAll('[data-preg]').forEach(btn => {
+      btn.addEventListener('click', () => responderPreguntaAsistenteBam(btn.dataset.preg, btn.textContent));
+    });
+  }
+
   cont.scrollTop = cont.scrollHeight;
 }
 
@@ -1928,19 +1977,20 @@ async function calcularRespuestaAsistenteBam(id) {
     const previas = todas.filter(v => new Date(v.created_at) < hoyInicio);
     const totalHoy = deHoy.reduce((s, v) => s + Number(v.total), 0);
     const promedioDiario = previas.length > 0 ? previas.reduce((s, v) => s + Number(v.total), 0) / 7 : null;
-    let comparacion = '';
+    let comparacion = '', veredicto = '';
     if (promedioDiario != null && promedioDiario > 0) {
       const pct = ((totalHoy - promedioDiario) / promedioDiario) * 100;
       comparacion = ` — ${pct >= 0 ? 'vas' : 'estás'} ${Math.abs(pct).toFixed(0)}% ${pct >= 0 ? 'arriba' : 'abajo'} del promedio diario de la última semana (${money(promedioDiario)}).`;
+      veredicto = insigniaVeredicto(pct >= 10 ? 'ok' : pct <= -20 ? 'bad' : 'warn', pct >= 10 ? 'Arriba del promedio' : pct <= -20 ? 'Abajo del promedio' : 'En línea con el promedio');
     }
     return deHoy.length === 0
-      ? `Todavía no registraste ninguna venta hoy.${promedioDiario ? ` El promedio de los últimos 7 días es ${money(promedioDiario)}/día.` : ''}`
-      : `Hoy vendiste <strong>${money(totalHoy)}</strong> en ${deHoy.length} venta${deHoy.length === 1 ? '' : 's'}.${comparacion}`;
+      ? `${veredicto}Todavía no registraste ninguna venta hoy.${promedioDiario ? ` El promedio de los últimos 7 días es ${money(promedioDiario)}/día.` : ''}`
+      : `${veredicto}Hoy vendiste <strong>${money(totalHoy)}</strong> en ${deHoy.length} venta${deHoy.length === 1 ? '' : 's'}.${comparacion}`;
   }
 
   if (id === 'stock-bajo') {
     const bajos = productosCache.filter(p => Number(p.stock) <= Number(p.stock_minimo ?? 0));
-    if (bajos.length === 0) return 'Ningún producto está con stock bajo ahora mismo. 👍';
+    if (bajos.length === 0) return insigniaVeredicto('ok', 'Stock saludable') + 'Ningún producto está con stock bajo ahora mismo. 👍';
     const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30); hace30.setHours(0, 0, 0, 0);
     const { data } = await sb.from('ventas').select('items').gte('created_at', hace30.toISOString());
     const vendidosIds = new Set();
@@ -1948,20 +1998,22 @@ async function calcularRespuestaAsistenteBam(id) {
     const ordenados = [...bajos].sort((a, b) => (vendidosIds.has(b.id) ? 1 : 0) - (vendidosIds.has(a.id) ? 1 : 0));
     const urgentes = ordenados.filter(p => vendidosIds.has(p.id)).length;
     const lista = ordenados.slice(0, 8).map(p => `• ${escapeHtml(p.descripcion)} (quedan ${p.stock})${vendidosIds.has(p.id) ? ' ⚠ se sigue vendiendo' : ''}`).join('<br>');
-    return `Tenés <strong>${bajos.length}</strong> producto${bajos.length === 1 ? '' : 's'} con stock bajo${urgentes > 0 ? `, <strong>${urgentes}</strong> de ellos todavía se están vendiendo (prioridad para reponer)` : ''}:<br>${lista}${bajos.length > 8 ? `<br>…y ${bajos.length - 8} más.` : ''}`;
+    const veredicto = insigniaVeredicto(urgentes > 0 ? 'bad' : 'warn', urgentes > 0 ? 'Reposición urgente' : 'Revisar pronto');
+    return `${veredicto}Tenés <strong>${bajos.length}</strong> producto${bajos.length === 1 ? '' : 's'} con stock bajo${urgentes > 0 ? `, <strong>${urgentes}</strong> de ellos todavía se están vendiendo (prioridad para reponer)` : ''}:<br>${lista}${bajos.length > 8 ? `<br>…y ${bajos.length - 8} más.` : ''}`;
   }
 
   if (id === 'pendiente-cobrar') {
     const { data } = await sb.from('ventas').select('*').eq('cobrado', false);
     const pend = data || [];
-    if (pend.length === 0) return 'No tenés ventas pendientes de cobro. 👍';
+    if (pend.length === 0) return insigniaVeredicto('ok', 'Nada pendiente') + 'No tenés ventas pendientes de cobro. 👍';
     const total = pend.reduce((s, v) => s + Number(v.total), 0);
     const vencidas = pend.filter(v => diasRestantesCuota(v) < 0);
     const totalVencido = vencidas.reduce((s, v) => s + Number(v.total), 0);
     const avisoVencidas = vencidas.length > 0
       ? ` De eso, <strong>${money(totalVencido)}</strong> en ${vencidas.length} venta${vencidas.length === 1 ? '' : 's'} ya está${vencidas.length === 1 ? '' : 'n'} vencida${vencidas.length === 1 ? '' : 's'} — priorizá cobrarlas.`
       : ' Ninguna está vencida todavía, todas dentro del plazo.';
-    return `Tenés <strong>${money(total)}</strong> pendientes de cobrar, en ${pend.length} venta${pend.length === 1 ? '' : 's'} a crédito.${avisoVencidas}`;
+    const veredicto = insigniaVeredicto(vencidas.length > 0 ? 'bad' : 'warn', vencidas.length > 0 ? 'Hay cobros vencidos' : 'Dentro de plazo');
+    return `${veredicto}Tenés <strong>${money(total)}</strong> pendientes de cobrar, en ${pend.length} venta${pend.length === 1 ? '' : 's'} a crédito.${avisoVencidas}`;
   }
 
   if (id === 'margen-mes') {
@@ -1976,23 +2028,25 @@ async function calcularRespuestaAsistenteBam(id) {
     const margen = margenDe(actual);
     const totalVentas = totalDe(actual);
     const pct = totalVentas > 0 ? (margen / totalVentas) * 100 : 0;
-    let tendencia = '';
+    let tendencia = '', veredicto = insigniaVeredicto('warn', 'Sin comparación todavía');
     if (anterior.length > 0) {
       const margenAnterior = margenDe(anterior);
       const diff = margen - margenAnterior;
       tendencia = diff === 0 ? ' Igual que en los 30 días previos.' : ` ${diff > 0 ? '▲' : '▼'} ${money(Math.abs(diff))} ${diff > 0 ? 'más' : 'menos'} que en los 30 días previos (${money(margenAnterior)}).`;
+      veredicto = insigniaVeredicto(diff > 0 ? 'ok' : diff < 0 ? 'bad' : 'warn', diff > 0 ? 'Margen mejorando' : diff < 0 ? 'Margen cayendo' : 'Margen estable');
     }
-    return `En los últimos 30 días tu margen estimado es de <strong>${money(margen)}</strong> (${pct.toFixed(1)}% sobre ${money(totalVentas)} vendidos).${tendencia}`;
+    return `${veredicto}En los últimos 30 días tu margen estimado es de <strong>${money(margen)}</strong> (${pct.toFixed(1)}% sobre ${money(totalVentas)} vendidos).${tendencia}`;
   }
 
   if (id === 'cotizaciones-pendientes') {
     const { data } = await sb.from('cotizaciones').select('*').eq('estado', 'pendiente').order('created_at');
     const pend = data || [];
-    if (pend.length === 0) return 'No hay cotizaciones esperando tu aprobación. 👍';
+    if (pend.length === 0) return insigniaVeredicto('ok', 'Al día') + 'No hay cotizaciones esperando tu aprobación. 👍';
     const montoTotal = pend.reduce((s, c) => s + Number(c.total || 0), 0);
     const masVieja = pend[0];
     const diasEspera = Math.floor((new Date() - new Date(masVieja.created_at)) / (24 * 60 * 60 * 1000));
-    return `Tenés <strong>${pend.length}</strong> ${pend.length === 1 ? 'cotización' : 'cotizaciones'} esperando aprobación, por <strong>${money(montoTotal)}</strong> en total. La más antigua (${escapeHtml(masVieja.cliente_nombre)}) lleva ${diasEspera} día${diasEspera === 1 ? '' : 's'} esperando.`;
+    const veredicto = insigniaVeredicto(diasEspera >= 5 ? 'bad' : diasEspera >= 2 ? 'warn' : 'ok', diasEspera >= 5 ? 'Dale seguimiento ya' : diasEspera >= 2 ? 'Conviene dar seguimiento' : 'Recién llegadas');
+    return `${veredicto}Tenés <strong>${pend.length}</strong> ${pend.length === 1 ? 'cotización' : 'cotizaciones'} esperando aprobación, por <strong>${money(montoTotal)}</strong> en total. La más antigua (${escapeHtml(masVieja.cliente_nombre)}) lleva ${diasEspera} día${diasEspera === 1 ? '' : 's'} esperando.`;
   }
 
   if (id === 'garantias-por-vencer') {
@@ -2002,9 +2056,9 @@ async function calcularRespuestaAsistenteBam(id) {
       .gte('fecha_vencimiento', hoyIso).lte('fecha_vencimiento', fechaISO(en30dias))
       .order('fecha_vencimiento');
     const garantias = data || [];
-    if (garantias.length === 0) return 'Ninguna garantía vence en los próximos 30 días.';
+    if (garantias.length === 0) return insigniaVeredicto('ok', 'Nada por ahora') + 'Ninguna garantía vence en los próximos 30 días.';
     const lista = garantias.slice(0, 8).map(g => `• ${escapeHtml(g.producto_descripcion)} — ${escapeHtml(g.cliente_nombre)} (vence ${fecha(g.fecha_vencimiento)})`).join('<br>');
-    return `<strong>${garantias.length}</strong> garantía${garantias.length === 1 ? '' : 's'} vence${garantias.length === 1 ? '' : 'n'} en los próximos 30 días:<br>${lista}<br><br>💡 Buen momento para contactarlos y ofrecerles un service, una revisión o una garantía extendida.`;
+    return `${insigniaVeredicto('warn', 'Oportunidad de contacto')}<strong>${garantias.length}</strong> garantía${garantias.length === 1 ? '' : 's'} vence${garantias.length === 1 ? '' : 'n'} en los próximos 30 días:<br>${lista}<br><br>💡 Buen momento para contactarlos y ofrecerles un service, una revisión o una garantía extendida.`;
   }
 
   if (id === 'ticket-promedio') {
@@ -2016,15 +2070,16 @@ async function calcularRespuestaAsistenteBam(id) {
     const anterior = todas.filter(v => new Date(v.created_at) < hace30);
     if (actual.length === 0) return 'Todavía no hay ventas en los últimos 30 días para calcular un promedio.';
     const promedio = actual.reduce((s, v) => s + Number(v.total), 0) / actual.length;
-    let tendencia = '';
+    let tendencia = '', veredicto = insigniaVeredicto('warn', 'Sin comparación todavía');
     if (anterior.length > 0) {
       const promedioAnterior = anterior.reduce((s, v) => s + Number(v.total), 0) / anterior.length;
       if (promedioAnterior > 0) {
         const pct = ((promedio - promedioAnterior) / promedioAnterior) * 100;
         tendencia = ` ${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(0)}% vs. los 30 días previos (${money(promedioAnterior)}).`;
+        veredicto = insigniaVeredicto(pct > 0 ? 'ok' : pct < 0 ? 'bad' : 'warn', pct > 0 ? 'Ticket creciendo' : pct < 0 ? 'Ticket cayendo' : 'Ticket estable');
       }
     }
-    return `En los últimos 30 días tu ticket promedio fue de <strong>${money(promedio)}</strong>, sobre ${actual.length} venta${actual.length === 1 ? '' : 's'}.${tendencia}`;
+    return `${veredicto}En los últimos 30 días tu ticket promedio fue de <strong>${money(promedio)}</strong>, sobre ${actual.length} venta${actual.length === 1 ? '' : 's'}.${tendencia}`;
   }
 
   if (id === 'productos-mas-vendidos') {
@@ -2058,9 +2113,10 @@ async function calcularRespuestaAsistenteBam(id) {
     const todas = data || [];
     const totalEste = todas.filter(v => new Date(v.created_at) >= inicioMesActual).reduce((s, v) => s + Number(v.total), 0);
     const totalAnteriorComparable = todas.filter(v => new Date(v.created_at) >= inicioMesAnterior && new Date(v.created_at) < finMesAnteriorComparable).reduce((s, v) => s + Number(v.total), 0);
-    if (totalAnteriorComparable === 0) return `Llevás <strong>${money(totalEste)}</strong> vendidos este mes (sin datos del mes pasado a esta misma altura para comparar).`;
+    if (totalAnteriorComparable === 0) return insigniaVeredicto('warn', 'Sin comparación todavía') + `Llevás <strong>${money(totalEste)}</strong> vendidos este mes (sin datos del mes pasado a esta misma altura para comparar).`;
     const pct = ((totalEste - totalAnteriorComparable) / totalAnteriorComparable) * 100;
-    return `Llevás <strong>${money(totalEste)}</strong> vendidos este mes (hasta hoy, día ${hoy.getDate()}). El mes pasado, a esta misma altura, llevabas ${money(totalAnteriorComparable)} — estás ${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(0)}%.`;
+    const veredicto = insigniaVeredicto(pct >= 0 ? 'ok' : 'bad', pct >= 0 ? 'Creciendo vs. el mes pasado' : 'Cayendo vs. el mes pasado');
+    return `${veredicto}Llevás <strong>${money(totalEste)}</strong> vendidos este mes (hasta hoy, día ${hoy.getDate()}). El mes pasado, a esta misma altura, llevabas ${money(totalAnteriorComparable)} — estás ${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(0)}%.`;
   }
 
   if (id === 'mejor-dia-ventas') {
@@ -2095,11 +2151,11 @@ async function calcularRespuestaAsistenteBam(id) {
     const inactivos = (clientes || [])
       .map(c => { const info = porCliente.get(normalizarTextoImport(c.nombre || '')); return info ? { c, ...info } : null; })
       .filter(x => x && new Date(x.ultima) < hace60);
-    if (inactivos.length === 0) return 'No tenés clientes con compras registradas que lleven más de 60 días sin volver.';
+    if (inactivos.length === 0) return insigniaVeredicto('ok', 'Cartera activa') + 'No tenés clientes con compras registradas que lleven más de 60 días sin volver.';
     inactivos.sort((a, b) => b.totalGastado - a.totalGastado);
     const totalEnJuego = inactivos.reduce((s, x) => s + x.totalGastado, 0);
     const lista = inactivos.slice(0, 8).map(x => `• ${escapeHtml(x.c.nombre)}${x.c.telefono ? ' — ' + escapeHtml(x.c.telefono) : ''} (te compró ${money(x.totalGastado)} en ${x.compras} compra${x.compras === 1 ? '' : 's'})`).join('<br>');
-    return `<strong>${inactivos.length}</strong> cliente${inactivos.length === 1 ? '' : 's'} no compra${inactivos.length === 1 ? '' : 'n'} hace más de 60 días, por <strong>${money(totalEnJuego)}</strong> en compras históricas. Priorizá a los de arriba (son los que más te compraron) para una campaña de reactivación:<br>${lista}${inactivos.length > 8 ? `<br>…y ${inactivos.length - 8} más.` : ''}`;
+    return `${insigniaVeredicto('warn', 'Oportunidad de reactivación')}<strong>${inactivos.length}</strong> cliente${inactivos.length === 1 ? '' : 's'} no compra${inactivos.length === 1 ? '' : 'n'} hace más de 60 días, por <strong>${money(totalEnJuego)}</strong> en compras históricas. Priorizá a los de arriba (son los que más te compraron) para una campaña de reactivación:<br>${lista}${inactivos.length > 8 ? `<br>…y ${inactivos.length - 8} más.` : ''}`;
   }
 
   if (id === 'cliente-mas-valioso') {
@@ -2126,11 +2182,11 @@ async function calcularRespuestaAsistenteBam(id) {
     const vendidosIds = new Set();
     (data || []).forEach(v => (v.items || []).forEach(it => { if (it.producto_id) vendidosIds.add(it.producto_id); }));
     const sinRotar = productosCache.filter(p => p.stock > 0 && !vendidosIds.has(p.id));
-    if (sinRotar.length === 0) return 'Todo tu stock tuvo al menos una venta en los últimos 30 días. 👍';
+    if (sinRotar.length === 0) return insigniaVeredicto('ok', 'Todo rotando') + 'Todo tu stock tuvo al menos una venta en los últimos 30 días. 👍';
     const valorInmovilizado = sinRotar.reduce((s, p) => s + Number(p.stock) * Number(p.costo || 0), 0);
     const topPorValor = [...sinRotar].sort((a, b) => (Number(b.stock) * Number(b.costo || 0)) - (Number(a.stock) * Number(a.costo || 0))).slice(0, 8);
     const lista = topPorValor.map(p => `• ${escapeHtml(p.descripcion)} — ${p.stock} en stock (${money(Number(p.stock) * Number(p.costo || 0))} inmovilizados)`).join('<br>');
-    return `<strong>${sinRotar.length}</strong> producto${sinRotar.length === 1 ? '' : 's'} sin ninguna venta en 30 días, con <strong>${money(valorInmovilizado)}</strong> inmovilizados en stock — candidatos a promoción o liquidación:<br>${lista}${sinRotar.length > 8 ? `<br>…y ${sinRotar.length - 8} más.` : ''}`;
+    return `${insigniaVeredicto('bad', 'Capital inmovilizado')}<strong>${sinRotar.length}</strong> producto${sinRotar.length === 1 ? '' : 's'} sin ninguna venta en 30 días, con <strong>${money(valorInmovilizado)}</strong> inmovilizados en stock — candidatos a promoción o liquidación:<br>${lista}${sinRotar.length > 8 ? `<br>…y ${sinRotar.length - 8} más.` : ''}`;
   }
 
   if (id === 'mejor-margen-para-promocionar') {
@@ -2156,9 +2212,12 @@ async function calcularRespuestaAsistenteBam(id) {
     const esteMs = todos.filter(c => new Date(c.created_at) >= inicioMes).length;
     const mesAnterior = todos.filter(c => new Date(c.created_at) < inicioMes).length;
     const tendencia = mesAnterior > 0 ? ` (el mes pasado fueron ${mesAnterior})` : '';
+    const veredicto = mesAnterior > 0
+      ? insigniaVeredicto(esteMs >= mesAnterior ? 'ok' : 'bad', esteMs >= mesAnterior ? 'Igual o mejor que el mes pasado' : 'Menos que el mes pasado')
+      : insigniaVeredicto('warn', 'Sin comparación todavía');
     return esteMs === 0
-      ? `Todavía no registraste clientes nuevos este mes.${tendencia}`
-      : `Este mes sumaste <strong>${esteMs}</strong> cliente${esteMs === 1 ? '' : 's'} nuevo${esteMs === 1 ? '' : 's'}${tendencia}.`;
+      ? `${veredicto}Todavía no registraste clientes nuevos este mes.${tendencia}`
+      : `${veredicto}Este mes sumaste <strong>${esteMs}</strong> cliente${esteMs === 1 ? '' : 's'} nuevo${esteMs === 1 ? '' : 's'}${tendencia}.`;
   }
 
   return 'No pude calcular esa respuesta.';

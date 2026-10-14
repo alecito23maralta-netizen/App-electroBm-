@@ -1024,6 +1024,24 @@ button.card:hover { border-color: var(--accent); background: var(--surface-2); }
 }
 .bam-chat-chip:hover { background: #0b7d6f28; }
 
+/* Insignia de veredicto (🟢/🟡/🔴) al inicio de una respuesta del
+   Asistente BAM — un llamado claro, no ambiguo, antes del detalle. */
+.bam-verdict {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  padding: 3px 9px; border-radius: 999px; margin-bottom: 7px;
+}
+.bam-verdict-ok { background: #d9fdd3; color: #0b7d4f; }
+.bam-verdict-warn { background: #fff0bf; color: #8a6400; }
+.bam-verdict-bad { background: #ffd9d4; color: #b42318; }
+
+/* Preguntas relacionadas sugeridas después de cada respuesta, para
+   seguir profundizando sin tener que bajar al panel de categorías. */
+.bam-chat-sugeridas { align-self: flex-start; max-width: 92%; }
+.bam-chat-sugeridas-lbl { font-size: 11.5px; color: var(--text-faint); margin: 2px 0 6px 2px; }
+.bam-chat-sugeridas-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.bam-chat-sugeridas .bam-chat-chip { background: #fff; border-color: #0b7d6f44; color: #0b7d6f; font-size: 12px; padding: 6px 11px; }
+.bam-chat-sugeridas .bam-chat-chip:hover { background: #0b7d6f14; }
+
 /* Caja de medio de pago incrustada en la nota (vista previa / imagen) */
 .docprev-pago-box {
   margin-top: 16px; border: 2px solid #14161c; border-radius: 10px;

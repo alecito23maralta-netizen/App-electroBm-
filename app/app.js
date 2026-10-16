@@ -1452,16 +1452,15 @@ let rotacionMesFiltro = 'todos';
 async function renderInventario() {
   await cargarProductos();
   const el = $('#view-inventario');
+  const puedeGestionarInventario = tienePermisoModulo('inventario');
   el.innerHTML = `
     <div class="section-head">
       <div><h2>Inventario</h2><p class="sub">Catálogo, stock y movimientos</p></div>
-      ${profile.rol === 'admin' ? `
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-secondary" id="btn-ir-importar">📥 Importar / Actualizar Excel</button>
-          <button class="btn btn-secondary" id="btn-cargar-compra">📦 Cargar compra</button>
-          <button class="btn btn-primary" id="btn-nuevo-producto">+ Agregar producto</button>
-        </div>
-      ` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${tienePermisoModulo('importar_excel') ? `<button class="btn btn-secondary" id="btn-ir-importar">📥 Importar / Actualizar Excel</button>` : ''}
+        ${puedeGestionarInventario ? `<button class="btn btn-secondary" id="btn-cargar-compra">📦 Cargar compra</button>
+        <button class="btn btn-primary" id="btn-nuevo-producto">+ Agregar producto</button>` : ''}
+      </div>
     </div>
     <div id="inv-low-stock-banner"></div>
     <div class="tabs" id="inv-tabs">
@@ -1471,10 +1470,14 @@ async function renderInventario() {
     </div>
     <div id="inv-content"></div>
   `;
-  if (profile.rol === 'admin') {
+  if (puedeGestionarInventario) {
     $('#btn-nuevo-producto').addEventListener('click', () => abrirFormProducto());
-    $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
     $('#btn-cargar-compra').addEventListener('click', () => abrirImportadorCompra());
+  }
+  if (tienePermisoModulo('importar_excel')) {
+    $('#btn-ir-importar').addEventListener('click', () => abrirImportadorProductos());
+  }
+  if (profile.rol === 'admin') {
     $('#tab-control').addEventListener('click', () => cambiarTabInventario('control'));
   }
   $('#tab-catalogo').addEventListener('click', () => cambiarTabInventario('catalogo'));
@@ -1530,7 +1533,7 @@ function filaProductoHtml(p) {
       <td><div class="row-actions">
         <button class="icon-btn" data-act="entrada" data-id="${p.id}" title="Registrar entrada">＋</button>
         <button class="icon-btn" data-act="salida" data-id="${p.id}" title="Registrar salida">－</button>
-        ${profile.rol === 'admin' ? `<button class="icon-btn" data-act="editar" data-id="${p.id}" title="Editar">✎</button>
+        ${tienePermisoModulo('inventario') ? `<button class="icon-btn" data-act="editar" data-id="${p.id}" title="Editar">✎</button>
         <button class="icon-btn" data-act="eliminar" data-id="${p.id}" title="Eliminar">🗑</button>` : ''}
       </div></td>
     </tr>`;

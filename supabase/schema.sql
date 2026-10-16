@@ -1061,3 +1061,56 @@ alter table public.bam_frases_aprendidas enable row level security;
 drop policy if exists "bam_frases_aprendidas_all" on public.bam_frases_aprendidas;
 create policy "bam_frases_aprendidas_all" on public.bam_frases_aprendidas
   for all using (public.is_admin()) with check (public.is_admin());
+
+-- ============================================================
+-- ACTUALIZACIÓN: los permisos de acceso por módulo (grilla en Usuarios)
+-- hasta ahora solo controlaban qué veía el vendedor en el menú de la
+-- app — pero las políticas de la base seguían exigiendo is_admin() para
+-- escribir en productos/garantías y para ver a otros vendedores, así
+-- que un vendedor con el módulo "Inventario" habilitado igual no podía
+-- guardar cambios (ej. subir una foto) porque Supabase se lo rechazaba
+-- de entrada. Esta función deja pasar también al que tenga el permiso
+-- puntual, y se usa en las políticas de escritura de los módulos que sí
+-- se pueden delegar por permiso.
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create or replace function public.tiene_permiso_modulo(modulo text)
+returns boolean
+language sql
+security definer
+stable
+as $$
+  select public.is_admin() or exists (
+    select 1 from public.profiles
+    where id = auth.uid() and modulo = any(permisos)
+  );
+$$;
+
+-- PRODUCTOS: antes solo el admin podía crear/editar/borrar (ej. subir
+-- una foto) — ahora también quien tenga el módulo Inventario o Importar
+-- Excel habilitado.
+drop policy if exists "productos_write" on public.productos;
+create policy "productos_write" on public.productos
+  for all
+  using (public.tiene_permiso_modulo('inventario') or public.tiene_permiso_modulo('importar_excel'))
+  with check (public.tiene_permiso_modulo('inventario') or public.tiene_permiso_modulo('importar_excel'));
+
+-- GARANTÍAS: antes solo el admin podía registrar/editar/borrar — ahora
+-- también quien tenga el módulo Garantías habilitado.
+drop policy if exists "garantias_write" on public.garantias;
+create policy "garantias_write" on public.garantias
+  for all
+  using (public.tiene_permiso_modulo('garantias'))
+  with check (public.tiene_permiso_modulo('garantias'));
+
+-- VENTAS y PROFILES: el reporte de "Vendedores" necesita ver las ventas
+-- y los nombres de TODO el equipo, no solo las propias — antes esto
+-- solo lo veía el admin; ahora también quien tenga el módulo Vendedores
+-- habilitado.
+drop policy if exists "ventas_select" on public.ventas;
+create policy "ventas_select" on public.ventas
+  for select using (vendedor_id = auth.uid() or public.tiene_permiso_modulo('vendedores'));
+
+drop policy if exists "profiles_select" on public.profiles;
+create policy "profiles_select" on public.profiles
+  for select using (id = auth.uid() or public.tiene_permiso_modulo('vendedores'));

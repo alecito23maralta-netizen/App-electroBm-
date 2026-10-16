@@ -1036,3 +1036,28 @@ alter table public.profiles add column if not exists email_notificaciones text;
 -- Ejecutar en el proyecto que ya tenías creado
 -- ============================================================
 alter table public.comprobantes add column if not exists venta_total numeric(12,2);
+
+-- ============================================================
+-- ACTUALIZACIÓN: "aprendizaje" del Asistente BAM — cuando no reconoce
+-- una pregunta escrita libremente y el admin toca la correcta entre
+-- los botones, esa frase exacta queda guardada acá apuntando a esa
+-- pregunta, para reconocerla directo la próxima vez (sin IA ni API de
+-- pago: solo una tabla de frase -> pregunta, compartida entre
+-- dispositivos porque vive en Supabase y no en el celular de nadie).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+create table if not exists public.bam_frases_aprendidas (
+  id uuid primary key default gen_random_uuid(),
+  frase_normalizada text not null unique,
+  pregunta_id text not null,
+  usuario_id uuid references public.profiles (id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.bam_frases_aprendidas enable row level security;
+
+-- El Asistente BAM es admin-only (ver nav-asistente en la app), así que
+-- tanto leer como enseñarle frases nuevas queda reservado al admin.
+drop policy if exists "bam_frases_aprendidas_all" on public.bam_frases_aprendidas;
+create policy "bam_frases_aprendidas_all" on public.bam_frases_aprendidas
+  for all using (public.is_admin()) with check (public.is_admin());

@@ -1972,8 +1972,32 @@ function categoriaEnTextoBam(tokensIn) {
   }
   return null;
 }
+// "Aprendizaje" de BAM, sin IA ni API de pago: cuando no reconoce una
+// pregunta y el admin toca la correcta de abajo, esa frase exacta queda
+// guardada (en Supabase, compartida entre dispositivos) apuntando a esa
+// pregunta — la próxima vez que se escriba así, la reconoce directo,
+// antes de pasar por las reglas de palabras clave de siempre.
+let bamFrasesAprendidas = [];
+let bamUltimaPreguntaNoEntendida = null;
+async function cargarFrasesAprendidasBam() {
+  const { data } = await sb.from('bam_frases_aprendidas').select('*');
+  bamFrasesAprendidas = data || [];
+}
+async function aprenderFraseBam(fraseOriginal, preguntaId) {
+  const frase = normalizarTextoImport(fraseOriginal);
+  if (!frase || bamFrasesAprendidas.some(f => f.frase_normalizada === frase)) return;
+  const { data, error } = await sb.from('bam_frases_aprendidas')
+    .insert({ frase_normalizada: frase, pregunta_id: preguntaId, usuario_id: profile.id })
+    .select().single();
+  if (!error && data) bamFrasesAprendidas.push(data);
+}
+
 function interpretarPreguntaLibreBam(texto) {
-  const tokensIn = normalizarTextoImport(texto).split(/\s+/).filter(Boolean);
+  const fraseNorm = normalizarTextoImport(texto);
+  const aprendida = bamFrasesAprendidas.find(f => f.frase_normalizada === fraseNorm);
+  if (aprendida) return aprendida.pregunta_id;
+
+  const tokensIn = fraseNorm.split(/\s+/).filter(Boolean);
   const matchPalabra = (palabra) => tokensIn.some(t => t === palabra || (palabra.length >= 4 && levBam(t, palabra) <= 1));
 
   if (BAM_PALABRAS_PROMOCION.some(matchPalabra)) {
@@ -2000,6 +2024,7 @@ function insigniaVeredicto(nivel, texto) {
 }
 
 async function renderAsistenteBam() {
+  await cargarFrasesAprendidasBam();
   const el = $('#view-asistente');
   el.innerHTML = `
     <div class="bam-chat">
@@ -2032,7 +2057,13 @@ async function renderAsistenteBam() {
     </div>
   `;
   $$('.bam-chat-chip').forEach(btn => {
-    btn.addEventListener('click', () => responderPreguntaAsistenteBam(btn.dataset.preg, btn.textContent));
+    btn.addEventListener('click', () => {
+      if (bamUltimaPreguntaNoEntendida) {
+        aprenderFraseBam(bamUltimaPreguntaNoEntendida, btn.dataset.preg);
+        bamUltimaPreguntaNoEntendida = null;
+      }
+      responderPreguntaAsistenteBam(btn.dataset.preg, btn.textContent);
+    });
   });
   $('#bam-chat-send').addEventListener('click', enviarPreguntaLibreBam);
   $('#bam-chat-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') enviarPreguntaLibreBam(); });
@@ -2045,24 +2076,30 @@ function enviarPreguntaLibreBam() {
   input.value = '';
   const resultado = interpretarPreguntaLibreBam(texto);
   if (resultado) {
+    bamUltimaPreguntaNoEntendida = null;
     const id = typeof resultado === 'string' ? resultado : resultado.id;
     const extra = typeof resultado === 'string' ? undefined : resultado.categoria;
     responderPreguntaAsistenteBam(id, texto, extra);
     return;
   }
 
+  bamUltimaPreguntaNoEntendida = texto;
   const cont = $('#asistente-mensajes');
   cont.insertAdjacentHTML('beforeend', `
     <div class="bam-chat-msg propio"><div class="bam-chat-bubble">${escapeHtml(texto)}</div></div>
   `);
   const div = document.createElement('div');
   div.className = 'bam-chat-msg bam';
-  div.innerHTML = `<div class="bam-chat-bubble">No entendí bien esa pregunta 🤔 Elegí una de las de abajo, o probá escribirla con otras palabras.</div>`;
+  div.innerHTML = `<div class="bam-chat-bubble">No entendí bien esa pregunta 🤔 Elegí la que quisiste decir en los botones de abajo y la próxima vez que la escribas así, ya la voy a reconocer.</div>`;
   cont.appendChild(div);
   cont.scrollTop = cont.scrollHeight;
 }
 
 async function responderPreguntaAsistenteBam(id, pregunta, extra) {
+  // Si quedaba una pregunta "no entendida" pendiente de aprender y se
+  // responde otra cosa (ej. una de las sugeridas de un turno anterior),
+  // se descarta — no hay que enseñarle esa frase vieja a destiempo.
+  bamUltimaPreguntaNoEntendida = null;
   const cont = $('#asistente-mensajes');
   cont.insertAdjacentHTML('beforeend', `
     <div class="bam-chat-msg propio"><div class="bam-chat-bubble">${escapeHtml(pregunta)}</div></div>
@@ -4663,12 +4700,6 @@ async function renderCaja() {
         <button class="tab-btn ${cajaVistaAdmin === 'cobranza' ? 'active' : ''}" id="tab-cobranza">📊 Cobranza</button>
         <button class="tab-btn ${cajaVistaAdmin === 'libro' ? 'active' : ''}" id="tab-libro-diario">Libro diario</button>
         <button class="tab-btn ${cajaVistaAdmin === 'medios' ? 'active' : ''}" id="tab-medios-pago">Medios de pago</button>
-        <button class="tab-btn ${cajaVistaAdmin === 'promos' ? 'active' : ''}" id="tab-promos">Promociones</button>
-      </div>
-    ` : tienePermisoModulo('promos') ? `
-      <div class="tabs">
-        <button class="tab-btn ${cajaVistaAdmin === 'mia' ? 'active' : ''}" id="tab-mi-caja">Mi caja</button>
-        <button class="tab-btn ${cajaVistaAdmin === 'promos' ? 'active' : ''}" id="tab-promos">Promociones</button>
       </div>
     ` : ''}
     <div id="caja-content"></div>
@@ -4680,11 +4711,7 @@ async function renderCaja() {
     $('#tab-cobranza').addEventListener('click', () => { cajaVistaAdmin = 'cobranza'; renderCaja(); });
     $('#tab-libro-diario').addEventListener('click', () => { cajaVistaAdmin = 'libro'; renderCaja(); });
     $('#tab-medios-pago').addEventListener('click', () => { cajaVistaAdmin = 'medios'; renderCaja(); });
-    $('#tab-promos').addEventListener('click', () => { cajaVistaAdmin = 'promos'; renderCaja(); });
     mostrarBannerPendientesAdmin();
-  } else if (tienePermisoModulo('promos')) {
-    $('#tab-mi-caja').addEventListener('click', () => { cajaVistaAdmin = 'mia'; renderCaja(); });
-    $('#tab-promos').addEventListener('click', () => { cajaVistaAdmin = 'promos'; renderCaja(); });
   }
 
   if (profile.rol === 'admin' && cajaVistaAdmin === 'todas') return renderTodasLasCajas();
@@ -4692,7 +4719,6 @@ async function renderCaja() {
   if (profile.rol === 'admin' && cajaVistaAdmin === 'cobranza') return renderCobranza();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'libro') return renderLibroDiario();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'medios') return renderMediosPago();
-  if (tienePermisoModulo('promos') && cajaVistaAdmin === 'promos') return renderPromociones();
   return renderMiCaja();
 }
 
@@ -8248,8 +8274,7 @@ const PERMISOS_MODULOS = [
   { key: 'caja', label: 'Caja' },
   { key: 'garantias', label: 'Garantías' },
   { key: 'vendedores', label: 'Vendedores' },
-  { key: 'importar_excel', label: 'Importar Excel' },
-  { key: 'promos', label: 'Promos (Caja)' }
+  { key: 'importar_excel', label: 'Importar Excel' }
 ];
 
 // Un solo formulario para crear y editar usuarios — solo el admin llega

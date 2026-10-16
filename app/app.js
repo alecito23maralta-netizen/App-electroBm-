@@ -79,6 +79,22 @@ function cargarJsPDF() {
 function cargarHtml2Canvas() {
   return typeof html2canvas !== 'undefined' ? Promise.resolve() : cargarScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
 }
+// Antes de capturar un documento con html2canvas hay que asegurarse de
+// que sus <img> (fotos de producto, QR) ya terminaron de decodificar —
+// si no, en el celular (el WebView decodifica base64 más lento que un
+// navegador de escritorio) el snapshot puede salir con las fotos en
+// blanco o con el ícono de "imagen rota", aunque en pantalla se vean
+// bien un instante después.
+function esperarImagenesCargadas(el) {
+  const imgs = [...el.querySelectorAll('img')];
+  return Promise.all(imgs.map(img => {
+    if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+    return new Promise(resolve => {
+      img.addEventListener('load', resolve, { once: true });
+      img.addEventListener('error', resolve, { once: true });
+    });
+  }));
+}
 function cargarJSZip() {
   return typeof JSZip !== 'undefined' ? Promise.resolve() : cargarScript('https://cdn.jsdelivr.net/npm/jszip@3.10.2/dist/jszip.min.js');
 }
@@ -275,17 +291,32 @@ $('#logout-btn').addEventListener('click', async () => {
   $('#login-usuario').value = ''; $('#login-password').value = '';
 });
 
+// Permisos de acceso por módulo (grilla de checkboxes en Usuarios) —
+// el admin siempre tiene acceso total; un vendedor solo a los módulos
+// que tenga marcados en profile.permisos. Antes esto quedaba guardado
+// pero no se usaba en ningún lado para mostrar/ocultar nada.
+function tienePermisoModulo(key) {
+  return profile.rol === 'admin' || (profile.permisos || []).includes(key);
+}
+
 async function iniciarApp() {
   $('#login-screen').style.display = 'none';
   $('#app').classList.add('active');
   $('#role-chip').textContent = `${profile.nombre || profile.usuario} · ${profile.rol === 'admin' ? 'Administrador' : 'Vendedor'}`;
   $('#role-chip').classList.toggle('admin', profile.rol === 'admin');
   $('#nav-usuarios').style.display = profile.rol === 'admin' ? '' : 'none';
-  $('#nav-inventario').style.display = profile.rol === 'admin' ? '' : 'none';
-  $('#nav-caja').style.display = profile.rol === 'admin' ? '' : 'none';
-  $('#nav-garantias').style.display = profile.rol === 'admin' ? '' : 'none';
-  $('#nav-group-gestion').style.display = profile.rol === 'admin' ? '' : 'none';
-  $('#panel-switch').hidden = profile.rol !== 'admin';
+  $('#nav-inventario').style.display = tienePermisoModulo('inventario') ? '' : 'none';
+  $('#nav-caja').style.display = tienePermisoModulo('caja') ? '' : 'none';
+  $('#nav-garantias').style.display = tienePermisoModulo('garantias') ? '' : 'none';
+  $('#nav-group-gestion').style.display = (tienePermisoModulo('inventario') || tienePermisoModulo('caja') || tienePermisoModulo('garantias')) ? '' : 'none';
+  $('#nav-vendedores').hidden = !tienePermisoModulo('vendedores');
+  $('#nav-importar-productos').hidden = !tienePermisoModulo('importar_excel');
+  $('#nav-rentabilidad').hidden = profile.rol !== 'admin';
+  $('#nav-costos').hidden = profile.rol !== 'admin';
+  $('#nav-rotacion').hidden = profile.rol !== 'admin';
+  $('#nav-reportes').hidden = profile.rol !== 'admin';
+  $('#nav-asistente').hidden = profile.rol !== 'admin';
+  $('#panel-switch').hidden = !(profile.rol === 'admin' || tienePermisoModulo('vendedores') || tienePermisoModulo('importar_excel'));
   $('.nav-group[data-group="ventas"]')?.classList.add('open');
   if (profile.rol === 'admin') $('#nav-group-gestion')?.classList.add('open');
 
@@ -676,8 +707,12 @@ function sincronizarPanelConVista(view) {
 }
 
 async function switchView(view) {
-  if ((view === 'usuarios' || view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores'
-    || view === 'rentabilidad' || view === 'costos' || view === 'rotacion' || view === 'reportes' || view === 'asistente') && profile.rol !== 'admin') view = 'cotizaciones';
+  // "usuarios", "rentabilidad", "costos", "rotacion", "reportes" y
+  // "asistente" quedan siempre exclusivos del admin (no están en la
+  // grilla de permisos). "inventario", "caja", "garantias" y
+  // "vendedores" sí se pueden habilitar a un vendedor vía permisos.
+  if ((view === 'usuarios' || view === 'rentabilidad' || view === 'costos' || view === 'rotacion' || view === 'reportes' || view === 'asistente') && profile.rol !== 'admin') view = 'cotizaciones';
+  if ((view === 'inventario' || view === 'caja' || view === 'garantias' || view === 'vendedores') && !tienePermisoModulo(view)) view = 'cotizaciones';
   vistaActual = view;
   sincronizarPanelConVista(view);
   $$('.view').forEach(v => v.hidden = true);
@@ -4630,6 +4665,11 @@ async function renderCaja() {
         <button class="tab-btn ${cajaVistaAdmin === 'medios' ? 'active' : ''}" id="tab-medios-pago">Medios de pago</button>
         <button class="tab-btn ${cajaVistaAdmin === 'promos' ? 'active' : ''}" id="tab-promos">Promociones</button>
       </div>
+    ` : tienePermisoModulo('promos') ? `
+      <div class="tabs">
+        <button class="tab-btn ${cajaVistaAdmin === 'mia' ? 'active' : ''}" id="tab-mi-caja">Mi caja</button>
+        <button class="tab-btn ${cajaVistaAdmin === 'promos' ? 'active' : ''}" id="tab-promos">Promociones</button>
+      </div>
     ` : ''}
     <div id="caja-content"></div>
   `;
@@ -4642,6 +4682,9 @@ async function renderCaja() {
     $('#tab-medios-pago').addEventListener('click', () => { cajaVistaAdmin = 'medios'; renderCaja(); });
     $('#tab-promos').addEventListener('click', () => { cajaVistaAdmin = 'promos'; renderCaja(); });
     mostrarBannerPendientesAdmin();
+  } else if (tienePermisoModulo('promos')) {
+    $('#tab-mi-caja').addEventListener('click', () => { cajaVistaAdmin = 'mia'; renderCaja(); });
+    $('#tab-promos').addEventListener('click', () => { cajaVistaAdmin = 'promos'; renderCaja(); });
   }
 
   if (profile.rol === 'admin' && cajaVistaAdmin === 'todas') return renderTodasLasCajas();
@@ -4649,7 +4692,7 @@ async function renderCaja() {
   if (profile.rol === 'admin' && cajaVistaAdmin === 'cobranza') return renderCobranza();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'libro') return renderLibroDiario();
   if (profile.rol === 'admin' && cajaVistaAdmin === 'medios') return renderMediosPago();
-  if (profile.rol === 'admin' && cajaVistaAdmin === 'promos') return renderPromociones();
+  if (tienePermisoModulo('promos') && cajaVistaAdmin === 'promos') return renderPromociones();
   return renderMiCaja();
 }
 
@@ -6706,6 +6749,7 @@ async function generarYCompartirGarantiaImagen(g) {
   if (!elPapel) return;
   try {
     await cargarHtml2Canvas();
+    await esperarImagenesCargadas(elPapel);
     const canvas = await html2canvas(elPapel, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
     const texto = `*Certificado de garantía ${g.numero ? 'N° ' + String(g.numero).padStart(4, '0') : ''} — Electrodomésticos BM*\nCliente: ${g.cliente_nombre}\nProducto: ${g.producto_descripcion}\nVence: ${fecha(g.fecha_vencimiento)}`;
@@ -8097,6 +8141,7 @@ async function generarYCompartirComprobanteImagen(c) {
   if (!elPapel) return;
   try {
     await cargarHtml2Canvas();
+    await esperarImagenesCargadas(elPapel);
     const canvas = await html2canvas(elPapel, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
     const encabezado = `*Comprobante de pago N° ${String(c.numero).padStart(5, '0')} — Electrodomésticos BM*\nRecibimos de: ${c.cliente_nombre}`;
@@ -8192,22 +8237,19 @@ async function renderUsuarios() {
   });
 }
 
-// Grilla de permisos del formulario de Usuarios. Por ahora es solo
-// informativa/queda guardada — el acceso real lo sigue controlando el
-// rol Vendedor/Administrador, como hasta ahora (se puede conectar
-// para restringir el menú por módulo más adelante).
+// Grilla de permisos del formulario de Usuarios — módulos EXTRA que un
+// vendedor normalmente no ve (Cotizaciones/Ventas/Catálogo/Chat/
+// Comprobantes son la base y siempre están disponibles para cualquier
+// vendedor, por eso no están acá). Marcar uno lo habilita de verdad en
+// su Panel de Ventas (ver tienePermisoModulo, usada en switchView e
+// iniciarApp para mostrar/ocultar cada ítem del menú).
 const PERMISOS_MODULOS = [
-  { key: 'cotizaciones', label: 'Cotizaciones' },
-  { key: 'ventas', label: 'Ventas' },
-  { key: 'catalogo', label: 'Catálogo' },
-  { key: 'promos', label: 'Promos' },
-  { key: 'vendedores', label: 'Vendedores' },
-  { key: 'chat', label: 'Chat' },
-  { key: 'comprobantes', label: 'Comprobantes' },
-  { key: 'inventario', label: 'Invent.' },
-  { key: 'importar_excel', label: 'Importar Excel' },
+  { key: 'inventario', label: 'Inventario' },
   { key: 'caja', label: 'Caja' },
-  { key: 'garantias', label: 'Garantías' }
+  { key: 'garantias', label: 'Garantías' },
+  { key: 'vendedores', label: 'Vendedores' },
+  { key: 'importar_excel', label: 'Importar Excel' },
+  { key: 'promos', label: 'Promos (Caja)' }
 ];
 
 // Un solo formulario para crear y editar usuarios — solo el admin llega
@@ -8240,7 +8282,7 @@ function abrirFormUsuario(existing) {
     </select></div>
 
     <div class="card-title" style="margin-top:18px">Permisos de acceso</div>
-    <p style="color:var(--text-dim);font-size:12.5px;margin:-6px 0 10px">Por ahora es informativo — el acceso real lo sigue definiendo el rol de arriba.</p>
+    <p style="color:var(--text-dim);font-size:12.5px;margin:-6px 0 10px">Módulos extra para este vendedor, además de Cotiz./Ventas/Catálogo/Chat/Comprobantes que ya tiene por defecto.</p>
     <div class="permisos-grid">
       ${PERMISOS_MODULOS.map(m => `
         <label class="permiso-check">
@@ -8513,6 +8555,7 @@ async function compartirImagenDocumentoWhatsapp(doc, tipoLabel, prefijo) {
   btn.disabled = true;
   try {
     await cargarHtml2Canvas();
+    await esperarImagenesCargadas(elPapel);
     const canvas = await html2canvas(elPapel, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
     const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
     const numeroTel = (doc.cliente_telefono || '').replace(/[^0-9]/g, '');

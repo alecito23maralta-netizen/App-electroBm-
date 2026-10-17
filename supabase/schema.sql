@@ -1114,3 +1114,21 @@ create policy "ventas_select" on public.ventas
 drop policy if exists "profiles_select" on public.profiles;
 create policy "profiles_select" on public.profiles
   for select using (id = auth.uid() or public.tiene_permiso_modulo('vendedores'));
+
+-- ============================================================
+-- ACTUALIZACIÓN: notas del admin para su equipo en la Agenda con BAM —
+-- hasta ahora bam_recordatorios era solo para recordatorios propios
+-- (usuario_id = quien los crea). Se agrega quién lo creó (creado_por)
+-- para poder dejarle una nota a OTRO usuario (un vendedor) sin perder
+-- de quién vino, y se actualiza la política para que el admin pueda
+-- insertar/editar/borrar recordatorios de cualquier usuario (antes solo
+-- podía tocar los suyos propios, igual que cualquier vendedor).
+-- Ejecutar en el proyecto que ya tenías creado
+-- ============================================================
+alter table public.bam_recordatorios add column if not exists creado_por uuid references public.profiles (id);
+alter table public.bam_recordatorios add column if not exists creado_por_nombre text;
+
+drop policy if exists "bam_recordatorios_all" on public.bam_recordatorios;
+create policy "bam_recordatorios_all" on public.bam_recordatorios
+  for all using (usuario_id = auth.uid() or public.is_admin())
+  with check (usuario_id = auth.uid() or public.is_admin());

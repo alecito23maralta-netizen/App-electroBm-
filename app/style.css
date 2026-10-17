@@ -1048,6 +1048,10 @@ button.card:hover { border-color: var(--accent); background: var(--surface-2); }
 .bam-verdict-warn { background: #fff0bf; color: #8a6400; }
 .bam-verdict-bad { background: #ffd9d4; color: #b42318; }
 
+/* Confirmación visible de que BAM "aprendió" una frase nueva — sin esto
+   el aprendizaje pasaba completamente desapercibido. */
+.bam-chat-aprendido { margin-top: 8px; font-size: 11.5px; opacity: .75; }
+
 /* Preguntas relacionadas sugeridas después de cada respuesta, para
    seguir profundizando sin tener que bajar al panel de categorías. */
 .bam-chat-sugeridas { align-self: flex-start; max-width: 92%; }

@@ -42,6 +42,7 @@ let chatModo = 'general';       // 'general' | 'individual' | 'bam'
 let chatHiloVendedorId = null;  // hilo elegido por el admin en modo individual (null = lista)
 let bamMensajesCache = [];      // historial de BAM (informes + recordatorios avisados) del usuario
 let bamRecordatoriosCache = []; // agenda de recordatorios propios (cumplidos y pendientes)
+let bamNotasEquipoCache = [];   // (admin) notas que dejó para vendedores, para hacerle seguimiento
 
 // ------------------------------------------------------------
 // Utilidades
@@ -2003,6 +2004,25 @@ function interpretarPreguntaLibreBam(texto) {
   const tokensIn = fraseNorm.split(/\s+/).filter(Boolean);
   const matchPalabra = (palabra) => tokensIn.some(t => t === palabra || (palabra.length >= 4 && levBam(t, palabra) <= 1));
 
+  // Una frase aprendida ya no hace falta escribirla exactamente igual la
+  // próxima vez: alcanza con compartir la mayoría de sus palabras (mismo
+  // criterio de tolerancia a tipeos que ya usa el diccionario fijo de
+  // abajo), así una pregunta parecida a una que ya se enseñó también se
+  // reconoce — si no, "aprender" una frase servía solo para esa frase
+  // exacta y se sentía como que BAM no aprendía nada.
+  let mejorAprendida = null, mejorCoincidencias = 0;
+  for (const f of bamFrasesAprendidas) {
+    const palabrasAprendidas = f.frase_normalizada.split(/\s+/).filter(Boolean);
+    if (palabrasAprendidas.length < 2) continue;
+    const coincidencias = palabrasAprendidas.filter(matchPalabra).length;
+    const proporcion = coincidencias / palabrasAprendidas.length;
+    if (proporcion >= 0.75 && coincidencias > mejorCoincidencias) {
+      mejorAprendida = f.pregunta_id;
+      mejorCoincidencias = coincidencias;
+    }
+  }
+  if (mejorAprendida) return mejorAprendida;
+
   if (BAM_PALABRAS_PROMOCION.some(matchPalabra)) {
     return { id: 'mejor-margen-para-promocionar', categoria: categoriaEnTextoBam(tokensIn) };
   }
@@ -2060,12 +2080,14 @@ async function renderAsistenteBam() {
     </div>
   `;
   $$('.bam-chat-chip').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
+      let aprendio = false;
       if (bamUltimaPreguntaNoEntendida) {
-        aprenderFraseBam(bamUltimaPreguntaNoEntendida, btn.dataset.preg);
+        await aprenderFraseBam(bamUltimaPreguntaNoEntendida, btn.dataset.preg);
+        aprendio = true;
         bamUltimaPreguntaNoEntendida = null;
       }
-      responderPreguntaAsistenteBam(btn.dataset.preg, btn.textContent);
+      responderPreguntaAsistenteBam(btn.dataset.preg, btn.textContent, undefined, aprendio);
     });
   });
   $('#bam-chat-send').addEventListener('click', enviarPreguntaLibreBam);
@@ -2093,12 +2115,12 @@ function enviarPreguntaLibreBam() {
   `);
   const div = document.createElement('div');
   div.className = 'bam-chat-msg bam';
-  div.innerHTML = `<div class="bam-chat-bubble">No entendí bien esa pregunta 🤔 Elegí la que quisiste decir en los botones de abajo y la próxima vez que la escribas así, ya la voy a reconocer.</div>`;
+  div.innerHTML = `<div class="bam-chat-bubble">No entendí bien esa pregunta 🤔 Elegí la que quisiste decir en los botones de abajo y la próxima vez que preguntes algo parecido ya la voy a reconocer.</div>`;
   cont.appendChild(div);
   cont.scrollTop = cont.scrollHeight;
 }
 
-async function responderPreguntaAsistenteBam(id, pregunta, extra) {
+async function responderPreguntaAsistenteBam(id, pregunta, extra, aprendio) {
   // Si quedaba una pregunta "no entendida" pendiente de aprender y se
   // responde otra cosa (ej. una de las sugeridas de un turno anterior),
   // se descarta — no hay que enseñarle esa frase vieja a destiempo.
@@ -2110,9 +2132,10 @@ async function responderPreguntaAsistenteBam(id, pregunta, extra) {
   cont.scrollTop = cont.scrollHeight;
 
   const respuesta = await calcularRespuestaAsistenteBam(id, extra);
+  const notaAprendizaje = aprendio ? '<div class="bam-chat-aprendido">✅ Anotado — la próxima vez que me preguntes algo parecido a eso, te respondo directo.</div>' : '';
   const div = document.createElement('div');
   div.className = 'bam-chat-msg bam';
-  div.innerHTML = `<div class="bam-chat-bubble">${respuesta}</div>`;
+  div.innerHTML = `<div class="bam-chat-bubble">${respuesta}${notaAprendizaje}</div>`;
   cont.appendChild(div);
 
   const relacionadas = (ASISTENTE_BAM_RELACIONADAS[id] || [])
@@ -7558,19 +7581,44 @@ async function cargarRecordatoriosBam() {
   bamRecordatoriosCache = data || [];
 }
 
+// (admin) notas que dejó para vendedores — no aparecen en su propia
+// agenda (esa queda filtrada a usuario_id = admin), así que se cargan
+// aparte para poder verlas y hacerles seguimiento.
+async function cargarNotasEquipoBam() {
+  const { data } = await sb.from('bam_recordatorios').select('*')
+    .eq('creado_por', profile.id).neq('usuario_id', profile.id)
+    .order('fecha', { ascending: true });
+  bamNotasEquipoCache = data || [];
+}
+
 async function abrirAgendaBam() {
   await cargarRecordatoriosBam();
+  const esAdmin = profile.rol === 'admin';
+  if (esAdmin) { await cargarVendedores(); await cargarNotasEquipoBam(); }
   pedirPermisoNotifChat(); // por si el usuario nunca tocó el toggle de notificaciones del chat
   openModal(`
     <div class="sheet-head"><h3>📅 Agenda con BAM</h3><button class="sheet-close" id="sheet-close">✕</button></div>
     <p style="font-size:13px;color:var(--text-dim);margin-top:-6px">Cargá un recordatorio y BAM te avisa: la noche anterior, a las 7am del día, y 30 min antes si cargás una hora.</p>
     <div class="field" style="margin-top:10px"><label>Recordatorio *</label><input id="f-agenda-texto" placeholder="Ej: Llamar a Juan Pérez por su cuota" /></div>
+    ${esAdmin && vendedoresCache.length > 0 ? `
+      <div class="field" style="margin-top:10px"><label>Para</label>
+        <select id="f-agenda-para">
+          <option value="">Para mí</option>
+          ${vendedoresCache.map(v => `<option value="${v.id}">${escapeHtml(v.nombre)}</option>`).join('')}
+        </select>
+      </div>
+    ` : ''}
     <div class="grid-2" style="margin-top:10px">
       <div class="field"><label>Fecha *</label><input type="date" id="f-agenda-fecha" value="${new Date().toISOString().slice(0, 10)}" /></div>
       <div class="field"><label>Hora (opcional)<br><span style="font-weight:400;color:var(--text-faint)">para el aviso de 30 min antes</span></label><input type="time" id="f-agenda-hora" /></div>
     </div>
     <div class="form-actions"><button class="btn btn-primary" id="btn-agregar-recordatorio">+ Agregar a la agenda</button></div>
     <div id="agenda-lista" style="margin-top:16px"></div>
+    ${esAdmin ? `
+      <h4 style="margin:22px 0 4px">📌 Notas que dejaste a tu equipo</h4>
+      <p style="font-size:12.5px;color:var(--text-dim);margin-top:-2px">Las ve el vendedor en su propia Agenda con BAM, y le llega el mismo aviso automático.</p>
+      <div id="agenda-equipo-lista" style="margin-top:10px"></div>
+    ` : ''}
   `);
   $('#sheet-close').addEventListener('click', closeModal);
 
@@ -7587,11 +7635,13 @@ async function abrirAgendaBam() {
         ${bamRecordatoriosCache.map(r => {
           const dias = diasHastaFecha(r.fecha);
           const cuando = r.cumplido ? '✔ Cumplido' : dias < 0 ? `vencido hace ${Math.abs(dias)}d` : dias === 0 ? 'hoy' : `en ${dias}d`;
+          const esNotaDeAdmin = r.creado_por && r.creado_por !== profile.id;
+          const etiqueta = esNotaDeAdmin ? `<div style="font-size:11px;color:var(--accent);font-weight:600">📌 Nota de ${escapeHtml(r.creado_por_nombre || 'tu administrador')}</div>` : '';
           return `<tr>
             <td><input type="checkbox" data-cumplido-id="${r.id}" ${r.cumplido ? 'checked' : ''} title="Marcar cumplido" /></td>
-            <td style="${r.cumplido ? 'text-decoration:line-through;color:var(--text-faint)' : ''}">${escapeHtml(r.texto)}</td>
+            <td style="${r.cumplido ? 'text-decoration:line-through;color:var(--text-faint)' : ''}">${etiqueta}${escapeHtml(r.texto)}</td>
             <td style="white-space:nowrap">${fecha(r.fecha)}${r.hora ? ' ' + r.hora.slice(0, 5) : ''} <span style="color:var(--text-faint);font-size:11px">(${cuando})</span></td>
-            <td><button class="icon-btn" data-eliminar-id="${r.id}" title="Eliminar">🗑</button></td>
+            <td>${esNotaDeAdmin ? '' : `<button class="icon-btn" data-eliminar-id="${r.id}" title="Eliminar">🗑</button>`}</td>
           </tr>`;
         }).join('')}
       </tbody>
@@ -7619,19 +7669,68 @@ async function abrirAgendaBam() {
   }
   renderListaAgenda();
 
+  function renderListaEquipo() {
+    const cont = $('#agenda-equipo-lista');
+    if (!cont) return;
+    if (bamNotasEquipoCache.length === 0) {
+      cont.innerHTML = `<div class="empty-state">Todavía no le dejaste notas a nadie del equipo.</div>`;
+      return;
+    }
+    cont.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>Para</th><th>Nota</th><th>Fecha</th><th>Estado</th><th></th></tr></thead>
+      <tbody>
+        ${bamNotasEquipoCache.map(r => {
+          const vendedor = vendedoresCache.find(v => v.id === r.usuario_id);
+          return `<tr>
+            <td style="white-space:nowrap">${escapeHtml(vendedor?.nombre || 'Vendedor')}</td>
+            <td style="${r.cumplido ? 'text-decoration:line-through;color:var(--text-faint)' : ''}">${escapeHtml(r.texto)}</td>
+            <td style="white-space:nowrap">${fecha(r.fecha)}${r.hora ? ' ' + r.hora.slice(0, 5) : ''}</td>
+            <td>${r.cumplido ? '✔ Cumplido' : '⏳ Pendiente'}</td>
+            <td><button class="icon-btn" data-eliminar-nota-id="${r.id}" title="Eliminar">🗑</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table></div>`;
+
+    cont.querySelectorAll('[data-eliminar-nota-id]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('¿Eliminar esta nota del equipo?')) return;
+        await sb.from('bam_recordatorios').delete().eq('id', btn.dataset.eliminarNotaId);
+        await cargarNotasEquipoBam();
+        renderListaEquipo();
+      });
+    });
+  }
+  if (esAdmin) renderListaEquipo();
+
   $('#btn-agregar-recordatorio').addEventListener('click', async () => {
     const texto = $('#f-agenda-texto').value.trim();
     const fechaStr = $('#f-agenda-fecha').value;
     const horaStr = $('#f-agenda-hora').value || null;
+    const selectPara = $('#f-agenda-para');
+    const paraId = selectPara ? selectPara.value : '';
     if (!texto || !fechaStr) { toast('Completá el recordatorio y la fecha', 'error'); return; }
-    const { data, error } = await sb.from('bam_recordatorios').insert({ usuario_id: profile.id, texto, fecha: fechaStr, hora: horaStr }).select().single();
+    const destinoId = paraId || profile.id;
+    const payload = { usuario_id: destinoId, texto, fecha: fechaStr, hora: horaStr };
+    if (paraId) { payload.creado_por = profile.id; payload.creado_por_nombre = profile.nombre; }
+    const { data, error } = await sb.from('bam_recordatorios').insert(payload).select().single();
     if (error) { toast('Error al guardar: ' + error.message, 'error'); return; }
-    if (data) await programarNotificacionesNativasRecordatorio(data);
+    // La alarma nativa solo tiene sentido en el propio dispositivo — si es
+    // para un vendedor, su celular la programa solo cuando abra su app
+    // (resincronizarNotificacionesNativasRecordatorios ya cubre eso).
+    if (data && destinoId === profile.id) await programarNotificacionesNativasRecordatorio(data);
     $('#f-agenda-texto').value = '';
     $('#f-agenda-hora').value = '';
+    if (selectPara) selectPara.value = '';
     await cargarRecordatoriosBam();
     renderListaAgenda();
-    toast('Recordatorio agregado', 'success');
+    if (paraId) {
+      await cargarNotasEquipoBam();
+      renderListaEquipo();
+      toast('Nota enviada a ' + (vendedoresCache.find(v => v.id === paraId)?.nombre || 'el vendedor'), 'success');
+    } else {
+      toast('Recordatorio agregado', 'success');
+    }
   });
 }
 
